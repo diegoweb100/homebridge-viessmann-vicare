@@ -21,8 +21,9 @@ interface StoredTokens {
 export class ViessmannAPI {
   private readonly baseURL = 'https://api.viessmann.com';
   private readonly authURL = 'https://iam.viessmann.com/idp/v3';
-  private readonly redirectPort = 4200;
-  private readonly redirectUri = `http://localhost:${this.redirectPort}/`;
+  private readonly redirectPort: number;
+  private readonly redirectUri: string;
+  private readonly hostIp: string;
   private readonly httpClient: AxiosInstance;
   
   private accessToken?: string;
@@ -39,6 +40,13 @@ export class ViessmannAPI {
     private readonly log: Logger,
     private readonly config: ViessmannPlatformConfig,
   ) {
+    // Setup network configuration
+    this.hostIp = this.config.hostIp || this.detectLocalIP();
+    this.redirectPort = this.config.redirectPort || 4200;
+    this.redirectUri = `http://${this.hostIp}:${this.redirectPort}/`;
+    
+    this.log.debug(`Using redirect URI: ${this.redirectUri}`);
+    
     this.httpClient = axios.create({
       timeout: 30000,
       headers: {
@@ -52,6 +60,26 @@ export class ViessmannAPI {
     
     // Load stored tokens or use manual tokens from config
     this.initializeTokens();
+  }
+
+  private detectLocalIP(): string {
+    const { networkInterfaces } = require('os');
+    const nets = networkInterfaces();
+    
+    // Try to find the first non-internal IPv4 address
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
+        if (net.family === 'IPv4' && !net.internal) {
+          this.log.debug(`Detected local IP: ${net.address}`);
+          return net.address;
+        }
+      }
+    }
+    
+    // Fallback to localhost
+    this.log.warn('Could not detect local IP, using localhost');
+    return 'localhost';
   }
 
   private initializeTokens() {
@@ -181,7 +209,7 @@ export class ViessmannAPI {
     this.log.error('2. Create an application with these settings:');
     this.log.error('   - Name: homebridge-viessmann-vicare');
     this.log.error('   - Type: Public Client');
-    this.log.error('   - Redirect URI: http://localhost:4200/');
+    this.log.error(`   - Redirect URI: ${this.redirectUri}`);
     this.log.error('   - Scope: IoT User offline_access');
     this.log.error('');
     this.log.error('3. Get authorization code using this URL:');
@@ -314,8 +342,8 @@ export class ViessmannAPI {
       `);
     });
 
-    this.authServer.listen(this.redirectPort, 'localhost', () => {
-      this.log.debug(`Auth server listening on port ${this.redirectPort}`);
+    this.authServer.listen(this.redirectPort, () => {
+      this.log.debug(`Auth server listening on ${this.hostIp}:${this.redirectPort}`);
     });
 
     this.authServer.on('error', (error) => {
@@ -627,6 +655,7 @@ export class ViessmannAPI {
   }
 
   async setDHWTemperature(installationId: number, gatewaySerial: string, deviceId: string, temperature: number): Promise<boolean> {
+    // Based on the API documentation, the correct parameter name is 'temperature'
     return this.executeCommand(
       installationId,
       gatewaySerial,

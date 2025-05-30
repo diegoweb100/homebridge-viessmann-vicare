@@ -14,6 +14,7 @@ import { ViessmannAPI } from './viessmann-api';
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
+import { PLUGIN_NAME } from './settings'; // Import the plugin name
 
 export interface ViessmannPlatformConfig extends PlatformConfig {
   clientId: string;
@@ -21,6 +22,8 @@ export interface ViessmannPlatformConfig extends PlatformConfig {
   username: string;
   password: string;
   authMethod?: 'auto' | 'manual';
+  hostIp?: string;
+  redirectPort?: number;
   accessToken?: string;
   refreshToken?: string;
   refreshInterval?: number;
@@ -170,7 +173,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       accessory.context.gateway = gateway;
 
       new ViessmannBoilerAccessory(this, accessory, installation, gateway, device);
-      this.api.registerPlatformAccessories('homebridge-viessmann-control', 'ViessmannPlatform', [accessory]);
+      // Fixed: Use PLUGIN_NAME instead of hardcoded string
+      this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
     }
   }
 
@@ -202,7 +206,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       accessory.context.gateway = gateway;
 
       new ViessmannDHWAccessory(this, accessory, installation, gateway, device);
-      this.api.registerPlatformAccessories('homebridge-viessmann-control', 'ViessmannPlatform', [accessory]);
+      // Fixed: Use PLUGIN_NAME instead of hardcoded string
+      this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
     }
   }
 
@@ -212,13 +217,17 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     device: ViessmannDevice,
     features: ViessmannFeature[]
   ) {
-    const circuitFeatures = features.filter(f => f.feature.match(/heating\.circuits\.\d+/));
-    const circuitNumbers = [...new Set(circuitFeatures.map(f => {
-      const match = f.feature.match(/heating\.circuits\.(\d+)/);
-      return match ? parseInt(match[1]) : null;
-    }).filter(n => n !== null))];
+    // Find enabled circuits only
+    const enabledCircuits = features.filter(f => 
+      f.feature.match(/^heating\.circuits\.\d+$/) && 
+      f.isEnabled === true
+    );
 
-    for (const circuitNumber of circuitNumbers) {
+    for (const circuitFeature of enabledCircuits) {
+      const match = circuitFeature.feature.match(/heating\.circuits\.(\d+)/);
+      if (!match) continue;
+      
+      const circuitNumber = parseInt(match[1]);
       const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-circuit-${circuitNumber}`);
       const displayName = `${installation.description} Heating Circuit ${circuitNumber}`;
 
@@ -236,7 +245,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         accessory.context.circuitNumber = circuitNumber;
 
         new ViessmannHeatingCircuitAccessory(this, accessory, installation, gateway, device, circuitNumber);
-        this.api.registerPlatformAccessories('homebridge-viessmann-control', 'ViessmannPlatform', [accessory]);
+        // Fixed: Use PLUGIN_NAME instead of hardcoded string
+        this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
       }
     }
   }

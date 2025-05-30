@@ -44,6 +44,20 @@
         "default": "auto",
         "description": "Choose authentication method: 'auto' for automatic OAuth flow, 'manual' for manual token configuration"
       },
+      "hostIp": {
+        "title": "Host IP Address",
+        "type": "string",
+        "required": false,
+        "description": "IP address for OAuth redirect (auto-detected if not specified). Use the IP where Homebridge is running."
+      },
+      "redirectPort": {
+        "title": "OAuth Redirect Port",
+        "type": "integer",
+        "default": 4200,
+        "minimum": 1024,
+        "maximum": 65535,
+        "description": "Port for OAuth callback server (default: 4200)"
+      },
       "accessToken": {
         "title": "Access Token (Manual Auth)",
         "type": "string",
@@ -100,7 +114,9 @@
       "expandable": true,
       "expanded": true,
       "items": [
-        "authMethod"
+        "authMethod",
+        "hostIp", 
+        "redirectPort"
       ]
     },
     {

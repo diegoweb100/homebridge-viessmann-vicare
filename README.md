@@ -74,6 +74,8 @@ npm install -g homebridge-viessmann-vicare
     "username": "il_tuo_email@example.com",
     "password": "la_tua_password_vicare",
     "authMethod": "auto",
+    "hostIp": "192.168.1.100",
+    "redirectPort": 4200,
     "refreshInterval": 60000,
     "debug": false
 }
@@ -106,6 +108,8 @@ npm install -g homebridge-viessmann-vicare
 | `username` | string | ✅ | Email del tuo account ViCare |
 | `password` | string | ✅ | Password del tuo account ViCare |
 | `authMethod` | string | ❌ | Metodo autenticazione: `auto` (default) o `manual` |
+| `hostIp` | string | ❌ | IP per OAuth redirect (auto-rilevato se omesso) |
+| `redirectPort` | number | ❌ | Porta per OAuth callback (default: 4200) |
 | `accessToken` | string | ❌ | Token di accesso (solo per authMethod: manual) |
 | `refreshToken` | string | ❌ | Token di refresh (solo per authMethod: manual) |
 | `refreshInterval` | number | ❌ | Intervallo aggiornamento in ms (default: 60000) |

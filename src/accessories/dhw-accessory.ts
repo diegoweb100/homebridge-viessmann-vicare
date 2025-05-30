@@ -4,6 +4,9 @@ import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDe
 export class ViessmannDHWAccessory {
   private service: Service;
   private informationService: Service;
+  private availableModes: string[] = [];
+  private supportsTemperatureControl = false;
+  private temperatureConstraints = { min: 35, max: 65 };
 
   private states = {
     On: false,
@@ -35,14 +38,63 @@ export class ViessmannDHWAccessory {
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.displayName);
 
-    // Configure characteristics
-    this.setupCharacteristics();
-
     // Set update handler for platform to call
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
-    // Initial update
-    this.updateStatus();
+    // Initialize capabilities and setup characteristics
+    this.initializeCapabilities();
+  }
+
+  private async initializeCapabilities() {
+    try {
+      const features = await this.platform.viessmannAPI.getDeviceFeatures(
+        this.installation.id,
+        this.gateway.serial,
+        this.device.id
+      );
+      
+      this.analyzeCapabilities(features);
+      this.setupCharacteristics();
+      await this.updateFromFeatures(features);
+      
+    } catch (error) {
+      this.platform.log.error('Error initializing DHW capabilities:', error);
+      // Fallback to basic setup
+      this.setupCharacteristics();
+    }
+  }
+
+  private analyzeCapabilities(features: any[]) {
+    // Analyze DHW operating modes
+    const dhwActiveModesFeature = features.find(f => f.feature === 'heating.dhw.operating.modes.active');
+    if (dhwActiveModesFeature?.commands?.setMode?.params?.mode?.constraints?.enum) {
+      this.availableModes = dhwActiveModesFeature.commands.setMode.params.mode.constraints.enum;
+      this.platform.log.info(`DHW available modes: ${this.availableModes.join(', ')}`);
+    } else {
+      // Fallback: check individual mode features
+      const modeFeatures = features.filter(f => f.feature.startsWith('heating.dhw.operating.modes.'));
+      this.availableModes = modeFeatures
+        .map(f => f.feature.split('.').pop())
+        .filter(mode => mode && mode !== 'active' && mode !== 'balanced') // Remove non-selectable modes
+        .filter(Boolean);
+      
+      this.platform.log.info(`DHW modes found from features: ${this.availableModes.join(', ')}`);
+    }
+
+    // Analyze temperature control capabilities
+    const dhwTempFeature = features.find(f => f.feature === 'heating.dhw.temperature.main');
+    if (dhwTempFeature?.commands?.setTargetTemperature) {
+      this.supportsTemperatureControl = true;
+      const constraints = dhwTempFeature.commands.setTargetTemperature.params?.temperature?.constraints;
+      if (constraints) {
+        this.temperatureConstraints.min = constraints.min || 35;
+        this.temperatureConstraints.max = constraints.max || 65;
+      }
+      this.platform.log.info(`DHW temperature control: ${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C`);
+    }
+
+    // Log capabilities summary
+    this.platform.log.info(`DHW Capabilities - Modes: [${this.availableModes.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}`);
   }
 
   private setupCharacteristics() {
@@ -50,16 +102,23 @@ export class ViessmannDHWAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.getCurrentHeatingCoolingState.bind(this));
 
-    // Target Heating Cooling State
-    this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(this.getTargetHeatingCoolingState.bind(this))
-      .onSet(this.setTargetHeatingCoolingState.bind(this))
-      .setProps({
-        validValues: [
-          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
-          this.platform.Characteristic.TargetHeatingCoolingState.HEAT,
-        ],
-      });
+    // Target Heating Cooling State - only show if we have controllable modes
+    if (this.availableModes.length > 0) {
+      const validValues = [];
+      
+      // Always include OFF if we have controllable modes
+      validValues.push(this.platform.Characteristic.TargetHeatingCoolingState.OFF);
+      
+      // Add HEAT if we have modes other than 'off'
+      if (this.availableModes.some(mode => mode !== 'off')) {
+        validValues.push(this.platform.Characteristic.TargetHeatingCoolingState.HEAT);
+      }
+
+      this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
+        .onGet(this.getTargetHeatingCoolingState.bind(this))
+        .onSet(this.setTargetHeatingCoolingState.bind(this))
+        .setProps({ validValues });
+    }
 
     // Current Temperature (read-only)
     this.service.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
@@ -70,15 +129,17 @@ export class ViessmannDHWAccessory {
         minStep: 0.1,
       });
 
-    // Target Temperature
-    this.service.getCharacteristic(this.platform.Characteristic.TargetTemperature)
-      .onGet(this.getTargetTemperature.bind(this))
-      .onSet(this.setTargetTemperature.bind(this))
-      .setProps({
-        minValue: 35,
-        maxValue: 65,
-        minStep: 1,
-      });
+    // Target Temperature - only if supported
+    if (this.supportsTemperatureControl) {
+      this.service.getCharacteristic(this.platform.Characteristic.TargetTemperature)
+        .onGet(this.getTargetTemperature.bind(this))
+        .onSet(this.setTargetTemperature.bind(this))
+        .setProps({
+          minValue: this.temperatureConstraints.min,
+          maxValue: this.temperatureConstraints.max,
+          minStep: 1,
+        });
+    }
 
     // Temperature Display Units
     this.service.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
@@ -99,39 +160,68 @@ export class ViessmannDHWAccessory {
     this.states.TargetHeatingCoolingState = targetState;
 
     try {
-      let success: boolean;
+      let success = false;
+      let mode: string;
       
       if (targetState === this.platform.Characteristic.TargetHeatingCoolingState.OFF) {
-        // Turn off DHW
-        success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.dhw.operating.modes.active',
-          'setMode',
-          { mode: 'off' }
-        );
+        // Try to turn off DHW
+        mode = 'off';
+        if (this.availableModes.includes('off')) {
+          success = await this.executeDHWCommand(mode);
+        }
       } else {
-        // Turn on DHW
-        success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.dhw.operating.modes.active',
-          'setMode',
-          { mode: 'balanced' }
-        );
+        // Try to turn on DHW - prefer comfort, then eco, then any available mode
+        const preferredModes = ['comfort', 'eco'];
+        
+        for (const preferredMode of preferredModes) {
+          if (this.availableModes.includes(preferredMode)) {
+            mode = preferredMode;
+            success = await this.executeDHWCommand(mode);
+            if (success) break;
+          }
+        }
+        
+        // If preferred modes failed, try any non-off mode
+        if (!success) {
+          const otherModes = this.availableModes.filter(m => m !== 'off');
+          for (const otherMode of otherModes) {
+            mode = otherMode;
+            success = await this.executeDHWCommand(mode);
+            if (success) break;
+          }
+        }
       }
 
       if (success) {
-        this.platform.log.info(`Set DHW state to: ${targetState === 0 ? 'OFF' : 'ON'}`);
+        this.platform.log.info(`Set DHW mode to: ${mode}`);
       } else {
-        this.platform.log.error(`Failed to set DHW state to: ${targetState === 0 ? 'OFF' : 'ON'}`);
-        throw new Error('Failed to set DHW state');
+        this.platform.log.warn(`Failed to set DHW state. Available modes: ${this.availableModes.join(', ')}`);
+        // Don't throw error as device might not support mode changes
       }
     } catch (error) {
       this.platform.log.error('Error setting DHW target heating cooling state:', error);
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+  }
+
+  private async executeDHWCommand(mode: string): Promise<boolean> {
+    try {
+      const success = await this.platform.viessmannAPI.executeCommand(
+        this.installation.id,
+        this.gateway.serial,
+        this.device.id,
+        'heating.dhw.operating.modes.active',
+        'setMode',
+        { mode }
+      );
+      
+      if (success) {
+        this.platform.log.debug(`Successfully set DHW mode to: ${mode}`);
+      }
+      return success;
+    } catch (error) {
+      this.platform.log.debug(`Failed to set DHW mode to ${mode}:`, error instanceof Error ? error.message : error);
+      return false;
     }
   }
 
@@ -144,11 +234,21 @@ export class ViessmannDHWAccessory {
   }
 
   async setTargetTemperature(value: CharacteristicValue) {
+    if (!this.supportsTemperatureControl) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
+    }
+
     const temperature = value as number;
+    
+    // Validate temperature range
+    if (temperature < this.temperatureConstraints.min || temperature > this.temperatureConstraints.max) {
+      this.platform.log.error(`Invalid DHW temperature: ${temperature}°C (must be between ${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C)`);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+    
     this.states.TargetTemperature = temperature;
 
     try {
-      // Set DHW target temperature
       const success = await this.platform.viessmannAPI.setDHWTemperature(
         this.installation.id,
         this.gateway.serial,
@@ -184,23 +284,10 @@ export class ViessmannDHWAccessory {
     }
   }
 
-  private async updateStatus() {
-    try {
-      const features = await this.platform.viessmannAPI.getDeviceFeatures(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id
-      );
-      
-      await this.updateFromFeatures(features);
-    } catch (error) {
-      this.platform.log.error('Error updating DHW status:', error);
-    }
-  }
-
   private async updateFromFeatures(features: any[]) {
     // Update DHW current temperature
     const dhwTempFeature = features.find(f => 
+      f.feature === 'heating.dhw.sensors.temperature.dhwCylinder' ||
       f.feature === 'heating.dhw.sensors.temperature.hotWaterStorage' ||
       f.feature === 'heating.dhw.sensors.temperature.outlet'
     );
@@ -211,26 +298,37 @@ export class ViessmannDHWAccessory {
 
     // Update DHW target temperature
     const dhwTargetTempFeature = features.find(f => f.feature === 'heating.dhw.temperature.main');
-    if (dhwTargetTempFeature?.properties?.value?.value !== undefined) {
-      this.states.TargetTemperature = dhwTargetTempFeature.properties.value.value;
-      this.service.updateCharacteristic(this.platform.Characteristic.TargetTemperature, this.states.TargetTemperature);
+    if (dhwTargetTempFeature?.properties?.value?.value !== undefined && this.supportsTemperatureControl) {
+      const targetTemp = dhwTargetTempFeature.properties.value.value;
+      // Ensure target temperature is within valid range
+      if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
+        this.states.TargetTemperature = targetTemp;
+        this.service.updateCharacteristic(this.platform.Characteristic.TargetTemperature, this.states.TargetTemperature);
+      }
     }
 
-    // Update DHW charging state
+    // Update DHW charging state (current heating state)
     const dhwChargingFeature = features.find(f => f.feature === 'heating.dhw.charging');
+    const dhwActiveFeature = features.find(f => f.feature === 'heating.dhw');
+    
+    let isHeating = false;
     if (dhwChargingFeature?.properties?.active?.value !== undefined) {
-      const isCharging = dhwChargingFeature.properties.active.value;
-      this.states.CurrentHeatingCoolingState = isCharging ? 
-        this.platform.Characteristic.CurrentHeatingCoolingState.HEAT : 
-        this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
-      
-      this.service.updateCharacteristic(
-        this.platform.Characteristic.CurrentHeatingCoolingState, 
-        this.states.CurrentHeatingCoolingState
-      );
+      isHeating = dhwChargingFeature.properties.active.value;
+    } else if (dhwActiveFeature?.properties?.status?.value !== undefined) {
+      // Fallback: check if DHW status indicates heating
+      isHeating = dhwActiveFeature.properties.status.value !== 'off';
     }
+    
+    this.states.CurrentHeatingCoolingState = isHeating ? 
+      this.platform.Characteristic.CurrentHeatingCoolingState.HEAT : 
+      this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
+      
+    this.service.updateCharacteristic(
+      this.platform.Characteristic.CurrentHeatingCoolingState, 
+      this.states.CurrentHeatingCoolingState
+    );
 
-    // Update DHW operating mode
+    // Update DHW operating mode (target heating state)
     const dhwOperatingModeFeature = features.find(f => f.feature === 'heating.dhw.operating.modes.active');
     if (dhwOperatingModeFeature?.properties?.value?.value !== undefined) {
       const mode = dhwOperatingModeFeature.properties.value.value;
