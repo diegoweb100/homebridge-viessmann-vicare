@@ -1,0 +1,50 @@
+{
+  "name": "homebridge-viessmann-vicare",
+  "version": "1.0.0",
+  "description": "Complete Homebridge plugin for Viessmann ViCare heating systems with full control capabilities",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "rm -rf ./dist && tsc",
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf ./dist",
+    "watch": "tsc --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diegoweb100/homebridge-viessmann-vicare.git"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "viessmann",
+    "vicare",
+    "heating",
+    "boiler",
+    "dhw",
+    "homekit",
+    "smart-home"
+  ],
+  "author": "Diego Bestonzo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/diegoweb100/homebridge-viessmann-vicare/issues"
+  },
+  "homepage": "https://github.com/diegoweb100/homebridge-viessmann-vicare#readme",
+  "engines": {
+    "node": ">=18.15.0",
+    "homebridge": ">=1.8.0 || >=2.0.0-beta.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.8.3"
+  },
+  "peerDependencies": {
+    "homebridge": ">=1.8.0"
+  },
+  "files": [
+    "dist",
+    "config.schema.json"
+  ]
+}

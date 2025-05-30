@@ -1,0 +1,89 @@
+{
+  "pluginAlias": "ViessmannPlatform",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits.",
+  "footerDisplay": "For help and support visit: [GitHub Repository](https://github.com/your-username/homebridge-viessmann-control)",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Viessmann",
+        "required": true
+      },
+      "clientId": {
+        "title": "Client ID",
+        "type": "string",
+        "required": true,
+        "description": "Your Viessmann API Client ID"
+      },
+      "clientSecret": {
+        "title": "Client Secret",
+        "type": "string",
+        "required": false,
+        "description": "Your Viessmann API Client Secret (if using confidential client)"
+      },
+      "username": {
+        "title": "Username",
+        "type": "string",
+        "required": true,
+        "description": "Your Viessmann ViCare account username/email"
+      },
+      "password": {
+        "title": "Password",
+        "type": "string",
+        "required": true,
+        "description": "Your Viessmann ViCare account password"
+      },
+      "refreshInterval": {
+        "title": "Refresh Interval",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 30000,
+        "maximum": 300000,
+        "description": "How often to update device data (in milliseconds). Default: 60000 (1 minute)"
+      },
+      "debug": {
+        "title": "Enable Debug Logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable verbose debug logging for troubleshooting"
+      }
+    },
+    "required": [
+      "name",
+      "clientId",
+      "username",
+      "password"
+    ]
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Account Settings",
+      "description": "Configure your Viessmann ViCare account credentials",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        "name",
+        "clientId",
+        "clientSecret",
+        "username",
+        "password"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced Settings",
+      "description": "Optional advanced configuration",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "refreshInterval",
+        "debug"
+      ]
+    }
+  ]
+}

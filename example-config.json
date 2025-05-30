@@ -1,0 +1,21 @@
+{
+    "bridge": {
+        "name": "Homebridge",
+        "username": "CC:22:3D:E3:CE:30",
+        "port": 51826,
+        "pin": "031-45-154"
+    },
+    "accessories": [],
+    "platforms": [
+        {
+            "platform": "ViessmannPlatform",
+            "name": "Viessmann",
+            "clientId": "79742319e39245de5f91d15ff4cac2a8",
+            "clientSecret": "",
+            "username": "your-email@example.com",
+            "password": "your-password",
+            "refreshInterval": 60000,
+            "debug": false
+        }
+    ]
+}
