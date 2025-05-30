@@ -124,29 +124,34 @@ export class ViessmannDHWAccessory {
     // Remove any existing mode services that are no longer available
     this.removeUnusedServices();
 
+    const installationName = this.installation.description;
+
     // Create services for each available mode
     if (this.availableModes.includes('comfort')) {
-      this.comfortService = this.accessory.getService('DHW Comfort') || 
-                           this.accessory.addService(this.platform.Service.Switch, 'DHW Comfort', 'dhw-comfort');
-      this.comfortService.setCharacteristic(this.platform.Characteristic.Name, 'DHW Comfort');
+      const comfortServiceName = `${installationName} Hot Water Comfort`;
+      this.comfortService = this.accessory.getService(comfortServiceName) || 
+                           this.accessory.addService(this.platform.Service.Switch, comfortServiceName, 'dhw-comfort');
+      this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'comfort')
         .onSet(this.setComfortMode.bind(this));
     }
 
     if (this.availableModes.includes('eco')) {
-      this.ecoService = this.accessory.getService('DHW Eco') || 
-                      this.accessory.addService(this.platform.Service.Switch, 'DHW Eco', 'dhw-eco');
-      this.ecoService.setCharacteristic(this.platform.Characteristic.Name, 'DHW Eco');
+      const ecoServiceName = `${installationName} Hot Water Eco`;
+      this.ecoService = this.accessory.getService(ecoServiceName) || 
+                      this.accessory.addService(this.platform.Service.Switch, ecoServiceName, 'dhw-eco');
+      this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
       this.ecoService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'eco')
         .onSet(this.setEcoMode.bind(this));
     }
 
     if (this.availableModes.includes('off')) {
-      this.offService = this.accessory.getService('DHW Off') || 
-                      this.accessory.addService(this.platform.Service.Switch, 'DHW Off', 'dhw-off');
-      this.offService.setCharacteristic(this.platform.Characteristic.Name, 'DHW Off');
+      const offServiceName = `${installationName} Hot Water Off`;
+      this.offService = this.accessory.getService(offServiceName) || 
+                      this.accessory.addService(this.platform.Service.Switch, offServiceName, 'dhw-off');
+      this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
       this.offService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'off')
         .onSet(this.setOffMode.bind(this));
@@ -155,7 +160,8 @@ export class ViessmannDHWAccessory {
 
   private setupTargetTemperatureService() {
     // Create a separate service for target temperature using a thermostat with minimal controls
-    const targetTempServiceName = 'DHW Target Temperature';
+    const installationName = this.installation.description;
+    const targetTempServiceName = `${installationName} Hot Water Temperature`;
     let targetTempService = this.accessory.getService(targetTempServiceName);
     
     if (!targetTempService) {
@@ -196,10 +202,11 @@ export class ViessmannDHWAccessory {
 
   private removeUnusedServices() {
     // Remove services for modes that are no longer available
+    const installationName = this.installation.description;
     const servicesToCheck = [
-      { service: this.comfortService, mode: 'comfort', name: 'DHW Comfort' },
-      { service: this.ecoService, mode: 'eco', name: 'DHW Eco' },
-      { service: this.offService, mode: 'off', name: 'DHW Off' },
+      { service: this.comfortService, mode: 'comfort', name: `${installationName} Hot Water Comfort` },
+      { service: this.ecoService, mode: 'eco', name: `${installationName} Hot Water Eco` },
+      { service: this.offService, mode: 'off', name: `${installationName} Hot Water Off` },
     ];
 
     for (const { service, mode, name } of servicesToCheck) {
