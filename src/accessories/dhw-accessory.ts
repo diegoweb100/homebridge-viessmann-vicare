@@ -121,16 +121,15 @@ export class ViessmannDHWAccessory {
   }
 
   private setupModeServices() {
-    // Remove any existing mode services that are no longer available
-    this.removeUnusedServices();
-
     const installationName = this.installation.description;
 
-    // Create services for each available mode
+    // First, remove ALL existing mode services to avoid conflicts
+    this.removeAllModeServices();
+
+    // Create services for each available mode with unique subtypes
     if (this.availableModes.includes('comfort')) {
       const comfortServiceName = `${installationName} Hot Water Comfort`;
-      this.comfortService = this.accessory.getService(comfortServiceName) || 
-                           this.accessory.addService(this.platform.Service.Switch, comfortServiceName, 'dhw-comfort');
+      this.comfortService = this.accessory.addService(this.platform.Service.Switch, comfortServiceName, 'hw-comfort');
       this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'comfort')
@@ -139,8 +138,7 @@ export class ViessmannDHWAccessory {
 
     if (this.availableModes.includes('eco')) {
       const ecoServiceName = `${installationName} Hot Water Eco`;
-      this.ecoService = this.accessory.getService(ecoServiceName) || 
-                      this.accessory.addService(this.platform.Service.Switch, ecoServiceName, 'dhw-eco');
+      this.ecoService = this.accessory.addService(this.platform.Service.Switch, ecoServiceName, 'hw-eco');
       this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
       this.ecoService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'eco')
@@ -149,8 +147,7 @@ export class ViessmannDHWAccessory {
 
     if (this.availableModes.includes('off')) {
       const offServiceName = `${installationName} Hot Water Off`;
-      this.offService = this.accessory.getService(offServiceName) || 
-                      this.accessory.addService(this.platform.Service.Switch, offServiceName, 'dhw-off');
+      this.offService = this.accessory.addService(this.platform.Service.Switch, offServiceName, 'hw-off');
       this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
       this.offService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'off')
@@ -158,15 +155,46 @@ export class ViessmannDHWAccessory {
     }
   }
 
+  private removeAllModeServices() {
+    // Get all switch services and remove them
+    const switchServices = this.accessory.services.filter(service => 
+      service.UUID === this.platform.Service.Switch.UUID
+    );
+
+    for (const service of switchServices) {
+      try {
+        this.accessory.removeService(service);
+        this.platform.log.debug(`Removed existing switch service: ${service.displayName || 'Unknown'}`);
+      } catch (error) {
+        this.platform.log.debug(`Could not remove service: ${error}`);
+      }
+    }
+
+    // Clear references
+    this.comfortService = undefined;
+    this.ecoService = undefined;
+    this.offService = undefined;
+  }
+
   private setupTargetTemperatureService() {
+    // Remove existing thermostat services first
+    const thermostatServices = this.accessory.services.filter(service => 
+      service.UUID === this.platform.Service.Thermostat.UUID
+    );
+
+    for (const service of thermostatServices) {
+      try {
+        this.accessory.removeService(service);
+        this.platform.log.debug(`Removed existing thermostat service: ${service.displayName || 'Unknown'}`);
+      } catch (error) {
+        this.platform.log.debug(`Could not remove thermostat service: ${error}`);
+      }
+    }
+
     // Create a separate service for target temperature using a thermostat with minimal controls
     const installationName = this.installation.description;
     const targetTempServiceName = `${installationName} Hot Water Temperature`;
-    let targetTempService = this.accessory.getService(targetTempServiceName);
-    
-    if (!targetTempService) {
-      targetTempService = this.accessory.addService(this.platform.Service.Thermostat, targetTempServiceName, 'dhw-target-temp');
-    }
+    const targetTempService = this.accessory.addService(this.platform.Service.Thermostat, targetTempServiceName, 'hw-target-temp');
 
     targetTempService.setCharacteristic(this.platform.Characteristic.Name, targetTempServiceName);
 
