@@ -2,6 +2,7 @@ import { Logger } from 'homebridge';
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { URLSearchParams } from 'url';
 import * as crypto from 'crypto';
+import * as http from 'http';
 import { ViessmannPlatformConfig, ViessmannInstallation, ViessmannFeature } from './platform';
 
 interface AuthResponse {
@@ -11,9 +12,17 @@ interface AuthResponse {
   refresh_token?: string;
 }
 
+interface StoredTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt: number;
+}
+
 export class ViessmannAPI {
   private readonly baseURL = 'https://api.viessmann.com';
   private readonly authURL = 'https://iam.viessmann.com/idp/v3';
+  private readonly redirectPort = 4200;
+  private readonly redirectUri = `http://localhost:${this.redirectPort}/`;
   private readonly httpClient: AxiosInstance;
   
   private accessToken?: string;
@@ -21,6 +30,10 @@ export class ViessmannAPI {
   private tokenExpiresAt?: number;
   private codeVerifier?: string;
   private codeChallenge?: string;
+  private authServer?: http.Server;
+  
+  // In-memory token storage (in a real implementation, you'd want persistent storage)
+  private tokenStorage: Map<string, StoredTokens> = new Map();
 
   constructor(
     private readonly log: Logger,
@@ -29,18 +42,60 @@ export class ViessmannAPI {
     this.httpClient = axios.create({
       timeout: 30000,
       headers: {
-        'User-Agent': 'homebridge-viessmann-control/1.0.0',
+        'User-Agent': 'homebridge-viessmann-vicare/1.0.0',
         'Content-Type': 'application/json',
       },
     });
 
-    // Generate PKCE codes
+    // Generate PKCE codes for OAuth
     this.generatePKCECodes();
+    
+    // Load stored tokens or use manual tokens from config
+    this.initializeTokens();
+  }
+
+  private initializeTokens() {
+    // Priority 1: Manual tokens from config
+    if (this.config.accessToken) {
+      this.log.debug('Using manual tokens from configuration');
+      this.accessToken = this.config.accessToken;
+      this.refreshToken = this.config.refreshToken;
+      // Assume tokens are valid for now, will be validated on first API call
+      this.tokenExpiresAt = Date.now() + (3600 * 1000); // 1 hour default
+      return;
+    }
+
+    // Priority 2: Load stored tokens from previous OAuth flow
+    this.loadStoredTokens();
   }
 
   private generatePKCECodes() {
     this.codeVerifier = crypto.randomBytes(32).toString('base64url');
     this.codeChallenge = crypto.createHash('sha256').update(this.codeVerifier).digest('base64url');
+  }
+
+  private loadStoredTokens() {
+    const tokenKey = `${this.config.clientId}:${this.config.username}`;
+    const stored = this.tokenStorage.get(tokenKey);
+    
+    if (stored && stored.expiresAt > Date.now()) {
+      this.accessToken = stored.accessToken;
+      this.refreshToken = stored.refreshToken;
+      this.tokenExpiresAt = stored.expiresAt;
+      this.log.debug('Loaded valid tokens from storage');
+    }
+  }
+
+  private saveTokens() {
+    if (this.accessToken && this.tokenExpiresAt) {
+      const tokenKey = `${this.config.clientId}:${this.config.username}`;
+      this.tokenStorage.set(tokenKey, {
+        accessToken: this.accessToken,
+        refreshToken: this.refreshToken,
+        expiresAt: this.tokenExpiresAt,
+      });
+      this.log.debug('Saved tokens to storage');
+    }
   }
 
   async authenticate(): Promise<void> {
@@ -52,12 +107,26 @@ export class ViessmannAPI {
 
       if (this.refreshToken) {
         this.log.debug('Attempting to refresh token');
-        await this.refreshAccessToken();
-        return;
+        try {
+          await this.refreshAccessToken();
+          return;
+        } catch (error) {
+          this.log.warn('Token refresh failed, will try to get new tokens');
+          // Clear invalid tokens
+          this.accessToken = undefined;
+          this.refreshToken = undefined;
+          this.tokenExpiresAt = undefined;
+        }
       }
 
-      this.log.debug('Performing full authentication');
-      await this.performFullAuth();
+      // Determine authentication method
+      const authMethod = this.config.authMethod || 'auto';
+      
+      if (authMethod === 'manual' || this.shouldUseManualAuth()) {
+        await this.handleManualAuth();
+      } else {
+        await this.performAutoAuth();
+      }
 
     } catch (error) {
       this.log.error('Authentication failed:', error);
@@ -65,62 +134,266 @@ export class ViessmannAPI {
     }
   }
 
+  private shouldUseManualAuth(): boolean {
+    // Use manual auth if:
+    // 1. Explicitly configured
+    // 2. Running in headless environment
+    // 3. No display available
+    
+    if (this.config.authMethod === 'manual') {
+      return true;
+    }
+
+    // Check if we're in a headless environment
+    if (!process.env.DISPLAY && process.platform === 'linux') {
+      this.log.debug('Detected headless Linux environment, using manual auth');
+      return true;
+    }
+
+    // Check if we're in Docker
+    if (process.env.DOCKER || process.env.CONTAINER) {
+      this.log.debug('Detected container environment, using manual auth');
+      return true;
+    }
+
+    return false;
+  }
+
+  private async performAutoAuth(): Promise<void> {
+    try {
+      this.log.info('Starting automatic OAuth authentication...');
+      await this.performFullAuth();
+    } catch (error) {
+      this.log.warn('Automatic OAuth failed, falling back to manual authentication');
+      this.log.warn('Error:', error.message);
+      await this.handleManualAuth();
+    }
+  }
+
+  private async handleManualAuth(): Promise<void> {
+    this.log.error('='.repeat(80));
+    this.log.error('MANUAL AUTHENTICATION REQUIRED');
+    this.log.error('='.repeat(80));
+    this.log.error('Automatic OAuth authentication is not available.');
+    this.log.error('Please obtain tokens manually and add them to your configuration:');
+    this.log.error('');
+    this.log.error('1. Visit: https://developer.viessmann.com/');
+    this.log.error('2. Create an application with these settings:');
+    this.log.error('   - Name: homebridge-viessmann-vicare');
+    this.log.error('   - Type: Public Client');
+    this.log.error('   - Redirect URI: http://localhost:4200/');
+    this.log.error('   - Scope: IoT User offline_access');
+    this.log.error('');
+    this.log.error('3. Get authorization code using this URL:');
+    
+    const authUrl = this.buildAuthUrl();
+    this.log.error(`   ${authUrl}`);
+    this.log.error('');
+    this.log.error('4. Exchange authorization code for tokens using curl:');
+    this.log.error('   curl -X POST "https://iam.viessmann.com/idp/v3/token" \\');
+    this.log.error('   -H "Content-Type: application/x-www-form-urlencoded" \\');
+    this.log.error('   -d "client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost:4200/&grant_type=authorization_code&code_verifier=YOUR_CODE_VERIFIER&code=YOUR_AUTH_CODE"');
+    this.log.error('');
+    this.log.error('5. Add tokens to your Homebridge configuration:');
+    this.log.error('   {');
+    this.log.error('     "platform": "ViessmannPlatform",');
+    this.log.error('     "authMethod": "manual",');
+    this.log.error('     "accessToken": "YOUR_ACCESS_TOKEN",');
+    this.log.error('     "refreshToken": "YOUR_REFRESH_TOKEN",');
+    this.log.error('     // ... other config');
+    this.log.error('   }');
+    this.log.error('');
+    this.log.error('For detailed instructions, visit:');
+    this.log.error('https://github.com/diegoweb100/homebridge-viessmann-vicare#manual-authentication');
+    this.log.error('='.repeat(80));
+    
+    throw new Error('Manual authentication required - see logs for detailed instructions');
+  }
+
   private isTokenValid(): boolean {
     return !!(this.accessToken && this.tokenExpiresAt && Date.now() < this.tokenExpiresAt);
   }
 
   private async performFullAuth(): Promise<void> {
-    try {
-      // Step 1: Get authorization code
-      const authCode = await this.getAuthorizationCode();
+    return new Promise((resolve, reject) => {
+      const authUrl = this.buildAuthUrl();
       
-      // Step 2: Exchange code for tokens
-      await this.exchangeCodeForTokens(authCode);
+      this.log.info('='.repeat(80));
+      this.log.info('VIESSMANN OAUTH AUTHENTICATION');
+      this.log.info('='.repeat(80));
+      this.log.info('Please open this URL in your browser to authenticate:');
+      this.log.info('');
+      this.log.info(authUrl);
+      this.log.info('');
+      this.log.info('Waiting for authentication callback...');
+      this.log.info('='.repeat(80));
 
-    } catch (error) {
-      this.log.error('Full authentication failed:', error);
-      throw error;
-    }
+      // Start local server to capture callback
+      this.startAuthServer((code, error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        if (code) {
+          this.exchangeCodeForTokens(code)
+            .then(() => resolve())
+            .catch(reject);
+        }
+      });
+
+      // Auto-open browser if possible
+      this.openBrowser(authUrl);
+    });
   }
 
-  private async getAuthorizationCode(): Promise<string> {
-    // For automation purposes, we'll simulate the OAuth flow
-    // In a real scenario, this would involve browser interaction
-    
-    const authParams = new URLSearchParams({
+  private buildAuthUrl(): string {
+    const params = new URLSearchParams({
       client_id: this.config.clientId,
-      redirect_uri: 'http://localhost:4200/',
+      redirect_uri: this.redirectUri,
       scope: 'IoT User offline_access',
       response_type: 'code',
       code_challenge_method: 'S256',
       code_challenge: this.codeChallenge!,
     });
 
-    // This is a simplified version - in practice you'd need to handle the full OAuth flow
-    // For now, we'll assume you have the authorization code from manual process
-    throw new Error('Authorization code must be obtained manually. Please check documentation.');
+    return `${this.authURL}/authorize?${params.toString()}`;
+  }
+
+  private startAuthServer(callback: (code?: string, error?: Error) => void) {
+    this.authServer = http.createServer((req, res) => {
+      const url = new URL(req.url!, `http://localhost:${this.redirectPort}`);
+      
+      if (url.pathname === '/') {
+        const code = url.searchParams.get('code');
+        const error = url.searchParams.get('error');
+
+        if (error) {
+          const errorDescription = url.searchParams.get('error_description') || error;
+          res.writeHead(400, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h1 style="color: red;">Authentication Failed</h1>
+                <p>${errorDescription}</p>
+                <p>Please close this window and check your Homebridge logs.</p>
+              </body>
+            </html>
+          `);
+          callback(undefined, new Error(`OAuth error: ${errorDescription}`));
+          this.stopAuthServer();
+          return;
+        }
+
+        if (code) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h1 style="color: green;">✅ Authentication Successful!</h1>
+                <p>You can now close this window.</p>
+                <p>Homebridge will continue setup automatically.</p>
+              </body>
+            </html>
+          `);
+          callback(code);
+          this.stopAuthServer();
+          return;
+        }
+      }
+
+      // Handle other requests
+      res.writeHead(404, { 'Content-Type': 'text/html' });
+      res.end(`
+        <html>
+          <body style="font-family: Arial; text-align: center; padding: 50px;">
+            <h1>Homebridge Viessmann Authentication</h1>
+            <p>Waiting for authentication...</p>
+          </body>
+        </html>
+      `);
+    });
+
+    this.authServer.listen(this.redirectPort, 'localhost', () => {
+      this.log.debug(`Auth server listening on port ${this.redirectPort}`);
+    });
+
+    this.authServer.on('error', (error) => {
+      this.log.error('Auth server error:', error);
+      callback(undefined, error);
+    });
+  }
+
+  private stopAuthServer() {
+    if (this.authServer) {
+      this.authServer.close(() => {
+        this.log.debug('Auth server stopped');
+      });
+      this.authServer = undefined;
+    }
+  }
+
+  private openBrowser(url: string) {
+    const { exec } = require('child_process');
+    
+    try {
+      let command: string;
+      
+      switch (process.platform) {
+        case 'darwin': // macOS
+          command = `open "${url}"`;
+          break;
+        case 'win32': // Windows
+          command = `start "${url}"`;
+          break;
+        case 'linux': // Linux
+          command = `xdg-open "${url}"`;
+          break;
+        default:
+          this.log.warn('Cannot auto-open browser on this platform. Please open the URL manually.');
+          return;
+      }
+
+      exec(command, (error) => {
+        if (error) {
+          this.log.warn('Could not auto-open browser:', error.message);
+          this.log.info('Please open the authentication URL manually in your browser.');
+        } else {
+          this.log.info('Opening browser for authentication...');
+        }
+      });
+    } catch (error) {
+      this.log.warn('Error opening browser:', error);
+    }
   }
 
   private async exchangeCodeForTokens(authCode: string): Promise<void> {
     const tokenData = new URLSearchParams({
       client_id: this.config.clientId,
-      redirect_uri: 'http://localhost:4200/',
+      redirect_uri: this.redirectUri,
       grant_type: 'authorization_code',
       code_verifier: this.codeVerifier!,
       code: authCode,
     });
 
-    const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
-      `${this.authURL}/token`,
-      tokenData,
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }
-    );
+    try {
+      const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
+        `${this.authURL}/token`,
+        tokenData,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }
+      );
 
-    this.setTokens(response.data);
+      this.setTokens(response.data);
+      this.log.info('✅ Authentication successful! Tokens acquired.');
+      
+    } catch (error) {
+      this.log.error('Token exchange failed:', error);
+      throw new Error('Failed to exchange authorization code for tokens');
+    }
   }
 
   private async refreshAccessToken(): Promise<void> {
@@ -134,23 +407,33 @@ export class ViessmannAPI {
       refresh_token: this.refreshToken,
     });
 
-    const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
-      `${this.authURL}/token`,
-      tokenData,
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }
-    );
+    try {
+      const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
+        `${this.authURL}/token`,
+        tokenData,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }
+      );
 
-    this.setTokens(response.data);
+      this.setTokens(response.data);
+      this.log.debug('Token refreshed successfully');
+      
+    } catch (error) {
+      this.log.error('Token refresh failed:', error);
+      throw error;
+    }
   }
 
   private setTokens(authData: AuthResponse): void {
     this.accessToken = authData.access_token;
     this.refreshToken = authData.refresh_token || this.refreshToken;
     this.tokenExpiresAt = Date.now() + (authData.expires_in * 1000) - 60000; // 1 minute buffer
+    
+    // Save tokens for persistence
+    this.saveTokens();
     
     this.log.debug('Tokens updated successfully');
   }

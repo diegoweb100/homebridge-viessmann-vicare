@@ -23,7 +23,7 @@
         "title": "Client Secret",
         "type": "string",
         "required": false,
-        "description": "Your Viessmann API Client Secret (if using confidential client)"
+        "description": "Your Viessmann API Client Secret (optional for public clients)"
       },
       "username": {
         "title": "Username",
@@ -36,6 +36,25 @@
         "type": "string",
         "required": true,
         "description": "Your Viessmann ViCare account password"
+      },
+      "authMethod": {
+        "title": "Authentication Method",
+        "type": "string",
+        "enum": ["auto", "manual"],
+        "default": "auto",
+        "description": "Choose authentication method: 'auto' for automatic OAuth flow, 'manual' for manual token configuration"
+      },
+      "accessToken": {
+        "title": "Access Token (Manual Auth)",
+        "type": "string",
+        "required": false,
+        "description": "Manual access token (only required if authMethod is 'manual')"
+      },
+      "refreshToken": {
+        "title": "Refresh Token (Manual Auth)",
+        "type": "string",
+        "required": false,
+        "description": "Manual refresh token (only required if authMethod is 'manual')"
       },
       "refreshInterval": {
         "title": "Refresh Interval",
@@ -72,6 +91,27 @@
         "clientSecret",
         "username",
         "password"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Authentication Method",
+      "description": "Choose how to authenticate with Viessmann API",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        "authMethod"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Manual Authentication (Advanced)",
+      "description": "Only required if authMethod is set to 'manual'",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "accessToken",
+        "refreshToken"
       ]
     },
     {

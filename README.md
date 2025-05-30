@@ -64,7 +64,7 @@ npm install -g homebridge-viessmann-vicare
    - Scope: `IoT User offline_access`
 4. Salva il **Client ID** generato
 
-### Esempio configurazione
+### Esempio configurazione (OAuth Automatico - Raccomandato)
 
 ```json
 {
@@ -73,6 +73,24 @@ npm install -g homebridge-viessmann-vicare
     "clientId": "il_tuo_client_id_qui",
     "username": "il_tuo_email@example.com",
     "password": "la_tua_password_vicare",
+    "authMethod": "auto",
+    "refreshInterval": 60000,
+    "debug": false
+}
+```
+
+### Esempio configurazione (Autenticazione Manuale)
+
+```json
+{
+    "platform": "ViessmannPlatform",
+    "name": "Viessmann",
+    "clientId": "il_tuo_client_id_qui", 
+    "username": "il_tuo_email@example.com",
+    "password": "la_tua_password_vicare",
+    "authMethod": "manual",
+    "accessToken": "il_tuo_access_token",
+    "refreshToken": "il_tuo_refresh_token",
     "refreshInterval": 60000,
     "debug": false
 }
@@ -87,8 +105,53 @@ npm install -g homebridge-viessmann-vicare
 | `clientId` | string | ✅ | Client ID dall'API Viessmann |
 | `username` | string | ✅ | Email del tuo account ViCare |
 | `password` | string | ✅ | Password del tuo account ViCare |
+| `authMethod` | string | ❌ | Metodo autenticazione: `auto` (default) o `manual` |
+| `accessToken` | string | ❌ | Token di accesso (solo per authMethod: manual) |
+| `refreshToken` | string | ❌ | Token di refresh (solo per authMethod: manual) |
 | `refreshInterval` | number | ❌ | Intervallo aggiornamento in ms (default: 60000) |
 | `debug` | boolean | ❌ | Abilita logging dettagliato (default: false) |
+
+## 🔐 Metodi di Autenticazione
+
+### 🚀 OAuth Automatico (Raccomandato)
+
+Il plugin gestisce automaticamente l'autenticazione OAuth:
+
+1. **Al primo avvio** il plugin mostrerà un URL nei log
+2. **Il browser si aprirà automaticamente** (su sistemi desktop)
+3. **Fai login con le tue credenziali ViCare**
+4. **Autorizza l'applicazione** 
+5. **I token vengono salvati automaticamente** per riutilizzo futuro
+
+```json
+{
+    "authMethod": "auto"  // Default, può essere omesso
+}
+```
+
+### 🔧 Autenticazione Manuale
+
+Per ambienti server/headless o se l'OAuth automatico fallisce:
+
+1. **Ottieni i token manualmente** seguendo le istruzioni nei log
+2. **Aggiungi i token alla configurazione**
+
+```json
+{
+    "authMethod": "manual",
+    "accessToken": "eyJ...",
+    "refreshToken": "abc123..."
+}
+```
+
+### 🔄 Logica di Fallback Intelligente
+
+Il plugin usa automaticamente il metodo migliore:
+
+- ✅ **Manual tokens in config** → usa quelli
+- ✅ **Ambiente desktop** → prova OAuth automatico  
+- ✅ **Ambiente headless/Docker** → usa autenticazione manuale
+- ✅ **OAuth fallisce** → fallback su istruzioni manuali
 
 ## 🏠 Accessori HomeKit creati
 

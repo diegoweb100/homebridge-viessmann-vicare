@@ -17,9 +17,12 @@ import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-
 
 export interface ViessmannPlatformConfig extends PlatformConfig {
   clientId: string;
-  clientSecret: string;
+  clientSecret?: string;
   username: string;
   password: string;
+  authMethod?: 'auto' | 'manual';
+  accessToken?: string;
+  refreshToken?: string;
   refreshInterval?: number;
   debug?: boolean;
 }
