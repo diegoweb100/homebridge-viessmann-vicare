@@ -165,7 +165,7 @@ export class ViessmannAPI {
       await this.performFullAuth();
     } catch (error) {
       this.log.warn('Automatic OAuth failed, falling back to manual authentication');
-      this.log.warn('Error:', error.message);
+      this.log.warn('Error:', error instanceof Error ? error.message : String(error));
       await this.handleManualAuth();
     }
   }
@@ -354,7 +354,7 @@ export class ViessmannAPI {
           return;
       }
 
-      exec(command, (error) => {
+      exec(command, (error: any) => {
         if (error) {
           this.log.warn('Could not auto-open browser:', error.message);
           this.log.info('Please open the authentication URL manually in your browser.');
