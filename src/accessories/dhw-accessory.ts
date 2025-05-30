@@ -161,7 +161,7 @@ export class ViessmannDHWAccessory {
 
     try {
       let success = false;
-      let mode: string;
+      let mode: string | undefined;
       
       if (targetState === this.platform.Characteristic.TargetHeatingCoolingState.OFF) {
         // Try to turn off DHW
@@ -192,7 +192,7 @@ export class ViessmannDHWAccessory {
         }
       }
 
-      if (success) {
+      if (success && mode) {
         this.platform.log.info(`Set DHW mode to: ${mode}`);
       } else {
         this.platform.log.warn(`Failed to set DHW state. Available modes: ${this.availableModes.join(', ')}`);
