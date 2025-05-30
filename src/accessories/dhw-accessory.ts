@@ -4,9 +4,11 @@ import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDe
 export class ViessmannDHWAccessory {
   private service: Service;
   private informationService: Service;
+  private modeService?: Service; // Custom switch service for modes
   private availableModes: string[] = [];
   private supportsTemperatureControl = false;
   private temperatureConstraints = { min: 35, max: 65 };
+  private currentMode = 'off';
 
   private states = {
     On: false,
@@ -15,6 +17,7 @@ export class ViessmannDHWAccessory {
     TemperatureDisplayUnits: 0, // Celsius
     CurrentHeatingCoolingState: 0, // Off
     TargetHeatingCoolingState: 0, // Off
+    ModeOn: false, // For custom mode switch
   };
 
   constructor(
@@ -102,22 +105,22 @@ export class ViessmannDHWAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.getCurrentHeatingCoolingState.bind(this));
 
-    // Target Heating Cooling State - only show if we have controllable modes
+    // Simplified Target Heating Cooling State - only OFF and HEAT for better UX
     if (this.availableModes.length > 0) {
-      const validValues = [];
-      
-      // Always include OFF if we have controllable modes
-      validValues.push(this.platform.Characteristic.TargetHeatingCoolingState.OFF);
-      
-      // Add HEAT if we have modes other than 'off'
-      if (this.availableModes.some(mode => mode !== 'off')) {
-        validValues.push(this.platform.Characteristic.TargetHeatingCoolingState.HEAT);
-      }
+      const validValues = [
+        this.platform.Characteristic.TargetHeatingCoolingState.OFF,
+        this.platform.Characteristic.TargetHeatingCoolingState.HEAT,
+      ];
 
       this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
         .onGet(this.getTargetHeatingCoolingState.bind(this))
         .onSet(this.setTargetHeatingCoolingState.bind(this))
         .setProps({ validValues });
+    }
+
+    // Add custom mode switch service if we have multiple modes
+    if (this.availableModes.length > 2) { // More than just 'off' and one other mode
+      this.setupModeSwitch();
     }
 
     // Current Temperature (read-only)
@@ -145,6 +148,76 @@ export class ViessmannDHWAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
       .onGet(this.getTemperatureDisplayUnits.bind(this))
       .onSet(this.setTemperatureDisplayUnits.bind(this));
+  }
+
+  private setupModeSwitch() {
+    // Create a custom switch service for mode cycling
+    const modeSwitchName = `${this.accessory.displayName} Mode`;
+    this.modeService = this.accessory.getService(modeSwitchName) || 
+                      this.accessory.addService(this.platform.Service.Switch, modeSwitchName, 'dhw-mode');
+
+    this.modeService.setCharacteristic(this.platform.Characteristic.Name, modeSwitchName);
+
+    this.modeService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(this.getModeSwitch.bind(this))
+      .onSet(this.setModeSwitch.bind(this));
+
+    // Set custom description based on available modes
+    const modeDescription = `Cycles through: ${this.availableModes.filter(m => m !== 'off').join(' → ')}`;
+    this.platform.log.info(`DHW Mode Switch: ${modeDescription}`);
+  }
+
+  async getModeSwitch(): Promise<CharacteristicValue> {
+    return this.currentMode !== 'off';
+  }
+
+  async setModeSwitch(value: CharacteristicValue) {
+    const switchOn = value as boolean;
+    
+    try {
+      let targetMode: string;
+      
+      if (!switchOn) {
+        // Turn off DHW
+        targetMode = 'off';
+      } else {
+        // Cycle to next mode (skip 'off')
+        const activeModes = this.availableModes.filter(m => m !== 'off');
+        if (activeModes.length === 0) {
+          this.platform.log.warn('No active modes available for DHW');
+          return;
+        }
+        
+        // Find current mode index and cycle to next
+        const currentIndex = activeModes.indexOf(this.currentMode);
+        const nextIndex = (currentIndex + 1) % activeModes.length;
+        targetMode = activeModes[nextIndex];
+      }
+
+      const success = await this.executeDHWCommand(targetMode);
+      
+      if (success) {
+        this.currentMode = targetMode;
+        this.platform.log.info(`DHW mode switched to: ${targetMode.toUpperCase()}`);
+        
+        // Update main thermostat state
+        const mainState = targetMode === 'off' ? 
+          this.platform.Characteristic.TargetHeatingCoolingState.OFF :
+          this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
+        
+        this.states.TargetHeatingCoolingState = mainState;
+        this.service.updateCharacteristic(
+          this.platform.Characteristic.TargetHeatingCoolingState, 
+          mainState
+        );
+      } else {
+        this.platform.log.error(`Failed to switch DHW to mode: ${targetMode}`);
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+      }
+    } catch (error) {
+      this.platform.log.error('Error setting DHW mode switch:', error);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
   }
 
   async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
@@ -193,7 +266,16 @@ export class ViessmannDHWAccessory {
       }
 
       if (success && mode) {
-        this.platform.log.info(`Set DHW mode to: ${mode}`);
+        this.currentMode = mode;
+        this.platform.log.info(`Set DHW mode to: ${mode.toUpperCase()}`);
+        
+        // Update mode switch if present
+        if (this.modeService) {
+          this.modeService.updateCharacteristic(
+            this.platform.Characteristic.On, 
+            mode !== 'off'
+          );
+        }
       } else {
         this.platform.log.warn(`Failed to set DHW state. Available modes: ${this.availableModes.join(', ')}`);
         // Don't throw error as device might not support mode changes
@@ -332,6 +414,8 @@ export class ViessmannDHWAccessory {
     const dhwOperatingModeFeature = features.find(f => f.feature === 'heating.dhw.operating.modes.active');
     if (dhwOperatingModeFeature?.properties?.value?.value !== undefined) {
       const mode = dhwOperatingModeFeature.properties.value.value;
+      this.currentMode = mode;
+      
       const targetState = (mode === 'off') ? 
         this.platform.Characteristic.TargetHeatingCoolingState.OFF : 
         this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
@@ -341,6 +425,14 @@ export class ViessmannDHWAccessory {
         this.platform.Characteristic.TargetHeatingCoolingState, 
         this.states.TargetHeatingCoolingState
       );
+
+      // Update mode switch if present
+      if (this.modeService) {
+        this.modeService.updateCharacteristic(
+          this.platform.Characteristic.On, 
+          mode !== 'off'
+        );
+      }
     }
 
     // Update DHW enabled state
@@ -349,6 +441,6 @@ export class ViessmannDHWAccessory {
       this.states.On = dhwFeature.properties.active.value;
     }
 
-    this.platform.log.debug('Updated DHW accessory state:', this.states);
+    this.platform.log.debug(`Updated DHW accessory state (Mode: ${this.currentMode.toUpperCase()}):`, this.states);
   }
 }
