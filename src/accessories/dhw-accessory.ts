@@ -434,7 +434,7 @@ export class ViessmannDHWAccessory {
       if (newMode !== this.currentMode) {
         this.platform.log.debug(`DHW mode updated: ${this.currentMode.toUpperCase()} → ${newMode.toUpperCase()}`);
         this.currentMode = newMode;
-        this.updateAllSwitchStates();
+        this.updateAllSwitchStatesExclusive();
       }
     }
 
