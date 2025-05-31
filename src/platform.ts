@@ -251,30 +251,45 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  async updateAllDevices() {
+async updateAllDevices() {
     this.log.debug('Updating all devices...');
     
     for (const accessory of this.accessories) {
       try {
         if (accessory.context.device) {
-          const features = await this.viessmannAPI.getDeviceFeatures(
-            accessory.context.installation.id,
-            accessory.context.gateway.serial,
-            accessory.context.device.id
-          );
+          // Add timeout handling per device
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout per device
+          
+          try {
+            const features = await this.viessmannAPI.getDeviceFeatures(
+              accessory.context.installation.id,
+              accessory.context.gateway.serial,
+              accessory.context.device.id
+            );
 
-          // Update accessory based on its type
-          const service = accessory.getService(this.Service.Thermostat) || 
-                         accessory.getService(this.Service.Switch) ||
-                         accessory.getService(this.Service.TemperatureSensor);
+            clearTimeout(timeoutId);
 
-          if (service && accessory.context.updateHandler) {
-            // Call the update handler if available
-            accessory.context.updateHandler(features);
+            // Update accessory based on its type
+            const service = accessory.getService(this.Service.Thermostat) || 
+                           accessory.getService(this.Service.Switch) ||
+                           accessory.getService(this.Service.TemperatureSensor);
+
+            if (service && accessory.context.updateHandler) {
+              // Call the update handler if available
+              accessory.context.updateHandler(features);
+            }
+          } catch (error) {
+            clearTimeout(timeoutId);
+            throw error;
           }
         }
       } catch (error) {
-        this.log.error(`Failed to update accessory ${accessory.displayName}:`, error);
+        if (error.code === 'ECONNABORTED' || error.code === 'ABORT_ERR') {
+          this.log.warn(`Timeout updating accessory ${accessory.displayName} - API may be slow, will retry next cycle`);
+        } else {
+          this.log.error(`Failed to update accessory ${accessory.displayName}:`, error instanceof Error ? error.message : error);
+        }
       }
     }
   }
