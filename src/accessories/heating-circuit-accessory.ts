@@ -5,7 +5,13 @@ export class ViessmannHeatingCircuitAccessory {
   private temperatureService: Service;
   private informationService: Service;
   
+  // Temperature Program Services
+  private comfortTempService?: Service;
+  private normalTempService?: Service;
+  private reducedTempService?: Service;
+  
   private availableModes: string[] = [];
+  private availablePrograms: string[] = [];
   private supportsTemperatureControl = false;
   private temperatureConstraints = { min: 5, max: 35 };
   private isCircuitEnabled = false;
@@ -13,7 +19,9 @@ export class ViessmannHeatingCircuitAccessory {
 
   private states = {
     CurrentTemperature: 20,
-    TargetTemperature: 21,
+    ComfortTemperature: 19,
+    NormalTemperature: 18,
+    ReducedTemperature: 16,
     TemperatureDisplayUnits: 0, // Celsius
     CurrentRelativeHumidity: 50,
   };
@@ -34,7 +42,7 @@ export class ViessmannHeatingCircuitAccessory {
       .setCharacteristic(this.platform.Characteristic.SerialNumber, `${gateway.serial}-HC${circuitNumber}`)
       .setCharacteristic(this.platform.Characteristic.FirmwareRevision, '1.0.0');
 
-    // Create temperature sensor service instead of thermostat for current temp
+    // Create temperature sensor service for current temp
     this.temperatureService = this.accessory.getService(this.platform.Service.TemperatureSensor) || 
                               this.accessory.addService(this.platform.Service.TemperatureSensor);
 
@@ -84,17 +92,17 @@ export class ViessmannHeatingCircuitAccessory {
       return;
     }
 
-    // Analyze operating modes - get actual available modes from API
+    // Analyze operating modes
     const activeModesFeature = features.find(f => f.feature === `${circuitPrefix}.operating.modes.active`);
     if (activeModesFeature?.commands?.setMode?.params?.mode?.constraints?.enum) {
       this.availableModes = activeModesFeature.commands.setMode.params.mode.constraints.enum;
-      this.platform.log.info(`Heating circuit ${this.circuitNumber} available modes from API: ${this.availableModes.join(', ')}`);
+      this.platform.log.info(`Heating circuit ${this.circuitNumber} available modes: ${this.availableModes.join(', ')}`);
     } else {
       // Fallback: check individual mode features that are enabled
       const modeFeatures = features.filter(f => 
         f.feature.startsWith(`${circuitPrefix}.operating.modes.`) && 
         f.feature !== `${circuitPrefix}.operating.modes.active` &&
-        f.isEnabled === true // Only enabled modes
+        f.isEnabled === true
       );
       this.availableModes = modeFeatures
         .map(f => f.feature.split('.').pop())
@@ -103,34 +111,49 @@ export class ViessmannHeatingCircuitAccessory {
       this.platform.log.info(`Heating circuit ${this.circuitNumber} modes found from enabled features: ${this.availableModes.join(', ')}`);
     }
 
-    // Get current mode to set as default
+    // Get current mode
     if (activeModesFeature?.properties?.value?.value) {
       this.currentMode = activeModesFeature.properties.value.value;
       this.platform.log.info(`Heating circuit ${this.circuitNumber} current mode: ${this.currentMode}`);
     }
 
-    // Analyze temperature control capabilities
-    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.comfort`);
-    const normalProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.normal`);
-    
-    if (comfortProgram?.commands?.setTemperature || normalProgram?.commands?.setTemperature) {
-      this.supportsTemperatureControl = true;
-      
-      // Get temperature constraints from available commands
-      const tempCommand = comfortProgram?.commands?.setTemperature || normalProgram?.commands?.setTemperature;
-      const constraints = tempCommand?.params?.targetTemperature?.constraints || 
-                         tempCommand?.params?.temperature?.constraints;
-      
-      if (constraints) {
-        this.temperatureConstraints.min = constraints.min || 5;
-        this.temperatureConstraints.max = constraints.max || 35;
+    // Analyze temperature programs (comfort, normal, reduced)
+    const programTypes = ['comfort', 'normal', 'reduced'];
+    for (const programType of programTypes) {
+      const programFeature = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${programType}`);
+      if (programFeature?.isEnabled === true) {
+        this.availablePrograms.push(programType);
+        
+        // Get current temperature for this program
+        if (programFeature.properties?.temperature?.value !== undefined) {
+          const temp = programFeature.properties.temperature.value;
+          switch (programType) {
+            case 'comfort':
+              this.states.ComfortTemperature = temp;
+              break;
+            case 'normal':
+              this.states.NormalTemperature = temp;
+              break;
+            case 'reduced':
+              this.states.ReducedTemperature = temp;
+              break;
+          }
+        }
+
+        // Check if we can set temperature for this program
+        if (programFeature.commands?.setTemperature) {
+          this.supportsTemperatureControl = true;
+          const constraints = programFeature.commands.setTemperature.params?.targetTemperature?.constraints;
+          if (constraints) {
+            this.temperatureConstraints.min = Math.min(this.temperatureConstraints.min, constraints.min || 5);
+            this.temperatureConstraints.max = Math.max(this.temperatureConstraints.max, constraints.max || 35);
+          }
+        }
       }
-      
-      this.platform.log.info(`Heating circuit ${this.circuitNumber} temperature control: ${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C`);
     }
 
     // Log capabilities summary
-    this.platform.log.info(`Heating Circuit ${this.circuitNumber} Capabilities - Enabled: ${this.isCircuitEnabled}, Modes: [${this.availableModes.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}`);
+    this.platform.log.info(`Heating Circuit ${this.circuitNumber} Capabilities - Enabled: ${this.isCircuitEnabled}, Modes: [${this.availableModes.join(', ')}], Programs: [${this.availablePrograms.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}`);
   }
 
   private setupCharacteristics() {
@@ -150,9 +173,9 @@ export class ViessmannHeatingCircuitAccessory {
     // Create mode switches
     this.setupModeServices();
 
-    // Add target temperature service if supported
-    if (this.supportsTemperatureControl) {
-      this.setupTargetTemperatureService();
+    // Add temperature program services if supported
+    if (this.supportsTemperatureControl && this.availablePrograms.length > 0) {
+      this.setupTemperatureProgramServices();
     }
   }
 
@@ -162,7 +185,7 @@ export class ViessmannHeatingCircuitAccessory {
     // First, remove ALL existing mode services to avoid conflicts
     this.removeAllModeServices();
 
-    // Create services for each ACTUALLY available mode (not hardcoded)
+    // Create services for each available mode
     for (const mode of this.availableModes) {
       const serviceDisplayName = this.getModeDisplayName(mode);
       const serviceName = `${installationName} ${serviceDisplayName}`;
@@ -176,6 +199,72 @@ export class ViessmannHeatingCircuitAccessory {
 
       this.platform.log.info(`Created mode service: ${serviceName} (${mode})`);
     }
+  }
+
+  private setupTemperatureProgramServices() {
+    const installationName = this.installation.description;
+
+    // Remove existing temperature program services first
+    this.removeAllTemperatureProgramServices();
+
+    // Create services for each available temperature program
+    if (this.availablePrograms.includes('comfort')) {
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Comfort Temperature`;
+      this.comfortTempService = this.accessory.addService(this.platform.Service.Thermostat, serviceName, `hc${this.circuitNumber}-comfort-temp`);
+      this.setupSingleTemperatureProgramService(this.comfortTempService, 'comfort', this.states.ComfortTemperature);
+    }
+
+    if (this.availablePrograms.includes('normal')) {
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Normal Temperature`;
+      this.normalTempService = this.accessory.addService(this.platform.Service.Thermostat, serviceName, `hc${this.circuitNumber}-normal-temp`);
+      this.setupSingleTemperatureProgramService(this.normalTempService, 'normal', this.states.NormalTemperature);
+    }
+
+    if (this.availablePrograms.includes('reduced')) {
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Reduced Temperature`;
+      this.reducedTempService = this.accessory.addService(this.platform.Service.Thermostat, serviceName, `hc${this.circuitNumber}-reduced-temp`);
+      this.setupSingleTemperatureProgramService(this.reducedTempService, 'reduced', this.states.ReducedTemperature);
+    }
+  }
+
+  private setupSingleTemperatureProgramService(service: Service, programType: string, currentTemp: number) {
+    service.setCharacteristic(this.platform.Characteristic.Name, service.displayName);
+
+    // Set heating only mode
+    service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
+      .onGet(() => this.currentMode === 'heating' ? 
+        this.platform.Characteristic.TargetHeatingCoolingState.HEAT : 
+        this.platform.Characteristic.TargetHeatingCoolingState.OFF)
+      .onSet(() => {}) // Read-only
+      .setProps({
+        validValues: [
+          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
+          this.platform.Characteristic.TargetHeatingCoolingState.HEAT
+        ],
+      });
+
+    service.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
+      .onGet(() => this.currentMode === 'heating' ? 
+        this.platform.Characteristic.CurrentHeatingCoolingState.HEAT : 
+        this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
+
+    // Current temperature (same for all programs)
+    service.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+      .onGet(this.getCurrentTemperature.bind(this));
+
+    // Target temperature (specific to each program)
+    service.getCharacteristic(this.platform.Characteristic.TargetTemperature)
+      .onGet(() => this.getTemperatureForProgram(programType))
+      .onSet((value: CharacteristicValue) => this.setTemperatureForProgram(programType, value as number))
+      .setProps({
+        minValue: this.temperatureConstraints.min,
+        maxValue: this.temperatureConstraints.max,
+        minStep: 1,
+      });
+
+    service.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
+      .onGet(() => 0) // Celsius
+      .onSet(() => {}); // Read-only
   }
 
   private getModeDisplayName(mode: string): string {
@@ -235,8 +324,8 @@ export class ViessmannHeatingCircuitAccessory {
     }
   }
 
-  private setupTargetTemperatureService() {
-    // Remove existing thermostat services first
+  private removeAllTemperatureProgramServices() {
+    // Get all thermostat services and remove them (except the main one we might create later)
     const thermostatServices = this.accessory.services.filter(service => 
       service.UUID === this.platform.Service.Thermostat.UUID
     );
@@ -250,46 +339,60 @@ export class ViessmannHeatingCircuitAccessory {
       }
     }
 
-    // Create a separate service for target temperature
-    const installationName = this.installation.description;
-    const targetTempServiceName = `${installationName} Heating Circuit ${this.circuitNumber} Temperature`;
-    const targetTempService = this.accessory.addService(this.platform.Service.Thermostat, targetTempServiceName, `hc${this.circuitNumber}-temp`);
+    // Clear references
+    this.comfortTempService = undefined;
+    this.normalTempService = undefined;
+    this.reducedTempService = undefined;
+  }
 
-    targetTempService.setCharacteristic(this.platform.Characteristic.Name, targetTempServiceName);
+  private getTemperatureForProgram(programType: string): number {
+    switch (programType) {
+      case 'comfort':
+        return this.states.ComfortTemperature;
+      case 'normal':
+        return this.states.NormalTemperature;
+      case 'reduced':
+        return this.states.ReducedTemperature;
+      default:
+        return 20;
+    }
+  }
 
-    // Set to heating only mode and disable state controls
-    targetTempService.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(() => this.currentMode === 'heating' ? 
-        this.platform.Characteristic.TargetHeatingCoolingState.HEAT : 
-        this.platform.Characteristic.TargetHeatingCoolingState.OFF)
-      .onSet(() => {}) // Do nothing - we control modes via switches
-      .setProps({
-        validValues: [
-          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
-          this.platform.Characteristic.TargetHeatingCoolingState.HEAT
-        ],
-      });
+  private async setTemperatureForProgram(programType: string, temperature: number) {
+    try {
+      // Update local state first
+      switch (programType) {
+        case 'comfort':
+          this.states.ComfortTemperature = temperature;
+          break;
+        case 'normal':
+          this.states.NormalTemperature = temperature;
+          break;
+        case 'reduced':
+          this.states.ReducedTemperature = temperature;
+          break;
+      }
 
-    targetTempService.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
-      .onGet(() => this.currentMode === 'heating' ? 
-        this.platform.Characteristic.CurrentHeatingCoolingState.HEAT : 
-        this.platform.Characteristic.CurrentHeatingCoolingState.OFF);
+      // Try to set the temperature via API
+      const success = await this.platform.viessmannAPI.executeCommand(
+        this.installation.id,
+        this.gateway.serial,
+        this.device.id,
+        `heating.circuits.${this.circuitNumber}.operating.programs.${programType}`,
+        'setTemperature',
+        { targetTemperature: temperature }
+      );
 
-    targetTempService.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
-      .onGet(this.getCurrentTemperature.bind(this));
-
-    targetTempService.getCharacteristic(this.platform.Characteristic.TargetTemperature)
-      .onGet(this.getTargetTemperature.bind(this))
-      .onSet(this.setTargetTemperature.bind(this))
-      .setProps({
-        minValue: this.temperatureConstraints.min,
-        maxValue: this.temperatureConstraints.max,
-        minStep: 0.5,
-      });
-
-    targetTempService.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
-      .onGet(() => 0) // Celsius
-      .onSet(() => {}); // Do nothing
+      if (success) {
+        this.platform.log.info(`Heating circuit ${this.circuitNumber} ${programType} temperature set to: ${temperature}°C`);
+      } else {
+        this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} ${programType} temperature to: ${temperature}°C`);
+        throw new Error('Failed to set temperature');
+      }
+    } catch (error) {
+      this.platform.log.error(`Error setting heating circuit ${this.circuitNumber} ${programType} temperature:`, error);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
   }
 
   private async setMode(mode: string) {
@@ -313,7 +416,7 @@ export class ViessmannHeatingCircuitAccessory {
         this.currentMode = mode;
         this.platform.log.info(`Heating circuit ${this.circuitNumber} mode changed: ${oldMode.toUpperCase()} → ${mode.toUpperCase()}`);
         
-        // CRITICAL: Update all switch states with proper exclusivity
+        // Update all switch states with proper exclusivity
         this.updateAllSwitchStatesExclusive();
       } else {
         this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} mode to: ${mode}`);
@@ -341,96 +444,10 @@ export class ViessmannHeatingCircuitAccessory {
     
     // Logging for verification
     this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Switch States - Current Mode: ${this.currentMode.toUpperCase()}, Available: [${this.availableModes.join(', ')}]`);
-    
-    // Safety check: Verify current mode is in available modes
-    if (!this.availableModes.includes(this.currentMode)) {
-      this.platform.log.warn(`Heating Circuit ${this.circuitNumber}: Current mode '${this.currentMode}' not in available modes: [${this.availableModes.join(', ')}]`);
-    }
   }
 
   async getCurrentTemperature(): Promise<CharacteristicValue> {
     return this.states.CurrentTemperature;
-  }
-
-  async getTargetTemperature(): Promise<CharacteristicValue> {
-    return this.states.TargetTemperature;
-  }
-
-  async setTargetTemperature(value: CharacteristicValue) {
-    if (!this.supportsTemperatureControl) {
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
-    }
-
-    const temperature = value as number;
-    this.states.TargetTemperature = temperature;
-
-    try {
-      // Try comfort program first, then normal program
-      let success = false;
-      
-      // Method 1: Set comfort temperature
-      try {
-        success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `heating.circuits.${this.circuitNumber}.operating.programs.comfort`,
-          'setTemperature',
-          { targetTemperature: temperature }
-        );
-      } catch (error) {
-        this.platform.log.debug(`Comfort setTemperature failed for circuit ${this.circuitNumber}, trying with 'temperature' parameter`);
-        try {
-          success = await this.platform.viessmannAPI.executeCommand(
-            this.installation.id,
-            this.gateway.serial,
-            this.device.id,
-            `heating.circuits.${this.circuitNumber}.operating.programs.comfort`,
-            'setTemperature',
-            { temperature }
-          );
-        } catch (error2) {
-          this.platform.log.debug(`Comfort program failed for circuit ${this.circuitNumber}, trying normal program`);
-        }
-      }
-      
-      // Method 2: Set normal program temperature if comfort failed
-      if (!success) {
-        try {
-          success = await this.platform.viessmannAPI.executeCommand(
-            this.installation.id,
-            this.gateway.serial,
-            this.device.id,
-            `heating.circuits.${this.circuitNumber}.operating.programs.normal`,
-            'setTemperature',
-            { targetTemperature: temperature }
-          );
-        } catch (error) {
-          try {
-            success = await this.platform.viessmannAPI.executeCommand(
-              this.installation.id,
-              this.gateway.serial,
-              this.device.id,
-              `heating.circuits.${this.circuitNumber}.operating.programs.normal`,
-              'setTemperature',
-              { temperature }
-            );
-          } catch (error2) {
-            this.platform.log.debug(`Normal program also failed for circuit ${this.circuitNumber}`);
-          }
-        }
-      }
-
-      if (success) {
-        this.platform.log.info(`Heating circuit ${this.circuitNumber} target temperature: ${temperature}°C (Mode: ${this.currentMode.toUpperCase()})`);
-      } else {
-        this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} target temperature to: ${temperature}°C`);
-        throw new Error('Failed to set target temperature');
-      }
-    } catch (error) {
-      this.platform.log.error(`Error setting heating circuit ${this.circuitNumber} target temperature:`, error);
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
   }
 
   async getCurrentRelativeHumidity(): Promise<CharacteristicValue> {
@@ -467,25 +484,43 @@ export class ViessmannHeatingCircuitAccessory {
       }
     }
 
-    // Update target temperature from active program
-    const activeProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
-    if (activeProgram?.properties?.temperature?.value !== undefined) {
-      this.states.TargetTemperature = activeProgram.properties.temperature.value;
-    } else {
-      // Fallback to comfort program temperature
-      const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.comfort`);
-      if (comfortProgram?.properties?.temperature?.value !== undefined) {
-        this.states.TargetTemperature = comfortProgram.properties.temperature.value;
-      } else {
-        // Fallback to normal program temperature
-        const normalProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.normal`);
-        if (normalProgram?.properties?.temperature?.value !== undefined) {
-          this.states.TargetTemperature = normalProgram.properties.temperature.value;
+    // Update temperature programs
+    const programTypes = ['comfort', 'normal', 'reduced'];
+    let programUpdated = false;
+
+    for (const programType of programTypes) {
+      const programFeature = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${programType}`);
+      if (programFeature?.properties?.temperature?.value !== undefined) {
+        const newTemp = programFeature.properties.temperature.value;
+        const oldTemp = this.getTemperatureForProgram(programType);
+        
+        if (newTemp !== oldTemp) {
+          switch (programType) {
+            case 'comfort':
+              this.states.ComfortTemperature = newTemp;
+              if (this.comfortTempService) {
+                this.comfortTempService.updateCharacteristic(this.platform.Characteristic.TargetTemperature, newTemp);
+              }
+              break;
+            case 'normal':
+              this.states.NormalTemperature = newTemp;
+              if (this.normalTempService) {
+                this.normalTempService.updateCharacteristic(this.platform.Characteristic.TargetTemperature, newTemp);
+              }
+              break;
+            case 'reduced':
+              this.states.ReducedTemperature = newTemp;
+              if (this.reducedTempService) {
+                this.reducedTempService.updateCharacteristic(this.platform.Characteristic.TargetTemperature, newTemp);
+              }
+              break;
+          }
+          programUpdated = true;
         }
       }
     }
 
-    // Update operating mode (most important)
+    // Update operating mode
     const operatingModeFeature = features.find(f => f.feature === `${circuitPrefix}.operating.modes.active`);
     if (operatingModeFeature?.properties?.value?.value !== undefined) {
       const newMode = operatingModeFeature.properties.value.value;
@@ -502,6 +537,10 @@ export class ViessmannHeatingCircuitAccessory {
       this.states.CurrentRelativeHumidity = humidityFeature.properties.value.value;
     }
 
-    this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Status - Mode: ${this.currentMode.toUpperCase()}, Temp: ${this.states.CurrentTemperature}°C → ${this.states.TargetTemperature}°C`);
+    if (programUpdated) {
+      this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Programs - Comfort: ${this.states.ComfortTemperature}°C, Normal: ${this.states.NormalTemperature}°C, Reduced: ${this.states.ReducedTemperature}°C`);
+    }
+
+    this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Status - Mode: ${this.currentMode.toUpperCase()}, Room Temp: ${this.states.CurrentTemperature}°C`);
   }
 }
