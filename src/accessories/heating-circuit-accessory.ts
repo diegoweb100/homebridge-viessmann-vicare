@@ -180,8 +180,8 @@ export class ViessmannHeatingCircuitAccessory {
 
   private getModeDisplayName(mode: string): string {
     const displayNames: { [key: string]: string } = {
-      'heating': `Heating Circuit ${this.circuitNumber} Heating`,
-      'standby': `Heating Circuit ${this.circuitNumber} Standby`,
+      'heating': `Heating Circuit ${this.circuitNumber} On`,
+      'standby': `Heating Circuit ${this.circuitNumber} Off`,
     };
     
     return displayNames[mode] || `Heating Circuit ${this.circuitNumber} ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
@@ -259,10 +259,15 @@ export class ViessmannHeatingCircuitAccessory {
 
     // Set to heating only mode and disable state controls
     targetTempService.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(() => this.platform.Characteristic.TargetHeatingCoolingState.HEAT)
+      .onGet(() => this.currentMode === 'heating' ? 
+        this.platform.Characteristic.TargetHeatingCoolingState.HEAT : 
+        this.platform.Characteristic.TargetHeatingCoolingState.OFF)
       .onSet(() => {}) // Do nothing - we control modes via switches
       .setProps({
-        validValues: [this.platform.Characteristic.TargetHeatingCoolingState.HEAT],
+        validValues: [
+          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
+          this.platform.Characteristic.TargetHeatingCoolingState.HEAT
+        ],
       });
 
     targetTempService.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
