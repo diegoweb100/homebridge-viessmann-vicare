@@ -227,6 +227,7 @@ export class ViessmannDHWAccessory {
       .onGet(() => 0) // Celsius
       .onSet(() => {}); // Do nothing
   }
+  }
 
   private removeUnusedServices() {
     // Remove services for modes that are no longer available
