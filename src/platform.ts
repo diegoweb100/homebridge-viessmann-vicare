@@ -285,8 +285,14 @@ async updateAllDevices() {
           }
         }
       } catch (error) {
-        if (error.code === 'ECONNABORTED' || error.code === 'ABORT_ERR') {
-          this.log.warn(`Timeout updating accessory ${accessory.displayName} - API may be slow, will retry next cycle`);
+        // Proper type checking for error handling
+        if (error && typeof error === 'object' && 'code' in error) {
+          const errorWithCode = error as { code: string };
+          if (errorWithCode.code === 'ECONNABORTED' || errorWithCode.code === 'ABORT_ERR') {
+            this.log.warn(`Timeout updating accessory ${accessory.displayName} - API may be slow, will retry next cycle`);
+          } else {
+            this.log.error(`Failed to update accessory ${accessory.displayName}:`, error instanceof Error ? error.message : error);
+          }
         } else {
           this.log.error(`Failed to update accessory ${accessory.displayName}:`, error instanceof Error ? error.message : error);
         }
