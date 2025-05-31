@@ -318,7 +318,7 @@ export class ViessmannAPI {
           res.end(`
             <html>
               <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1 style="color: green;">✅ Authentication Successful!</h1>
+                <h1 style="color: green;">Authentication Successful!</h1>
                 <p>You can now close this window.</p>
                 <p>Homebridge will continue setup automatically.</p>
               </body>
@@ -416,7 +416,7 @@ export class ViessmannAPI {
       );
 
       this.setTokens(response.data);
-      this.log.info('✅ Authentication successful! Tokens acquired.');
+      this.log.info('Authentication successful! Tokens acquired.');
       
     } catch (error) {
       this.log.error('Token exchange failed:', error);
