@@ -4,9 +4,6 @@ import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDe
 export class ViessmannHeatingCircuitAccessory {
   private temperatureService: Service;
   private informationService: Service;
-  private heatingService?: Service;
-  private standbyService?: Service;
-  private offService?: Service;
   
   private availableModes: string[] = [];
   private supportsTemperatureControl = false;
@@ -19,9 +16,6 @@ export class ViessmannHeatingCircuitAccessory {
     TargetTemperature: 21,
     TemperatureDisplayUnits: 0, // Celsius
     CurrentRelativeHumidity: 50,
-    HeatingOn: false,
-    StandbyOn: true,
-    OffOn: false,
   };
 
   constructor(
@@ -180,22 +174,6 @@ export class ViessmannHeatingCircuitAccessory {
         .onGet(() => this.currentMode === mode)
         .onSet(this.createModeSetHandler(mode));
 
-      // Store service reference
-      switch(mode) {
-        case 'heating':
-          this.heatingService = service;
-          break;
-        case 'standby':
-          this.standbyService = service;
-          break;
-        default:
-          // Store other modes in a dynamic way
-          if (!this.offService && (mode === 'off' || mode.includes('off'))) {
-            this.offService = service;
-          }
-          break;
-      }
-      
       this.platform.log.info(`Created mode service: ${serviceName} (${mode})`);
     }
   }
@@ -203,12 +181,7 @@ export class ViessmannHeatingCircuitAccessory {
   private getModeDisplayName(mode: string): string {
     const displayNames: { [key: string]: string } = {
       'heating': `Heating Circuit ${this.circuitNumber} Heating`,
-      'standby': `Heating Circuit ${this.circuitNumber} Standby`, 
-      'dhwAndHeating': `Heating Circuit ${this.circuitNumber} DHW+Heating`,
-      'dhwAndHeatingCooling': `Heating Circuit ${this.circuitNumber} DHW+Heat+Cool`,
-      'forcedReduced': `Heating Circuit ${this.circuitNumber} Forced Reduced`,
-      'forcedNormal': `Heating Circuit ${this.circuitNumber} Forced Normal`,
-      'off': `Heating Circuit ${this.circuitNumber} Off`,
+      'standby': `Heating Circuit ${this.circuitNumber} Standby`,
     };
     
     return displayNames[mode] || `Heating Circuit ${this.circuitNumber} ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
@@ -260,11 +233,6 @@ export class ViessmannHeatingCircuitAccessory {
         this.platform.log.debug(`Could not remove service: ${error}`);
       }
     }
-
-    // Clear references
-    this.heatingService = undefined;
-    this.standbyService = undefined;
-    this.offService = undefined;
   }
 
   private setupTargetTemperatureService() {
@@ -317,71 +285,6 @@ export class ViessmannHeatingCircuitAccessory {
     targetTempService.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
       .onGet(() => 0) // Celsius
       .onSet(() => {}); // Do nothing
-  }
-
-  async setHeatingMode(value: CharacteristicValue) {
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn ON heating mode
-      if (this.currentMode !== 'heating') {
-        await this.setMode('heating');
-      }
-    } else {
-      // User wants to turn OFF heating mode
-      if (this.currentMode === 'heating') {
-        // Can't turn off heating without selecting another mode
-        // Force it back to ON and show a warning
-        setTimeout(() => {
-          this.heatingService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn(`Cannot turn off Heating mode for circuit ${this.circuitNumber}. Please select Standby mode instead.`);
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
-    }
-  }
-
-  async setStandbyMode(value: CharacteristicValue) {
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn ON standby mode
-      if (this.currentMode !== 'standby') {
-        await this.setMode('standby');
-      }
-    } else {
-      // User wants to turn OFF standby mode
-      if (this.currentMode === 'standby') {
-        // Can't turn off standby without selecting another mode
-        // Force it back to ON and show a warning
-        setTimeout(() => {
-          this.standbyService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn(`Cannot turn off Standby mode for circuit ${this.circuitNumber}. Please select Heating mode instead.`);
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
-    }
-  }
-
-  async setOffMode(value: CharacteristicValue) {
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn circuit completely off (standby is the closest we can get)
-      if (this.currentMode !== 'standby') {
-        await this.setMode('standby');
-      }
-    } else {
-      // User wants to turn on circuit from off state
-      if (this.currentMode === 'standby') {
-        // Force it back to ON
-        setTimeout(() => {
-          this.offService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn(`Cannot deactivate Off mode for circuit ${this.circuitNumber}. Please select Heating mode instead.`);
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
-    }
   }
 
   private async setMode(mode: string) {
