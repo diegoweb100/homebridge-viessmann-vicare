@@ -90,23 +90,29 @@ export class ViessmannHeatingCircuitAccessory {
       return;
     }
 
-    // Analyze operating modes
+    // Analyze operating modes - get actual available modes from API
     const activeModesFeature = features.find(f => f.feature === `${circuitPrefix}.operating.modes.active`);
     if (activeModesFeature?.commands?.setMode?.params?.mode?.constraints?.enum) {
       this.availableModes = activeModesFeature.commands.setMode.params.mode.constraints.enum;
-      this.platform.log.info(`Heating circuit ${this.circuitNumber} available modes: ${this.availableModes.join(', ')}`);
+      this.platform.log.info(`Heating circuit ${this.circuitNumber} available modes from API: ${this.availableModes.join(', ')}`);
     } else {
-      // Fallback: check individual mode features
+      // Fallback: check individual mode features that are enabled
       const modeFeatures = features.filter(f => 
         f.feature.startsWith(`${circuitPrefix}.operating.modes.`) && 
         f.feature !== `${circuitPrefix}.operating.modes.active` &&
-        f.isEnabled
+        f.isEnabled === true // Only enabled modes
       );
       this.availableModes = modeFeatures
         .map(f => f.feature.split('.').pop())
         .filter(Boolean);
       
-      this.platform.log.info(`Heating circuit ${this.circuitNumber} modes found from features: ${this.availableModes.join(', ')}`);
+      this.platform.log.info(`Heating circuit ${this.circuitNumber} modes found from enabled features: ${this.availableModes.join(', ')}`);
+    }
+
+    // Get current mode to set as default
+    if (activeModesFeature?.properties?.value?.value) {
+      this.currentMode = activeModesFeature.properties.value.value;
+      this.platform.log.info(`Heating circuit ${this.circuitNumber} current mode: ${this.currentMode}`);
     }
 
     // Analyze temperature control capabilities
@@ -162,34 +168,82 @@ export class ViessmannHeatingCircuitAccessory {
     // First, remove ALL existing mode services to avoid conflicts
     this.removeAllModeServices();
 
-    // Create services for each available mode with unique subtypes
-    if (this.availableModes.includes('heating')) {
-      const heatingServiceName = `${installationName} Heating Circuit ${this.circuitNumber} Heating`;
-      this.heatingService = this.accessory.addService(this.platform.Service.Switch, heatingServiceName, `hc${this.circuitNumber}-heating`);
-      this.heatingService.setCharacteristic(this.platform.Characteristic.Name, heatingServiceName);
-      this.heatingService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'heating')
-        .onSet(this.setHeatingMode.bind(this));
-    }
+    // Create services for each ACTUALLY available mode (not hardcoded)
+    for (const mode of this.availableModes) {
+      const serviceDisplayName = this.getModeDisplayName(mode);
+      const serviceName = `${installationName} ${serviceDisplayName}`;
+      const serviceSubtype = `hc${this.circuitNumber}-${mode}`;
+      
+      const service = this.accessory.addService(this.platform.Service.Switch, serviceName, serviceSubtype);
+      service.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      service.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentMode === mode)
+        .onSet(this.createModeSetHandler(mode));
 
-    if (this.availableModes.includes('standby')) {
-      const standbyServiceName = `${installationName} Heating Circuit ${this.circuitNumber} Standby`;
-      this.standbyService = this.accessory.addService(this.platform.Service.Switch, standbyServiceName, `hc${this.circuitNumber}-standby`);
-      this.standbyService.setCharacteristic(this.platform.Characteristic.Name, standbyServiceName);
-      this.standbyService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'standby')
-        .onSet(this.setStandbyMode.bind(this));
+      // Store service reference
+      switch(mode) {
+        case 'heating':
+          this.heatingService = service;
+          break;
+        case 'standby':
+          this.standbyService = service;
+          break;
+        default:
+          // Store other modes in a dynamic way
+          if (!this.offService && (mode === 'off' || mode.includes('off'))) {
+            this.offService = service;
+          }
+          break;
+      }
+      
+      this.platform.log.info(`Created mode service: ${serviceName} (${mode})`);
     }
+  }
 
-    // Add "off" mode if not in available modes but we want manual control
-    if (!this.availableModes.includes('off') && this.availableModes.length > 0) {
-      const offServiceName = `${installationName} Heating Circuit ${this.circuitNumber} Off`;
-      this.offService = this.accessory.addService(this.platform.Service.Switch, offServiceName, `hc${this.circuitNumber}-off`);
-      this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
-      this.offService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'off')
-        .onSet(this.setOffMode.bind(this));
-    }
+  private getModeDisplayName(mode: string): string {
+    const displayNames: { [key: string]: string } = {
+      'heating': `Heating Circuit ${this.circuitNumber} Heating`,
+      'standby': `Heating Circuit ${this.circuitNumber} Standby`, 
+      'dhwAndHeating': `Heating Circuit ${this.circuitNumber} DHW+Heating`,
+      'dhwAndHeatingCooling': `Heating Circuit ${this.circuitNumber} DHW+Heat+Cool`,
+      'forcedReduced': `Heating Circuit ${this.circuitNumber} Forced Reduced`,
+      'forcedNormal': `Heating Circuit ${this.circuitNumber} Forced Normal`,
+      'off': `Heating Circuit ${this.circuitNumber} Off`,
+    };
+    
+    return displayNames[mode] || `Heating Circuit ${this.circuitNumber} ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+  }
+
+  private createModeSetHandler(targetMode: string) {
+    return async (value: CharacteristicValue) => {
+      const on = value as boolean;
+      
+      if (on) {
+        // User wants to turn ON this mode
+        if (this.currentMode !== targetMode) {
+          await this.setMode(targetMode);
+        }
+      } else {
+        // User wants to turn OFF this mode
+        if (this.currentMode === targetMode) {
+          // Can't turn off current mode without selecting another mode
+          // Force it back to ON and show a warning
+          setTimeout(() => {
+            const service = this.findServiceForMode(targetMode);
+            service?.updateCharacteristic(this.platform.Characteristic.On, true);
+          }, 100);
+          this.platform.log.warn(`Cannot turn off ${targetMode} mode for circuit ${this.circuitNumber}. Please select another mode instead.`);
+          throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
+        }
+      }
+    };
+  }
+
+  private findServiceForMode(mode: string): Service | undefined {
+    return this.accessory.services.find(service => 
+      service.UUID === this.platform.Service.Switch.UUID && 
+      service.subtype === `hc${this.circuitNumber}-${mode}`
+    );
   }
 
   private removeAllModeServices() {
@@ -369,29 +423,20 @@ export class ViessmannHeatingCircuitAccessory {
 
   private updateAllSwitchStatesExclusive() {
     // ENSURE MUTUAL EXCLUSION: Only one switch can be ON at a time
-    const isHeating = this.currentMode === 'heating';
-    const isStandby = this.currentMode === 'standby';
-    const isOff = this.currentMode === 'off' || (!isHeating && !isStandby);
-    
-    if (this.heatingService) {
-      this.heatingService.updateCharacteristic(this.platform.Characteristic.On, isHeating);
-    }
-    
-    if (this.standbyService) {
-      this.standbyService.updateCharacteristic(this.platform.Characteristic.On, isStandby);
-    }
-    
-    if (this.offService) {
-      this.offService.updateCharacteristic(this.platform.Characteristic.On, isOff);
+    for (const mode of this.availableModes) {
+      const service = this.findServiceForMode(mode);
+      if (service) {
+        const isActive = this.currentMode === mode;
+        service.updateCharacteristic(this.platform.Characteristic.On, isActive);
+      }
     }
     
     // Logging for verification
-    this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Switch States - Heating: ${isHeating}, Standby: ${isStandby}, Off: ${isOff} (Mode: ${this.currentMode.toUpperCase()})`);
+    this.platform.log.debug(`Heating Circuit ${this.circuitNumber} Switch States - Current Mode: ${this.currentMode.toUpperCase()}, Available: [${this.availableModes.join(', ')}]`);
     
-    // Safety check: Verify exactly one switch is ON
-    const activeSwitches = [isHeating, isStandby, isOff].filter(state => state).length;
-    if (activeSwitches !== 1) {
-      this.platform.log.error(`CRITICAL: Multiple switches active for circuit ${this.circuitNumber}! Heating: ${isHeating}, Standby: ${isStandby}, Off: ${isOff}`);
+    // Safety check: Verify current mode is in available modes
+    if (!this.availableModes.includes(this.currentMode)) {
+      this.platform.log.warn(`Heating Circuit ${this.circuitNumber}: Current mode '${this.currentMode}' not in available modes: [${this.availableModes.join(', ')}]`);
     }
   }
 
