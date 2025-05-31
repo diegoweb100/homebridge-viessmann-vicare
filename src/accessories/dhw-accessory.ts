@@ -200,10 +200,15 @@ export class ViessmannDHWAccessory {
 
     // Set to heating only mode and disable state controls
     targetTempService.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(() => this.platform.Characteristic.TargetHeatingCoolingState.HEAT)
+      .onGet(() => this.currentMode === 'off' ? 
+        this.platform.Characteristic.TargetHeatingCoolingState.OFF : 
+        this.platform.Characteristic.TargetHeatingCoolingState.HEAT)
       .onSet(() => {}) // Do nothing - we control modes via switches
       .setProps({
-        validValues: [this.platform.Characteristic.TargetHeatingCoolingState.HEAT],
+        validValues: [
+          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
+          this.platform.Characteristic.TargetHeatingCoolingState.HEAT
+        ],
       });
 
     targetTempService.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
