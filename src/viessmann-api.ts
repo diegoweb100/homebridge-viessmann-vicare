@@ -4,6 +4,7 @@ import { URLSearchParams } from 'url';
 import * as crypto from 'crypto';
 import * as http from 'http';
 import { ViessmannPlatformConfig, ViessmannInstallation, ViessmannFeature } from './platform';
+import { APICache, CacheConfig, CacheStats } from './api-cache';
 
 interface AuthResponse {
   access_token: string;
@@ -23,6 +24,18 @@ interface RateLimitInfo {
   blockedUntil: number;
   retryCount: number;
   lastError?: string;
+}
+
+interface CacheAwareConfig extends ViessmannPlatformConfig {
+  cache?: {
+    enabled?: boolean;
+    installationsTTL?: number;
+    featuresTTL?: number;
+    devicesTTL?: number;
+    maxEntries?: number;
+    enableSmartRefresh?: boolean;
+    enableConditionalRequests?: boolean;
+  };
 }
 
 export class ViessmannAPI {
@@ -47,6 +60,10 @@ export class ViessmannAPI {
     retryCount: 0
   };
   
+  // Cache system
+  private cache!: APICache; // Using definite assignment assertion
+  private cacheWarmingTimer?: NodeJS.Timeout;
+  
   // In-memory token storage (in a real implementation, you'd want persistent storage)
   private tokenStorage: Map<string, StoredTokens> = new Map();
 
@@ -58,7 +75,7 @@ export class ViessmannAPI {
 
   constructor(
     private readonly log: Logger,
-    private readonly config: ViessmannPlatformConfig,
+    private readonly config: CacheAwareConfig,
   ) {
     // Setup network configuration
     this.hostIp = this.config.hostIp || this.detectLocalIP();
@@ -66,6 +83,9 @@ export class ViessmannAPI {
     this.redirectUri = `http://${this.hostIp}:${this.redirectPort}/`;
     
     this.log.debug(`Using redirect URI: ${this.redirectUri}`);
+    
+    // Initialize cache system
+    this.initializeCache();
     
     this.httpClient = axios.create({
       timeout: 30000,
@@ -75,7 +95,7 @@ export class ViessmannAPI {
       },
     });
 
-    // Add request interceptor for rate limiting
+    // Add request interceptor for rate limiting and caching
     this.httpClient.interceptors.request.use(
       (config) => {
         // Check if we're currently rate limited
@@ -84,17 +104,41 @@ export class ViessmannAPI {
           this.log.warn(`API is rate limited. Waiting ${Math.ceil(waitTime / 1000)} seconds before next request.`);
           return Promise.reject(new Error(`Rate limited. Wait ${Math.ceil(waitTime / 1000)} seconds.`));
         }
+
+        // Add conditional request headers if cache supports it
+        if (config.url && this.cache) {
+          const conditionalHeaders = this.cache.getConditionalHeaders(config.url, config.params);
+          Object.assign(config.headers, conditionalHeaders);
+        }
+
         return config;
       },
       (error) => Promise.reject(error)
     );
 
-    // Add response interceptor for handling rate limit responses
+    // Add response interceptor for handling rate limit responses and caching
     this.httpClient.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        // Cache successful responses
+        if (response.config.url && this.cache && response.config.method?.toLowerCase() === 'get') {
+          this.cache.set(response.config.url, response.data, response.config.params, response.headers);
+        }
+        return response;
+      },
       (error: AxiosError) => {
         if (error.response?.status === 429) {
           this.handleRateLimit(error);
+        } else if (error.response?.status === 304) {
+          // Handle 304 Not Modified
+          const cachedData = this.cache?.handleNotModified(error.config?.url || '', error.config?.params);
+          if (cachedData) {
+            // Return cached data as if it was a successful response
+            return Promise.resolve({
+              ...error.response,
+              status: 200,
+              data: cachedData
+            });
+          }
         }
         return Promise.reject(error);
       }
@@ -105,6 +149,45 @@ export class ViessmannAPI {
     
     // Load stored tokens or use manual tokens from config
     this.initializeTokens();
+
+    // Start cache warming if enabled
+    this.startCacheWarming();
+  }
+
+  private initializeCache(): void {
+    const cacheConfig = this.config.cache || {};
+    
+    const config: CacheConfig = {
+      installations: cacheConfig.installationsTTL || 24 * 60 * 60 * 1000, // 24 hours
+      gateways: 12 * 60 * 60 * 1000,                                     // 12 hours
+      devices: cacheConfig.devicesTTL || 6 * 60 * 60 * 1000,             // 6 hours
+      features: cacheConfig.featuresTTL || 2 * 60 * 1000,                // 2 minutes (configurable)
+      commands: 0,                                                        // Never cache commands
+      
+      maxEntries: cacheConfig.maxEntries || 1000,
+      
+      enableInstallationsCache: cacheConfig.enabled !== false,
+      enableFeaturesCache: cacheConfig.enabled !== false,
+      enableConditionalRequests: cacheConfig.enableConditionalRequests || false,
+    };
+
+    this.cache = new APICache(config);
+    
+    if (cacheConfig.enabled !== false) {
+      this.log.info('API Cache enabled with:');
+      this.log.info(`- Installations TTL: ${config.installations / 1000}s`);
+      this.log.info(`- Features TTL: ${config.features / 1000}s`);
+      this.log.info(`- Max entries: ${config.maxEntries}`);
+    } else {
+      this.log.info('API Cache disabled');
+    }
+  }
+
+  private startCacheWarming(): void {
+    if (this.config.cache?.enableSmartRefresh) {
+      this.cacheWarmingTimer = this.cache.scheduleWarming(this, 5 * 60 * 1000); // 5 minutes
+      this.log.debug('Cache warming scheduled every 5 minutes');
+    }
   }
 
   private detectLocalIP(): string {
@@ -196,6 +279,17 @@ export class ViessmannAPI {
     this.log.warn(`Rate limit exceeded (429). Blocked for ${Math.ceil(backoffDelay / 1000)} seconds.`);
     this.log.warn(`Rate limit details: ${this.rateLimitInfo.lastError}`);
     
+    // Adjust cache TTL to be more aggressive during rate limiting
+    if (this.cache) {
+      const currentStats = this.cache.getStats();
+      this.log.info(`Cache stats - Hit rate: ${(currentStats.hitRate * 100).toFixed(1)}%, Entries: ${currentStats.totalEntries}`);
+      
+      // Increase cache TTL during rate limiting
+      this.cache.updateConfig({
+        features: Math.min(this.cache['config'].features * 2, 10 * 60 * 1000) // Double TTL, max 10 minutes
+      });
+    }
+    
     // Log user-friendly advice
     this.logRateLimitAdvice();
   }
@@ -221,6 +315,8 @@ export class ViessmannAPI {
   }
 
   private logRateLimitAdvice() {
+    const cacheStats = this.cache?.getStats();
+    
     this.log.warn('='.repeat(80));
     this.log.warn('VIESSMANN API RATE LIMIT EXCEEDED');
     this.log.warn('='.repeat(80));
@@ -228,11 +324,19 @@ export class ViessmannAPI {
     this.log.warn('- Basic plan: Limited calls per day (exact limit varies)');
     this.log.warn('- When exceeded: 24-hour block typically applied');
     this.log.warn('');
+    this.log.warn('Current cache performance:');
+    if (cacheStats) {
+      this.log.warn(`- Cache hit rate: ${(cacheStats.hitRate * 100).toFixed(1)}%`);
+      this.log.warn(`- Cached entries: ${cacheStats.totalEntries}`);
+      this.log.warn(`- Memory usage: ${(cacheStats.memoryUsage / 1024).toFixed(1)}KB`);
+    }
+    this.log.warn('');
     this.log.warn('To reduce API calls:');
-    this.log.warn('1. Increase refreshInterval in config (e.g., 300000 = 5 minutes)');
-    this.log.warn('2. Close ViCare mobile app temporarily');
-    this.log.warn('3. Disable other Viessmann integrations temporarily');
-    this.log.warn('4. Consider upgrading to paid Viessmann API plan');
+    this.log.warn('1. Cache is automatically extending TTL during rate limits');
+    this.log.warn('2. Increase refreshInterval in config (e.g., 300000 = 5 minutes)');
+    this.log.warn('3. Enable longer cache TTL in configuration');
+    this.log.warn('4. Close ViCare mobile app temporarily');
+    this.log.warn('5. Use installation filtering to reduce device count');
     this.log.warn('');
     this.log.warn(`Plugin will automatically retry after: ${new Date(this.rateLimitInfo.blockedUntil).toLocaleString()}`);
     this.log.warn('='.repeat(80));
@@ -244,16 +348,43 @@ export class ViessmannAPI {
       blockedUntil: 0,
       retryCount: 0
     };
+    
+    // Reset cache TTL to normal values
+    if (this.cache) {
+      const cacheConfig = this.config.cache || {};
+      this.cache.updateConfig({
+        features: cacheConfig.featuresTTL || 2 * 60 * 1000 // Reset to configured or default value
+      });
+    }
+    
     this.log.info('Rate limit has been reset - API calls can resume');
   }
 
-  // Enhanced API call wrapper with retry logic
+  // Enhanced API call wrapper with caching and retry logic
   private async makeAPICall<T>(
     requestFn: () => Promise<AxiosResponse<T>>,
     operationName: string,
+    cacheKey?: string,
     retryCount: number = 0
   ): Promise<AxiosResponse<T>> {
     try {
+      // Check cache first for GET requests
+      if (cacheKey && this.cache) {
+        const cachedData = this.cache.getWithStats<T>(cacheKey);
+        if (cachedData !== null) {
+          this.log.debug(`Cache hit for ${operationName}`);
+          // Return cached data as a mock response
+          return {
+            data: cachedData,
+            status: 200,
+            statusText: 'OK (Cached)',
+            headers: {},
+            config: {}
+          } as AxiosResponse<T>;
+        }
+        this.log.debug(`Cache miss for ${operationName}`);
+      }
+
       // Check if rate limit has expired
       if (this.rateLimitInfo.blockedUntil > 0 && Date.now() >= this.rateLimitInfo.blockedUntil) {
         this.resetRateLimit();
@@ -285,7 +416,7 @@ export class ViessmannAPI {
           this.log.warn(`Retrying '${operationName}' in ${delay / 1000} seconds (attempt ${retryCount + 1}/${this.maxRetries})`);
           
           await this.sleep(delay);
-          return this.makeAPICall(requestFn, operationName, retryCount + 1);
+          return this.makeAPICall(requestFn, operationName, cacheKey, retryCount + 1);
         } else {
           throw new Error(`Max retries exceeded for '${operationName}': ${this.rateLimitInfo.lastError}`);
         }
@@ -295,7 +426,7 @@ export class ViessmannAPI {
           try {
             this.log.warn(`Authentication error for '${operationName}', attempting token refresh...`);
             await this.refreshAccessToken();
-            return this.makeAPICall(requestFn, operationName, retryCount + 1);
+            return this.makeAPICall(requestFn, operationName, cacheKey, retryCount + 1);
           } catch (refreshError) {
             this.log.error('Token refresh failed:', refreshError);
             throw error;
@@ -310,7 +441,7 @@ export class ViessmannAPI {
           this.log.warn(`Error in '${operationName}': ${axiosError.message}. Retrying in ${delay / 1000} seconds...`);
           
           await this.sleep(delay);
-          return this.makeAPICall(requestFn, operationName, retryCount + 1);
+          return this.makeAPICall(requestFn, operationName, cacheKey, retryCount + 1);
         } else {
           throw error;
         }
@@ -342,6 +473,21 @@ export class ViessmannAPI {
     };
   }
 
+  // Cache management methods
+  public getCacheStats(): CacheStats | null {
+    return this.cache?.getStats() || null;
+  }
+
+  public clearCache(pattern?: string) {
+    this.cache?.invalidate(pattern);
+    this.log.info(pattern ? `Cache cleared for pattern: ${pattern}` : 'Cache completely cleared');
+  }
+
+  public updateCacheConfig(config: Partial<CacheConfig>) {
+    this.cache?.updateConfig(config);
+    this.log.info('Cache configuration updated');
+  }
+
   async authenticate(): Promise<void> {
     try {
       if (this.isTokenValid()) {
@@ -356,10 +502,11 @@ export class ViessmannAPI {
           return;
         } catch (error) {
           this.log.warn('Token refresh failed, will try to get new tokens');
-          // Clear invalid tokens
+          // Clear invalid tokens and cache
           this.accessToken = undefined;
           this.refreshToken = undefined;
           this.tokenExpiresAt = undefined;
+          this.cache?.invalidate(); // Clear cache on auth failure
         }
       }
 
@@ -379,11 +526,6 @@ export class ViessmannAPI {
   }
 
   private shouldUseManualAuth(): boolean {
-    // Use manual auth if:
-    // 1. Explicitly configured
-    // 2. Running in headless environment
-    // 3. No display available
-    
     if (this.config.authMethod === 'manual') {
       return true;
     }
@@ -679,6 +821,7 @@ export class ViessmannAPI {
   async getInstallations(): Promise<ViessmannInstallation[]> {
     await this.authenticate();
 
+    const cacheKey = `/iot/v2/equipment/installations`;
     const response = await this.makeAPICall(
       () => this.httpClient.get(
         `${this.baseURL}/iot/v2/equipment/installations?includeGateways=true`,
@@ -688,7 +831,8 @@ export class ViessmannAPI {
           },
         }
       ),
-      'getInstallations'
+      'getInstallations',
+      cacheKey
     );
 
     const installations: ViessmannInstallation[] = response.data.data.map((installation: any) => {
@@ -705,7 +849,7 @@ export class ViessmannAPI {
       };
     });
 
-    // Get devices for each gateway
+    // Get devices for each gateway (these will be cached individually)
     for (const installation of installations) {
       for (const gateway of installation.gateways) {
         gateway.devices = await this.getGatewayDevices(installation.id, gateway.serial);
@@ -718,6 +862,7 @@ export class ViessmannAPI {
   async getGatewayDevices(installationId: number, gatewaySerial: string) {
     await this.authenticate();
 
+    const cacheKey = `/iot/v2/equipment/installations/${installationId}/gateways/${gatewaySerial}/devices`;
     const response = await this.makeAPICall(
       () => this.httpClient.get(
         `${this.baseURL}/iot/v2/equipment/installations/${installationId}/gateways/${gatewaySerial}/devices`,
@@ -727,7 +872,8 @@ export class ViessmannAPI {
           },
         }
       ),
-      `getGatewayDevices-${gatewaySerial}`
+      `getGatewayDevices-${gatewaySerial}`,
+      cacheKey
     );
 
     return response.data.data.map((device: any) => ({
@@ -742,6 +888,7 @@ export class ViessmannAPI {
   async getDeviceFeatures(installationId: number, gatewaySerial: string, deviceId: string): Promise<ViessmannFeature[]> {
     await this.authenticate();
 
+    const cacheKey = `/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features`;
     const response = await this.makeAPICall(
       () => this.httpClient.get(
         `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features`,
@@ -751,7 +898,8 @@ export class ViessmannAPI {
           },
         }
       ),
-      `getDeviceFeatures-${deviceId}`
+      `getDeviceFeatures-${deviceId}`,
+      cacheKey
     );
 
     // The response.data should be a JSON string that needs parsing
@@ -790,6 +938,7 @@ export class ViessmannAPI {
     await this.authenticate();
 
     try {
+      const cacheKey = `/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}`;
       const response = await this.makeAPICall(
         () => this.httpClient.get(
           `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}`,
@@ -799,7 +948,8 @@ export class ViessmannAPI {
             },
           }
         ),
-        `getFeature-${featureName}`
+        `getFeature-${featureName}`,
+        cacheKey
       );
 
       let featureData;
@@ -839,6 +989,7 @@ export class ViessmannAPI {
     await this.authenticate();
 
     try {
+      // Commands are never cached, always execute fresh
       const response = await this.makeAPICall(
         () => this.httpClient.post(
           `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}/commands/${commandName}`,
@@ -851,9 +1002,18 @@ export class ViessmannAPI {
           }
         ),
         `executeCommand-${featureName}-${commandName}`
+        // No cache key for commands
       );
 
-      return response.status === 200 || response.status === 202;
+      const success = response.status === 200 || response.status === 202;
+      
+      if (success) {
+        // Invalidate related cache entries after successful command
+        this.cache?.invalidate(`/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}`);
+        this.log.debug(`Cache invalidated for device ${deviceId} after command execution`);
+      }
+
+      return success;
 
     } catch (error) {
       this.log.error(`Failed to execute command ${commandName} on feature ${featureName}:`, error);
@@ -862,8 +1022,7 @@ export class ViessmannAPI {
   }
 
   async setDHWTemperature(installationId: number, gatewaySerial: string, deviceId: string, temperature: number): Promise<boolean> {
-    // Based on the API documentation, the correct parameter name is 'temperature'
-    return this.executeCommand(
+    const success = await this.executeCommand(
       installationId,
       gatewaySerial,
       deviceId,
@@ -871,6 +1030,13 @@ export class ViessmannAPI {
       'setTargetTemperature',
       { temperature }
     );
+    
+    // Invalidate DHW-related cache
+    if (success) {
+      this.cache?.invalidate('heating.dhw');
+    }
+    
+    return success;
   }
 
   async setHeatingCircuitTemperature(
@@ -880,7 +1046,7 @@ export class ViessmannAPI {
     circuitNumber: number,
     temperature: number
   ): Promise<boolean> {
-    return this.executeCommand(
+    const success = await this.executeCommand(
       installationId,
       gatewaySerial,
       deviceId,
@@ -888,6 +1054,13 @@ export class ViessmannAPI {
       'setCurve',
       { temperature }
     );
+    
+    // Invalidate circuit-related cache
+    if (success) {
+      this.cache?.invalidate(`heating.circuits.${circuitNumber}`);
+    }
+    
+    return success;
   }
 
   async setOperatingMode(
@@ -897,7 +1070,7 @@ export class ViessmannAPI {
     circuitNumber: number,
     mode: string
   ): Promise<boolean> {
-    return this.executeCommand(
+    const success = await this.executeCommand(
       installationId,
       gatewaySerial,
       deviceId,
@@ -905,5 +1078,26 @@ export class ViessmannAPI {
       'setMode',
       { mode }
     );
+    
+    // Invalidate circuit operating modes cache
+    if (success) {
+      this.cache?.invalidate(`heating.circuits.${circuitNumber}.operating`);
+    }
+    
+    return success;
+  }
+
+  // Cleanup method
+  public cleanup(): void {
+    if (this.cacheWarmingTimer) {
+      clearInterval(this.cacheWarmingTimer);
+      this.cacheWarmingTimer = undefined;
+    }
+    
+    if (this.authServer) {
+      this.stopAuthServer();
+    }
+    
+    this.log.debug('ViessmannAPI cleanup completed');
   }
 }

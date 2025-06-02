@@ -2,22 +2,23 @@
   "pluginAlias": "ViessmannPlatform",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection and automatic retry logic.",
-  "footerDisplay": "For help and support visit: [GitHub Repository](https://github.com/diegoweb100/homebridge-viessmann-vicare)",
+  "headerDisplay": "Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic.",
+  "footerDisplay": "For help and support visit: [GitHub Repository](https://github.com/diegoweb100/homebridge-viessmann-vicare) | [Setup Guide](https://github.com/diegoweb100/homebridge-viessmann-vicare/blob/main/SETUP-GUIDE.md)",
   "schema": {
     "type": "object",
     "properties": {
       "name": {
-        "title": "Name",
+        "title": "Platform Name",
         "type": "string",
         "default": "Viessmann",
-        "required": true
+        "required": true,
+        "description": "Name of the platform as it will appear in HomeKit"
       },
       "clientId": {
         "title": "Client ID",
         "type": "string",
         "required": true,
-        "description": "Your Viessmann API Client ID from the developer portal"
+        "description": "Your Viessmann API Client ID from the developer portal. Get it from https://developer.viessmann.com/"
       },
       "clientSecret": {
         "title": "Client Secret",
@@ -26,10 +27,11 @@
         "description": "Your Viessmann API Client Secret (optional for public clients)"
       },
       "username": {
-        "title": "Username",
+        "title": "Username/Email",
         "type": "string",
+        "format": "email",
         "required": true,
-        "description": "Your Viessmann ViCare account username/email"
+        "description": "Your Viessmann ViCare account username/email address"
       },
       "password": {
         "title": "Password",
@@ -42,11 +44,12 @@
         "type": "string",
         "enum": ["auto", "manual"],
         "default": "auto",
-        "description": "Choose authentication method: 'auto' for automatic OAuth flow, 'manual' for manual token configuration"
+        "description": "Choose authentication method: 'auto' for automatic OAuth flow (recommended), 'manual' for manual token configuration"
       },
       "hostIp": {
         "title": "Host IP Address",
         "type": "string",
+        "format": "ipv4",
         "required": false,
         "description": "IP address for OAuth redirect (auto-detected if not specified). Use the IP where Homebridge is running."
       },
@@ -56,48 +59,57 @@
         "default": 4200,
         "minimum": 1024,
         "maximum": 65535,
-        "description": "Port for OAuth callback server (default: 4200)"
+        "description": "Port for OAuth callback server. Must be accessible from your browser."
       },
       "accessToken": {
         "title": "Access Token (Manual Auth)",
         "type": "string",
         "required": false,
-        "description": "Manual access token (only required if authMethod is 'manual')"
+        "description": "Manual access token (only required if authMethod is 'manual'). Get this from Viessmann API manually."
       },
       "refreshToken": {
         "title": "Refresh Token (Manual Auth)",
         "type": "string",
         "required": false,
-        "description": "Manual refresh token (only required if authMethod is 'manual')"
+        "description": "Manual refresh token (only required if authMethod is 'manual'). Used to refresh expired access tokens."
       },
       "installationFilter": {
-        "title": "Installation Filter",
+        "title": "Installation Name Filter",
         "type": "string",
         "required": false,
-        "description": "Filter installations by name (case-insensitive substring match). Leave empty to show all installations."
+        "description": "Filter installations by name (case-insensitive substring match). Leave empty to show all installations. Example: 'Main House'"
       },
       "installationIds": {
         "title": "Installation IDs",
         "type": "array",
         "items": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1
         },
         "required": false,
-        "description": "Array of specific installation IDs to include. Takes priority over installationFilter if specified."
+        "description": "Array of specific installation IDs to include. Takes priority over installationFilter if specified. Find IDs in debug logs."
       },
       "refreshInterval": {
-        "title": "Refresh Interval (ms)",
+        "title": "Data Refresh Interval (ms)",
         "type": "integer",
-        "default": 60000,
+        "default": 120000,
         "minimum": 30000,
-        "maximum": 900000,
-        "description": "How often to update device data (in milliseconds). Default: 60000 (1 minute). Increase to reduce API calls."
+        "maximum": 3600000,
+        "description": "How often to update device data in milliseconds. Default: 120000 (2 minutes). Increase to reduce API calls and avoid rate limiting."
+      },
+      "requestTimeout": {
+        "title": "API Request Timeout (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 5000,
+        "maximum": 120000,
+        "description": "Timeout for individual API requests in milliseconds. Default: 30000 (30 seconds)."
       },
       "enableRateLimitProtection": {
         "title": "Enable Rate Limit Protection",
         "type": "boolean",
         "default": true,
-        "description": "Enable automatic rate limit protection with exponential backoff (recommended)"
+        "description": "Enable automatic rate limit protection with exponential backoff. Highly recommended to prevent API blocking."
       },
       "maxRetries": {
         "title": "Maximum Retries",
@@ -105,21 +117,179 @@
         "default": 3,
         "minimum": 1,
         "maximum": 10,
-        "description": "Maximum number of retry attempts for failed API calls"
+        "description": "Maximum number of retry attempts for failed API calls before giving up."
       },
       "retryDelay": {
-        "title": "Retry Delay (ms)",
+        "title": "Base Retry Delay (ms)",
         "type": "integer",
         "default": 30000,
         "minimum": 5000,
         "maximum": 300000,
-        "description": "Base delay between retry attempts in milliseconds (will be multiplied by backoff factor)"
+        "description": "Base delay between retry attempts in milliseconds. Will be multiplied by exponential backoff factor."
+      },
+      "rateLimitResetBuffer": {
+        "title": "Rate Limit Reset Buffer (ms)",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 10000,
+        "maximum": 300000,
+        "description": "Additional buffer time after rate limit expires before resuming requests."
       },
       "debug": {
         "title": "Enable Debug Logging",
         "type": "boolean",
         "default": false,
-        "description": "Enable verbose debug logging for troubleshooting"
+        "description": "Enable verbose debug logging for troubleshooting. Warning: May expose sensitive information in logs."
+      },
+      "cache": {
+        "title": "API Cache Configuration",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "title": "Enable API Caching",
+            "type": "boolean",
+            "default": true,
+            "description": "Enable API response caching to reduce API calls and improve performance."
+          },
+          "installationsTTL": {
+            "title": "Installations Cache TTL (ms)",
+            "type": "integer",
+            "default": 86400000,
+            "minimum": 60000,
+            "maximum": 604800000,
+            "description": "How long to cache installations data in milliseconds. Default: 86400000 (24 hours)."
+          },
+          "featuresTTL": {
+            "title": "Features Cache TTL (ms)",
+            "type": "integer",
+            "default": 120000,
+            "minimum": 30000,
+            "maximum": 1800000,
+            "description": "How long to cache device features in milliseconds. Default: 120000 (2 minutes). Lower values = more current data."
+          },
+          "devicesTTL": {
+            "title": "Devices Cache TTL (ms)",
+            "type": "integer",
+            "default": 21600000,
+            "minimum": 300000,
+            "maximum": 259200000,
+            "description": "How long to cache device information in milliseconds. Default: 21600000 (6 hours)."
+          },
+          "gatewaysTTL": {
+            "title": "Gateways Cache TTL (ms)",
+            "type": "integer",
+            "default": 43200000,
+            "minimum": 300000,
+            "maximum": 259200000,
+            "description": "How long to cache gateway information in milliseconds. Default: 43200000 (12 hours)."
+          },
+          "maxEntries": {
+            "title": "Maximum Cache Entries",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Maximum number of entries in cache before cleanup using LRU strategy."
+          },
+          "enableSmartRefresh": {
+            "title": "Enable Smart Cache Refresh",
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically refresh cache entries before they expire (background warming)."
+          },
+          "enableConditionalRequests": {
+            "title": "Enable Conditional Requests",
+            "type": "boolean",
+            "default": false,
+            "description": "Use ETags and conditional requests for better cache efficiency (if supported by API)."
+          }
+        }
+      },
+      "advanced": {
+        "title": "Advanced Settings",
+        "type": "object",
+        "properties": {
+          "baseDelay": {
+            "title": "Base Exponential Backoff Delay (ms)",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Base delay for exponential backoff algorithm in milliseconds."
+          },
+          "maxDelay": {
+            "title": "Maximum Backoff Delay (ms)",
+            "type": "integer",
+            "default": 300000,
+            "minimum": 10000,
+            "maximum": 3600000,
+            "description": "Maximum delay for exponential backoff in milliseconds (5 minutes default)."
+          },
+          "maxConsecutiveErrors": {
+            "title": "Maximum Consecutive Errors",
+            "type": "integer",
+            "default": 5,
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Maximum consecutive errors before platform stops attempting discovery."
+          },
+          "deviceUpdateDelay": {
+            "title": "Device Update Delay (ms)",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Delay between individual device updates to be gentle on the API."
+          },
+          "userAgent": {
+            "title": "Custom User Agent",
+            "type": "string",
+            "default": "homebridge-viessmann-vicare/2.0.0",
+            "description": "Custom User-Agent string for API requests."
+          }
+        }
+      },
+      "features": {
+        "title": "Feature Settings",
+        "type": "object",
+        "properties": {
+          "enableBoilerAccessories": {
+            "title": "Enable Boiler Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for boiler control (temperature, burner status, modulation)."
+          },
+          "enableDHWAccessories": {
+            "title": "Enable DHW (Hot Water) Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for domestic hot water control."
+          },
+          "enableHeatingCircuitAccessories": {
+            "title": "Enable Heating Circuit Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for heating circuit control with temperature programs."
+          },
+          "enableTemperaturePrograms": {
+            "title": "Enable Temperature Programs",
+            "type": "boolean",
+            "default": true,
+            "description": "Create individual switches for Reduced/Normal/Comfort temperature programs."
+          },
+          "enableQuickSelections": {
+            "title": "Enable Quick Selections",
+            "type": "boolean",
+            "default": true,
+            "description": "Create switches for holiday modes and extended heating."
+          },
+          "enableBurnerStatus": {
+            "title": "Enable Burner Status Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create separate accessories showing burner status and modulation."
+          }
+        }
       }
     },
     "required": [
@@ -132,8 +302,8 @@
   "layout": [
     {
       "type": "fieldset",
-      "title": "Account Settings",
-      "description": "Configure your Viessmann ViCare account credentials",
+      "title": "Basic Configuration",
+      "description": "Essential settings to connect to your Viessmann system",
       "expandable": true,
       "expanded": true,
       "items": [
@@ -170,7 +340,7 @@
     {
       "type": "fieldset",
       "title": "Installation Filtering",
-      "description": "Filter which installations to show in HomeKit",
+      "description": "Filter which installations to show in HomeKit to reduce API calls",
       "expandable": true,
       "expanded": false,
       "items": [
@@ -180,21 +350,69 @@
     },
     {
       "type": "fieldset",
-      "title": "Rate Limiting & Performance",
-      "description": "Configure API rate limiting protection and performance settings",
+      "title": "Performance & Rate Limiting",
+      "description": "Configure timing and rate limiting protection to prevent API blocking",
       "expandable": true,
       "expanded": false,
       "items": [
         "refreshInterval",
+        "requestTimeout",
         "enableRateLimitProtection",
         "maxRetries",
-        "retryDelay"
+        "retryDelay",
+        "rateLimitResetBuffer"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "API Caching",
+      "description": "Configure API response caching to reduce API calls and improve performance",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "cache.enabled",
+        "cache.installationsTTL",
+        "cache.featuresTTL", 
+        "cache.devicesTTL",
+        "cache.gatewaysTTL",
+        "cache.maxEntries",
+        "cache.enableSmartRefresh",
+        "cache.enableConditionalRequests"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Feature Control",
+      "description": "Enable or disable specific accessory types",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "features.enableBoilerAccessories",
+        "features.enableDHWAccessories",
+        "features.enableHeatingCircuitAccessories",
+        "features.enableTemperaturePrograms",
+        "features.enableQuickSelections",
+        "features.enableBurnerStatus"
       ]
     },
     {
       "type": "fieldset",
       "title": "Advanced Settings",
-      "description": "Debug and troubleshooting options",
+      "description": "Advanced configuration options for fine-tuning",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "advanced.baseDelay",
+        "advanced.maxDelay",
+        "advanced.maxConsecutiveErrors",
+        "advanced.deviceUpdateDelay",
+        "advanced.userAgent"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Debug & Troubleshooting",
+      "description": "Debugging options for troubleshooting issues",
       "expandable": true,
       "expanded": false,
       "items": [

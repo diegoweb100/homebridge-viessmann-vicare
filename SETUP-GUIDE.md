@@ -1,432 +1,763 @@
-# Complete Setup Guide
+# Complete Setup Guide - v2.0.0
+
+## Overview
+
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0 for Homebridge, including all the new advanced features like intelligent caching, rate limiting protection, and comprehensive configuration options.
 
 ## Prerequisites
 
 ### 1. ViCare Account
 - Create an account on [ViCare](https://www.vicare.com/)
 - Register your Viessmann heating system in the ViCare app
-- Verify that your system is online and functioning
+- Verify that your system is online and functioning properly
+- Test the ViCare mobile app to ensure you can control your heating system
 
 ### 2. Viessmann API Credentials
+
 To obtain API credentials:
 
 1. **Visit the Developer Portal**:
    - Go to https://developer.viessmann.com/
-   - Register for a developer account
+   - Register for a developer account using your email
 
 2. **Create an application**:
-   - Name: `homebridge-viessmann-vicare`
-   - Type: `Public Client` (for home use)
-   - Redirect URI: `http://localhost:4200/`
-   - Scope: `IoT User offline_access`
+   - Click "Create Application"
+   - **Name**: `homebridge-viessmann-vicare`
+   - **Type**: `Public Client` (important for home use)
+   - **Redirect URI**: `http://localhost:4200/` (exactly as shown)
+   - **Scope**: `IoT User offline_access` (exactly as shown)
+   - **Description**: Optional, e.g., "Homebridge integration for home automation"
 
-3. **Get your Client ID**:
-   - Save the generated Client ID
-   - Client Secret is not required for public clients
+3. **Save your credentials**:
+   - **Copy the Client ID** - you'll need this for configuration
+   - **Client Secret is NOT required** for public clients
+   - Keep these credentials secure and private
 
 ## Step-by-Step Installation
 
-### 1. Install the plugin
+### 1. Install the Plugin
 
+#### Via Homebridge Config UI X (Strongly Recommended)
+1. Open your Homebridge Config UI X web interface
+2. Navigate to the "**Plugins**" tab
+3. Search for "**homebridge-viessmann-vicare**"
+4. Click "**Install**"
+5. Wait for installation to complete
+
+#### Via npm (Command Line)
 ```bash
-# Via Homebridge Config UI X (recommended)
-# Search for "homebridge-viessmann-vicare" in the Plugin tab
-
-# Or via npm
+# Install globally
 sudo npm install -g homebridge-viessmann-vicare
+
+# Or install in Homebridge directory
+npm install homebridge-viessmann-vicare
 ```
 
-### 2. Configure the plugin
+### 2. Initial Configuration
 
-Add configuration to your Homebridge `config.json` file:
+After installation, configure the plugin through the **Homebridge Config UI X interface**:
 
-```json
-{
-    "platform": "ViessmannPlatform",
-    "name": "Viessmann",
-    "clientId": "YOUR_CLIENT_ID",
-    "username": "your-email@example.com",
-    "password": "your-password",
-    "refreshInterval": 120000,
-    "enableRateLimitProtection": true,
-    "debug": true
-}
+1. Go to the "**Plugins**" tab
+2. Find "**Viessmann ViCare**" in your installed plugins
+3. Click "**Settings**" (gear icon)
+4. Fill in the **Basic Configuration** section:
+
+#### **Required Basic Settings**
+```
+Platform Name: Viessmann
+Client ID: [Your Client ID from step 2.3]
+Username/Email: [Your ViCare account email]
+Password: [Your ViCare account password]
 ```
 
-### 3. First OAuth Setup
+#### **Recommended Initial Settings**
+```
+Authentication Method: auto
+Data Refresh Interval: 120000 (2 minutes)
+Enable Rate Limit Protection: ✅ (checked)
+Enable API Caching: ✅ (checked)
+Enable Debug Logging: ✅ (checked for initial setup)
+```
 
-⚠️ **Important**: The first setup requires manual OAuth configuration or automatic browser authentication.
+5. Click "**Save**" to apply the configuration
 
-#### Automatic OAuth (Recommended)
+### 3. First Authentication & Setup
 
-1. **Start Homebridge** with the configuration above
-2. **Check the logs** for an authentication URL
-3. **Open the URL** in your browser (may open automatically)
-4. **Login with ViCare credentials**
-5. **Authorize the application**
-6. **Tokens are saved automatically** for future use
+⚠️ **Important**: The first setup requires OAuth authentication which will happen automatically.
 
-#### Manual OAuth (Advanced)
+#### Automatic OAuth Process (Default)
 
-If automatic OAuth fails:
-
-1. **Generate PKCE codes**:
-   Use this online tool: https://tonyxu-io.github.io/pkce-generator/
-   - Save the `Code Verifier` and `Code Challenge`
-
-2. **Get Authorization Code**:
-   ```
-   https://iam.viessmann.com/idp/v3/authorize?
-   client_id=YOUR_CLIENT_ID&
-   redirect_uri=http://localhost:4200/&
-   scope=IoT%20User%20offline_access&
-   response_type=code&
-   code_challenge_method=S256&
-   code_challenge=YOUR_CODE_CHALLENGE
-   ```
-
-3. **Login and authorize**:
-   - Open the link in browser
-   - Login with ViCare credentials
-   - Authorize the application
-   - Copy the `code` from the redirect URL
-
-4. **Exchange code for tokens**:
+1. **Restart Homebridge** after saving the configuration:
    ```bash
-   curl -X POST "https://iam.viessmann.com/idp/v3/token" \
-   -H "Content-Type: application/x-www-form-urlencoded" \
-   -d "client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost:4200/&grant_type=authorization_code&code_verifier=YOUR_CODE_VERIFIER&code=OBTAINED_CODE"
+   # Via systemd
+   sudo systemctl restart homebridge
+   
+   # Via pm2
+   pm2 restart homebridge
+   
+   # Via Docker
+   docker restart homebridge
    ```
 
-5. **Add tokens to config**:
-   ```json
-   {
-       "authMethod": "manual",
-       "accessToken": "obtained_access_token",
-       "refreshToken": "obtained_refresh_token"
-   }
+2. **Monitor the logs** for authentication messages:
+   ```bash
+   # Homebridge Config UI X: Go to Logs tab
+   # Or via command line:
+   tail -f ~/.homebridge/homebridge.log
    ```
 
-### 4. Restart Homebridge
+3. **Look for authentication URL** in the logs:
+   ```
+   [Viessmann] Please open this URL in your browser to authenticate:
+   [Viessmann] https://iam.viessmann.com/idp/v3/authorize?client_id=...
+   ```
 
-```bash
-# If using systemd
-sudo systemctl restart homebridge
+4. **Complete authentication**:
+   - The URL may open automatically in your browser
+   - If not, copy and paste the URL into your browser
+   - **Login with your ViCare credentials**
+   - **Authorize the application** when prompted
+   - You should see a success message in the browser
 
-# If using pm2
-pm2 restart homebridge
+5. **Verify successful authentication**:
+   ```
+   [Viessmann] Authentication successful! Tokens acquired.
+   [Viessmann] Starting device discovery...
+   ```
 
-# If using Docker
-docker restart homebridge
-```
+#### Manual OAuth (Fallback)
+
+If automatic OAuth fails, follow the manual process:
+
+1. **Check the logs** for detailed manual instructions
+2. **Follow the step-by-step process** provided in the logs
+3. **Update configuration** with manual tokens:
+   - Go back to plugin settings
+   - Change "Authentication Method" to "manual"
+   - Add the obtained access token and refresh token
+   - Save and restart Homebridge
+
+### 4. Device Discovery & Verification
+
+After successful authentication:
+
+1. **Check discovery logs**:
+   ```
+   [Viessmann] Setting up installation: [Installation Name] (ID: 12345)
+   [Viessmann] Adding new accessory: [Installation] Boiler
+   [Viessmann] Adding new accessory: [Installation] Hot Water
+   [Viessmann] Adding new accessory: [Installation] Heating Circuit 1
+   ```
+
+2. **Verify in HomeKit**:
+   - Open the **Home app** on your iOS device
+   - Look for new Viessmann accessories
+   - Test basic controls (temperature adjustment)
+
+3. **Check for errors**:
+   - Look for rate limiting warnings
+   - Verify all expected accessories are created
+   - Test individual accessory functions
 
 ## Advanced Configuration
 
-### Rate Limiting Protection
+### 🛡️ Rate Limiting Protection
 
-The plugin includes advanced rate limiting protection to handle Viessmann API limits:
+Configure advanced rate limiting protection:
 
 ```json
 {
-    "platform": "ViessmannPlatform",
-    "name": "Viessmann",
-    "clientId": "client_id",
-    "username": "email",
-    "password": "password",
-    
-    // Update interval (minimum 60 seconds, recommended 120+ seconds)
-    "refreshInterval": 120000,
-    
-    // Enable rate limit protection (recommended)
+    "refreshInterval": 180000,
     "enableRateLimitProtection": true,
-    
-    // Maximum retry attempts
     "maxRetries": 3,
-    
-    // Base delay between retries (will be multiplied by backoff)
     "retryDelay": 60000,
-    
-    // Debug logging
-    "debug": true
+    "rateLimitResetBuffer": 120000
 }
 ```
 
-### Installation Filtering
+**Settings explanation:**
+- `refreshInterval`: How often to update data (3 minutes recommended)
+- `maxRetries`: Maximum retry attempts before giving up
+- `retryDelay`: Base delay between retries (will increase exponentially)
+- `rateLimitResetBuffer`: Extra wait time after rate limit expires
 
-Reduce API calls by filtering installations:
+### 💾 Intelligent Cache Configuration
+
+Configure the multi-layer caching system:
 
 ```json
 {
-    // Show only installations containing "Main House" in the name
-    "installationFilter": "Main House",
-    
-    // Or specify exact installation IDs
+    "cache": {
+        "enabled": true,
+        "installationsTTL": 86400000,
+        "featuresTTL": 120000,
+        "devicesTTL": 21600000,
+        "gatewaysTTL": 43200000,
+        "maxEntries": 1000,
+        "enableSmartRefresh": false,
+        "enableConditionalRequests": false
+    }
+}
+```
+
+**Cache TTL Guidelines:**
+- **Installations** (24h): Rarely change, can be cached for a long time
+- **Gateways** (12h): Stable information, moderate caching
+- **Devices** (6h): Occasionally change, moderate caching  
+- **Features** (2min): Frequently updated, short caching
+
+### 🎯 Installation Filtering
+
+Reduce API calls by filtering installations:
+
+#### Option 1: Filter by Name
+```json
+{
+    "installationFilter": "Main House"
+}
+```
+
+#### Option 2: Filter by Specific IDs
+```json
+{
     "installationIds": [2045780, 1234567]
 }
 ```
 
-### Configuration Examples by Use Case
+**To find installation IDs:**
+1. Enable debug logging
+2. Check logs for: `Available installations: [Name] (ID: 12345)`
+3. Use the ID numbers in your configuration
 
-#### Single Installation (Low API Usage)
+### 🎛️ Feature Control
+
+Enable/disable specific accessory types:
+
 ```json
 {
-    "platform": "ViessmannPlatform",
-    "name": "Viessmann",
-    "clientId": "your_client_id",
-    "username": "your_email",
-    "password": "your_password",
-    "refreshInterval": 60000,
-    "enableRateLimitProtection": true
+    "features": {
+        "enableBoilerAccessories": true,
+        "enableDHWAccessories": true,
+        "enableHeatingCircuitAccessories": true,
+        "enableTemperaturePrograms": true,
+        "enableQuickSelections": true,
+        "enableBurnerStatus": false
+    }
 }
 ```
 
-#### Multiple Installations (High API Usage)
+**Use cases:**
+- Disable unnecessary accessories to reduce clutter
+- Reduce API calls by disabling unused features
+- Simplify interface for basic heating control
+
+## Configuration Examples by Use Case
+
+### 🏠 Single Installation (Recommended Starting Point)
 ```json
 {
     "platform": "ViessmannPlatform",
     "name": "Viessmann",
     "clientId": "your_client_id",
-    "username": "your_email",
+    "username": "your_email@example.com",
+    "password": "your_password",
+    "refreshInterval": 120000,
+    "enableRateLimitProtection": true,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 120000
+    },
+    "debug": false
+}
+```
+
+### 🏢 Multiple Installations (High API Usage)
+```json
+{
+    "platform": "ViessmannPlatform",
+    "name": "Viessmann",
+    "clientId": "your_client_id",
+    "username": "your_email@example.com",
     "password": "your_password",
     "refreshInterval": 300000,
     "enableRateLimitProtection": true,
     "installationFilter": "Main",
     "maxRetries": 5,
-    "retryDelay": 120000
+    "retryDelay": 120000,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 300000,
+        "enableSmartRefresh": true
+    },
+    "features": {
+        "enableTemperaturePrograms": false,
+        "enableQuickSelections": false,
+        "enableBurnerStatus": false
+    }
 }
 ```
 
-#### Recovery from Rate Limiting
+### 🚨 Recovery from Rate Limiting
 ```json
 {
     "platform": "ViessmannPlatform",
     "name": "Viessmann",
     "clientId": "your_client_id",
-    "username": "your_email",
+    "username": "your_email@example.com",
     "password": "your_password",
-    "refreshInterval": 600000,
+    "refreshInterval": 900000,
     "enableRateLimitProtection": true,
     "maxRetries": 1,
-    "retryDelay": 300000,
+    "retryDelay": 600000,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 1800000,
+        "installationsTTL": 604800000
+    },
+    "features": {
+        "enableBoilerAccessories": true,
+        "enableDHWAccessories": true,
+        "enableHeatingCircuitAccessories": true,
+        "enableTemperaturePrograms": false,
+        "enableQuickSelections": false,
+        "enableBurnerStatus": false
+    },
     "debug": true
 }
 ```
 
-## Accessory Customization
+### 🔧 Development/Testing Configuration
+```json
+{
+    "platform": "ViessmannPlatform",
+    "name": "Viessmann",
+    "clientId": "your_client_id",
+    "username": "your_email@example.com",
+    "password": "your_password",
+    "refreshInterval": 60000,
+    "requestTimeout": 20000,
+    "enableRateLimitProtection": true,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 30000,
+        "maxEntries": 100
+    },
+    "advanced": {
+        "deviceUpdateDelay": 500,
+        "maxConsecutiveErrors": 10
+    },
+    "debug": true
+}
+```
 
-The plugin automatically creates accessories based on detected devices:
+## Accessory Overview
 
-### Boiler Accessories
-- **Main Control**: HeaterCooler service for temperature and mode control
+The plugin creates different types of accessories based on your heating system:
+
+### 🔥 Boiler Accessories
+- **Main Boiler Control**: HeaterCooler service for temperature and mode control
 - **Burner Status**: Switch showing burner active/inactive state
-- **Modulation**: Lightbulb showing current burner modulation (0-100%)
+- **Modulation Level**: Lightbulb showing current burner modulation (0-100%)
 
-### DHW (Hot Water) Accessories
-- **Main Control**: HeaterCooler service for DHW temperature
-- **Mode Switches**: Separate switches for Off/Eco/Comfort modes
+### 🚿 DHW (Hot Water) Accessories
+- **Main DHW Control**: HeaterCooler service for DHW temperature
+- **Operating Mode Switches**: 
+  - Off Mode Switch
+  - Eco Mode Switch
+  - Comfort Mode Switch
 
-### Heating Circuit Accessories
-- **Main Control**: HeaterCooler service for circuit temperature
-- **Temperature Programs**:
+### 🏠 Heating Circuit Accessories
+- **Main Circuit Control**: HeaterCooler service for circuit temperature
+- **Temperature Programs** (if enabled):
   - Reduced (Ridotta) - Switch for economy mode
   - Normal (Normale) - Switch for standard comfort
   - Comfort - Switch for maximum comfort
-- **Quick Selections**:
+- **Quick Selections** (if enabled):
   - Holiday Mode - Switch for 7-day holiday schedule
   - Holiday at Home - Switch for single-day reduced heating
   - Extended Heating - Switch for temporary comfort boost
 
-## Configuration Verification
+## Verification & Testing
 
-### 1. Check the logs
+### 1. Check Homebridge Logs
 ```bash
-# Standard Homebridge
-tail -f ~/.homebridge/homebridge.log
+# Via Homebridge Config UI X
+# Go to "Logs" tab and look for Viessmann entries
 
-# Systemd
-journalctl -u homebridge -f
+# Via command line
+tail -f ~/.homebridge/homebridge.log | grep Viessmann
 
-# Docker
-docker logs -f homebridge
+# Via systemd
+journalctl -u homebridge -f | grep Viessmann
+
+# Via Docker
+docker logs -f homebridge | grep Viessmann
 ```
 
-### 2. Rate Limit Status
-Look for these log messages:
-- `Rate limit status: OK` - Normal operation
-- `Rate limited: wait X seconds` - Temporary throttling
-- `Rate limit protection activated` - Automatic backoff engaged
+### 2. Key Log Messages to Look For
 
-### 3. API Test
-```bash
-# Test connection to installations
-curl -H "Authorization: Bearer TOKEN" \
-"https://api.viessmann.com/iot/v2/equipment/installations"
+**✅ Successful Messages:**
+```
+[Viessmann] Authentication successful! Tokens acquired.
+[Viessmann] Setting up installation: [Name] (ID: 12345)
+[Viessmann] Adding new accessory: [Installation] Boiler
+[Viessmann] Update cycle completed: X/Y successful, 0 errors
+[Viessmann] Cache stats - Hit rate: 85.2%, Entries: 45
 ```
 
-### 4. HomeKit Verification
-- Open the Home app on iOS/macOS
-- Check that Viessmann accessories are visible
-- Test temperature commands
-- Verify mode switches work correctly
+**⚠️ Warning Messages (Normal):**
+```
+[Viessmann] Rate limit protection activated
+[Viessmann] Cache miss for getDeviceFeatures
+[Viessmann] Token refreshed successfully
+```
+
+**❌ Error Messages (Need Attention):**
+```
+[Viessmann] Authentication failed: Invalid credentials
+[Viessmann] Rate limit exceeded (429). Blocked for X seconds
+[Viessmann] No installations found
+[Viessmann] Max retries exceeded
+```
+
+### 3. HomeKit Verification
+1. **Open Home app** on iOS/macOS
+2. **Check for new accessories**:
+   - Look for accessories with your installation name
+   - Verify all expected accessories are present
+3. **Test basic functionality**:
+   - Try adjusting boiler temperature
+   - Test DHW mode switches
+   - Try heating circuit controls
+4. **Check responsiveness**:
+   - Commands should execute within 5-10 seconds
+   - Status updates should appear within refresh interval
+
+### 4. API Rate Limit Status
+Monitor rate limit status in logs:
+```
+[Viessmann] Rate limit status: OK
+[Viessmann] Cache stats - Hit rate: 85.2%, Entries: 45
+[Viessmann] API call succeeded after 0 retries
+```
 
 ## Common Issues & Solutions
 
-### Rate Limiting (429 Errors)
+### 🚨 Rate Limiting (429 Errors)
 
 **Symptoms:**
-- `Rate limit exceeded` in logs
+- `Rate limit exceeded` messages in logs
 - Accessories not updating
 - `Too Many Requests` errors
 
+**Immediate Solutions:**
+1. **Increase refresh interval**:
+   ```json
+   "refreshInterval": 300000
+   ```
+
+2. **Enable aggressive caching**:
+   ```json
+   "cache": {
+       "enabled": true,
+       "featuresTTL": 600000
+   }
+   ```
+
+3. **Use installation filtering**:
+   ```json
+   "installationFilter": "Main House"
+   ```
+
+4. **Close ViCare mobile app** temporarily
+
+5. **Wait for reset** (typically 24 hours)
+
+### 🔐 Authentication Errors
+
+**Symptoms:**
+- `Authentication failed` messages
+- 401/403 HTTP errors
+- Login prompts not working
+
 **Solutions:**
-1. ✅ **Increase refresh interval**: Set to 180000ms (3 minutes) or higher
-2. ✅ **Enable rate limit protection**: Ensure `enableRateLimitProtection: true`
-3. ✅ **Use installation filtering**: Filter to only needed installations
-4. ✅ **Close ViCare app**: Temporarily close mobile app
-5. ✅ **Wait for reset**: API limits reset after 24 hours
+1. **Verify credentials**:
+   - Double-check ViCare username/password
+   - Ensure Client ID is correct
+   - Test login in ViCare mobile app
 
-### Authentication Errors
+2. **Check API application**:
+   - Verify redirect URI: `http://localhost:4200/`
+   - Ensure scope: `IoT User offline_access`
+   - Check application is "Public Client" type
 
-**Error**: "Authentication failed"
-- ✅ Verify ViCare credentials
-- ✅ Check device is registered in ViCare
-- ✅ Verify Client ID is correct
-- ✅ Try manual authentication method
+3. **Try manual authentication**:
+   - Change `authMethod` to `"manual"`
+   - Follow manual token instructions in logs
 
-### No Installations Found
+4. **Network issues**:
+   - Check firewall settings
+   - Verify port 4200 is accessible
+   - Try different host IP if auto-detection fails
 
-**Error**: "No installations found"
-- ✅ Verify heating system is online in ViCare
-- ✅ Check account has access to devices
-- ✅ Enable debug logging for details
-- ✅ Check installation filtering settings
+### 🏠 No Installations/Devices Found
 
-### Commands Not Working
+**Symptoms:**
+- `No installations found` message
+- Empty accessory list in HomeKit
+- Discovery completes but no devices
 
-**Issue**: Controls don't respond
-- ✅ Some devices have limited command support
-- ✅ Verify supported operating modes
-- ✅ Check current device state allows commands
-- ✅ Review debug logs for specific errors
+**Solutions:**
+1. **Verify ViCare setup**:
+   - Check devices are online in ViCare app
+   - Ensure account has access to installations
+   - Verify heating system is registered
 
-### Extended Heating Not Available
+2. **Check filtering settings**:
+   - Remove `installationFilter` temporarily
+   - Clear `installationIds` array
+   - Enable debug logging to see available installations
 
-**Issue**: Extended heating switch doesn't work
-- ✅ Feature may require specific system modes
-- ✅ Check if holiday modes are active (conflicting)
-- ✅ Verify comfort program is available
-- ✅ Some systems require manual schedule override
+3. **Enable debug logging**:
+   ```json
+   "debug": true
+   ```
+   - Look for `Available installations:` messages
+   - Check installation names and IDs
+
+### ⚡ Performance Issues
+
+**Symptoms:**
+- Slow response times
+- Timeout errors
+- Connection failures
+
+**Solutions:**
+1. **Increase timeouts**:
+   ```json
+   "requestTimeout": 45000,
+   "refreshInterval": 180000
+   ```
+
+2. **Optimize caching**:
+   ```json
+   "cache": {
+       "enabled": true,
+       "featuresTTL": 300000,
+       "enableSmartRefresh": true
+   }
+   ```
+
+3. **Reduce API load**:
+   - Disable unused accessories via feature flags
+   - Use installation filtering
+   - Increase device update delay
+
+4. **Network optimization**:
+   - Check internet connection stability
+   - Consider using wired connection for Homebridge
+   - Monitor network latency to Viessmann servers
+
+### 🎛️ Accessories Not Working
+
+**Symptoms:**
+- Commands don't execute
+- Switches don't respond
+- Temperature changes ignored
+
+**Solutions:**
+1. **Check device capabilities**:
+   - Not all devices support all features
+   - Some features require specific system modes
+   - Enable debug logging to see command responses
+
+2. **Verify system state**:
+   - Check heating system is in correct mode
+   - Some commands require manual schedule override
+   - Holiday modes may block normal operations
+
+3. **Test individual features**:
+   - Try each accessory type separately
+   - Check if basic controls work before advanced features
+   - Verify temperature ranges are within device limits
 
 ## Performance Optimization
 
-### Recommended Settings
+### 📊 Monitoring Performance
 
-**For minimal API usage:**
+Enable debug logging and monitor these metrics:
+
+1. **Cache Hit Rate**: Should be >80% for optimal performance
+   ```
+   [Viessmann] Cache stats - Hit rate: 85.2%
+   ```
+
+2. **API Response Times**: Should be <5 seconds normally
+   ```
+   [Viessmann] API call 'getDeviceFeatures' succeeded after 0 retries
+   ```
+
+3. **Rate Limit Status**: Should show "OK" most of the time
+   ```
+   [Viessmann] Rate limit status: OK
+   ```
+
+### 🎯 Optimization Strategies
+
+1. **Start Conservative**: Begin with longer refresh intervals and adjust down
+2. **Monitor Logs**: Watch for rate limiting warnings
+3. **Filter Aggressively**: Only include needed installations
+4. **Use Caching**: Enable with appropriate TTL values
+5. **Gradual Adjustment**: Make small changes and monitor impact
+
+### 📈 Performance Profiles
+
+**Real-Time Profile** (High API usage, fast updates):
 ```json
 {
-    "refreshInterval": 300000,              // 5 minutes
-    "enableRateLimitProtection": true,
-    "installationFilter": "specific_name"   // Filter to one installation
+    "refreshInterval": 60000,
+    "cache": { "featuresTTL": 60000 }
 }
 ```
 
-**For multiple installations:**
+**Balanced Profile** (Recommended for most users):
 ```json
 {
-    "refreshInterval": 180000,     // 3 minutes
-    "enableRateLimitProtection": true,
-    "installationIds": [12345]    // Specify only needed installations
+    "refreshInterval": 120000,
+    "cache": { "featuresTTL": 120000 }
 }
 ```
 
-### Monitoring Performance
-
-Enable debug logging to monitor:
-- Rate limit status
-- API call success/failure rates
-- Retry attempts and backoff multipliers
-- Installation filtering effectiveness
-
-## Plugin Structure
-
-```
-homebridge-viessmann-vicare/
-├── src/
-│   ├── platform.ts                     # Main platform with rate limiting
-│   ├── viessmann-api.ts                 # API client with retry logic
-│   ├── accessories/
-│   │   ├── boiler-accessory.ts          # Boiler accessory
-│   │   ├── dhw-accessory.ts             # DHW accessory
-│   │   └── heating-circuit-accessory.ts # Heating circuits with programs
-│   ├── index.ts                         # Entry point
-│   └── settings.ts                      # Constants
-├── config.schema.json                   # Configuration schema
-├── package.json
-└── README.md
+**Conservative Profile** (Low API usage, slower updates):
+```json
+{
+    "refreshInterval": 300000,
+    "cache": { 
+        "featuresTTL": 300000,
+        "enableSmartRefresh": true
+    }
+}
 ```
 
-## Support
+## Security Best Practices
 
-For specific issues:
+### 🔒 Credential Protection
+1. **Never share** your Client ID or tokens publicly
+2. **Use strong passwords** for your ViCare account
+3. **Enable two-factor authentication** if available
+4. **Regularly update** plugin to latest version
+5. **Monitor access** in ViCare app for unauthorized usage
 
-1. **Enable debug logging**
-2. **Collect complete logs**
-3. **Create GitHub issue** with:
-   - Configuration (without passwords)
-   - Complete logs
-   - Heating system model
+### 🔐 Network Security
+1. **Secure your Homebridge server** with proper firewall rules
+2. **Use HTTPS** for Homebridge Config UI X
+3. **Restrict access** to port 4200 during OAuth setup
+4. **Consider VPN** for remote Homebridge access
+
+## Advanced Topics
+
+### 🏗️ Plugin Architecture
+```
+src/
+├── platform.ts              # Main platform with rate limiting
+├── viessmann-api.ts         # API client with cache and retry logic
+├── api-cache.ts             # Intelligent caching system
+├── accessories/
+│   ├── boiler-accessory.ts          # Boiler control and monitoring
+│   ├── dhw-accessory.ts             # DHW temperature and modes
+│   └── heating-circuit-accessory.ts # Circuit control with programs
+├── index.ts                 # Plugin entry point
+└── settings.ts              # Constants and configuration
+```
+
+### 🔧 Custom Development
+If you need to modify the plugin:
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/diegoweb100/homebridge-viessmann-vicare.git
+   cd homebridge-viessmann-vicare
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Build the project**:
+   ```bash
+   npm run build
+   ```
+
+4. **Link for development**:
+   ```bash
+   npm link
+   ```
+
+## Support & Troubleshooting
+
+### 📞 Getting Help
+
+1. **Check this guide** and the README first
+2. **Enable debug logging** and collect logs
+3. **Search existing issues** on GitHub
+4. **Create new issue** with:
+   - Complete configuration (remove passwords)
+   - Full debug logs
+   - Heating system model and details
    - Plugin version
-   - Rate limit status
+   - Steps to reproduce the issue
 
-## Updates
+### 🔍 Debug Information to Collect
 
-The plugin supports automatic updates:
+When reporting issues, include:
+
+```json
+{
+    "plugin_version": "2.0.0",
+    "homebridge_version": "1.8.x",
+    "node_version": "18.x.x",
+    "heating_system": "Viessmann Model",
+    "installation_count": 1,
+    "gateway_count": 1,
+    "device_count": 3,
+    "cache_hit_rate": "85%",
+    "rate_limit_status": "OK",
+    "authentication_method": "auto"
+}
+```
+
+### 🚀 Updates & Maintenance
+
+Keep your plugin updated:
 
 ```bash
 # Check for updates
 npm outdated -g homebridge-viessmann-vicare
 
-# Update
+# Update to latest version
 npm update -g homebridge-viessmann-vicare
+
+# Always restart Homebridge after updates
+sudo systemctl restart homebridge
 ```
 
-Always restart Homebridge after updates.
+---
 
-## Best Practices
+## Quick Start Checklist
 
-### Rate Limit Management
-1. **Start conservative**: Use 180000ms (3 minutes) refresh interval
-2. **Monitor logs**: Watch for rate limiting warnings
-3. **Filter installations**: Only include needed systems
-4. **Gradual adjustment**: Slowly decrease intervals if stable
+- [ ] ViCare account created and heating system registered
+- [ ] API credentials obtained from developer portal
+- [ ] Plugin installed via Homebridge Config UI X
+- [ ] Basic configuration completed (Client ID, username, password)
+- [ ] Rate limiting protection enabled
+- [ ] Caching enabled with default settings
+- [ ] Authentication completed successfully
+- [ ] Devices discovered and accessories created
+- [ ] HomeKit testing completed
+- [ ] Debug logging disabled for production use
+- [ ] Performance monitoring configured
 
-### Security
-1. **Protect credentials**: Never share Client ID or tokens
-2. **Regular updates**: Keep plugin updated for security fixes
-3. **Monitor access**: Review ViCare app for unauthorized access
+**Estimated setup time**: 15-30 minutes for new users, 5-10 minutes for experienced users.
 
-### Reliability
-1. **Enable protection**: Always use `enableRateLimitProtection: true`
-2. **Monitor status**: Check logs for rate limit warnings
-3. **Plan for limits**: Design automations considering API constraints
-4. **Have backups**: Keep manual control methods available
-
-## Advanced Features
-
-### Temperature Program Management
-- Each heating circuit supports three independent temperature programs
-- Programs maintain individual temperature settings
-- Switching between programs updates the main thermostat target
-- Programs are mutually exclusive (only one active at a time)
-
-### Holiday Mode Integration
-- Holiday modes automatically disable conflicting programs
-- Extended heating provides temporary comfort override
-- Holiday at Home offers single-day reduced heating
-- All modes integrate with existing schedules
-
-### Installation Filtering Benefits
-- Reduces API calls by 50-90% for multi-installation accounts
-- Improves response times
-- Extends API quota usage
-- Simplifies HomeKit interface
+**Need help?** Visit our [GitHub repository](https://github.com/diegoweb100/homebridge-viessmann-vicare) for support and updates.

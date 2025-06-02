@@ -1,13 +1,14 @@
 {
   "name": "homebridge-viessmann-vicare",
-  "version": "1.0.0",
-  "description": "Complete Homebridge plugin for Viessmann ViCare heating systems with full control capabilities",
+  "version": "2.0.0",
+  "description": "Complete Homebridge plugin for Viessmann ViCare heating systems with full control capabilities, advanced rate limiting protection, and intelligent cache management",
   "main": "dist/index.js",
   "scripts": {
     "build": "rm -rf ./dist && tsc",
     "prepublishOnly": "npm run build",
     "clean": "rm -rf ./dist",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "repository": {
     "type": "git",
@@ -21,7 +22,11 @@
     "boiler",
     "dhw",
     "homekit",
-    "smart-home"
+    "smart-home",
+    "heating-control",
+    "temperature-control",
+    "api-cache",
+    "rate-limiting"
   ],
   "author": "Diego Bestonzo",
   "license": "MIT",
@@ -45,6 +50,12 @@
   },
   "files": [
     "dist",
-    "config.schema.json"
-  ]
+    "config.schema.json",
+    "README.md",
+    "SETUP-GUIDE.md"
+  ],
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/diegoweb100"
+  }
 }

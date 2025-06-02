@@ -6,7 +6,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)
 
-A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection and intelligent retry logic.
+A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic.
 
 ## 🚀 Key Features
 
@@ -19,23 +19,28 @@ A comprehensive Homebridge plugin for Viessmann heating systems with **full cont
 - **⚡ Intelligent rate limiting**: Advanced protection against API throttling with exponential backoff
 - **🔄 Automatic retry logic**: Smart retry mechanism with alternative API endpoints
 - **🛡️ Robust error handling**: Graceful degradation and recovery from API limitations
+- **💾 Intelligent cache management**: Advanced caching system with configurable TTL and smart refresh
 - **🔐 Secure authentication**: OAuth2 with automatic token refresh
 - **📊 Real-time updates**: Continuous monitoring with adaptive refresh intervals
 - **🎯 Installation filtering**: Show only specific installations or filter by name
-- **🎛️ Easy configuration**: Full support for Homebridge Config UI X
+- **🎛️ Easy configuration**: Full support for Homebridge Config UI X with all parameters exposed
 - **🎯 Native integration**: Complete compatibility with Apple Home app and Siri controls
 
 ## 🆕 What's New in v2.0
 
 - **🛡️ Advanced Rate Limiting Protection**: Intelligent handling of Viessmann API rate limits (429 errors)
+- **💾 Intelligent Cache Management**: Multi-layer caching with configurable TTL for different data types
 - **🔄 Smart Retry Logic**: Exponential backoff with alternative API endpoints
 - **📊 Adaptive Refresh Intervals**: Automatic adjustment based on API availability
-- **🎯 Installation Filtering**: Filter installations by name or ID to reduce API calls
+- **🎯 Enhanced Installation Filtering**: Filter installations by name or ID to reduce API calls
 - **🎛️ Individual Temperature Programs**: Separate controls for Reduced/Normal/Comfort modes
 - **🏖️ Enhanced Holiday Modes**: Full support for Holiday and Holiday at Home programs
 - **⚡ Extended Heating Mode**: Quick comfort boost functionality
 - **🔧 Improved Error Recovery**: Better handling of temporary API issues
 - **📈 Performance Monitoring**: Real-time rate limit status and diagnostics
+- **⚙️ Complete UI Configuration**: All parameters configurable through Homebridge Config UI X
+- **🎚️ Feature Toggle Controls**: Enable/disable specific accessory types
+- **🔧 Advanced Timeout Controls**: Configurable timeouts and retry mechanisms
 
 ## 🏠 Supported Devices
 
@@ -56,7 +61,7 @@ All Viessmann heating systems compatible with ViCare API:
 
 1. Search for "**homebridge-viessmann-vicare**" in the Plugin tab
 2. Click "**Install**"
-3. Configure the plugin through the web interface
+3. Configure the plugin through the web interface using the comprehensive configuration form
 
 ### Via npm
 
@@ -83,7 +88,7 @@ npm install -g homebridge-viessmann-vicare
    - Scope: `IoT User offline_access`
 4. Save the generated **Client ID**
 
-### Example Configuration (OAuth Automatic - Recommended)
+### Example Configuration (Complete)
 
 ```json
 {
@@ -94,51 +99,95 @@ npm install -g homebridge-viessmann-vicare
     "password": "your_vicare_password",
     "authMethod": "auto",
     "refreshInterval": 120000,
+    "requestTimeout": 30000,
     "enableRateLimitProtection": true,
+    "maxRetries": 3,
+    "retryDelay": 30000,
+    "rateLimitResetBuffer": 60000,
     "installationFilter": "Main House",
+    "cache": {
+        "enabled": true,
+        "installationsTTL": 86400000,
+        "featuresTTL": 120000,
+        "devicesTTL": 21600000,
+        "gatewaysTTL": 43200000,
+        "maxEntries": 1000,
+        "enableSmartRefresh": false,
+        "enableConditionalRequests": false
+    },
+    "features": {
+        "enableBoilerAccessories": true,
+        "enableDHWAccessories": true,
+        "enableHeatingCircuitAccessories": true,
+        "enableTemperaturePrograms": true,
+        "enableQuickSelections": true,
+        "enableBurnerStatus": true
+    },
+    "advanced": {
+        "baseDelay": 1000,
+        "maxDelay": 300000,
+        "maxConsecutiveErrors": 5,
+        "deviceUpdateDelay": 1000,
+        "userAgent": "homebridge-viessmann-vicare/2.0.0"
+    },
     "debug": false
 }
 ```
 
-### Example Configuration (Manual Authentication)
+### 🎛️ Configuration Parameters
 
-```json
-{
-    "platform": "ViessmannPlatform",
-    "name": "Viessmann",
-    "clientId": "your_client_id_here", 
-    "username": "your_email@example.com",
-    "password": "your_vicare_password",
-    "authMethod": "manual",
-    "accessToken": "your_access_token",
-    "refreshToken": "your_refresh_token",
-    "refreshInterval": 180000,
-    "enableRateLimitProtection": true,
-    "debug": false
-}
-```
+All parameters are now configurable through the Homebridge Config UI X interface:
 
-### Configuration Parameters
+#### **Basic Configuration**
+- `platform`: Must be "ViessmannPlatform"
+- `name`: Platform name in HomeKit
+- `clientId`: Client ID from Viessmann API
+- `username`: Your ViCare account email
+- `password`: Your ViCare account password
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `platform` | string | ✅ | Must be "**ViessmannPlatform**" |
-| `name` | string | ✅ | Platform name in HomeKit |
-| `clientId` | string | ✅ | Client ID from Viessmann API |
-| `username` | string | ✅ | Your ViCare account email |
-| `password` | string | ✅ | Your ViCare account password |
-| `authMethod` | string | ❌ | Authentication method: `auto` (default) or `manual` |
-| `hostIp` | string | ❌ | IP for OAuth redirect (auto-detected if omitted) |
-| `redirectPort` | number | ❌ | Port for OAuth callback (default: 4200) |
-| `accessToken` | string | ❌ | Access token (manual auth only) |
-| `refreshToken` | string | ❌ | Refresh token (manual auth only) |
-| `installationFilter` | string | ❌ | Filter installations by name (case-insensitive) |
-| `installationIds` | array | ❌ | Array of specific installation IDs to include |
-| `refreshInterval` | number | ❌ | Update interval in ms (default: 60000, recommended: 120000+) |
-| `enableRateLimitProtection` | boolean | ❌ | Enable rate limit protection (default: true) |
-| `maxRetries` | number | ❌ | Maximum retry attempts (default: 3) |
-| `retryDelay` | number | ❌ | Base retry delay in ms (default: 30000) |
-| `debug` | boolean | ❌ | Enable debug logging (default: false) |
+#### **Authentication Method**
+- `authMethod`: "auto" (recommended) or "manual"
+- `hostIp`: IP for OAuth redirect (auto-detected)
+- `redirectPort`: Port for OAuth callback (default: 4200)
+- `accessToken`: Manual access token (manual auth only)
+- `refreshToken`: Manual refresh token (manual auth only)
+
+#### **Installation Filtering**
+- `installationFilter`: Filter by name (case-insensitive)
+- `installationIds`: Array of specific installation IDs
+
+#### **Performance & Rate Limiting**
+- `refreshInterval`: Update interval in ms (default: 120000)
+- `requestTimeout`: API request timeout in ms (default: 30000)
+- `enableRateLimitProtection`: Enable rate limit protection (default: true)
+- `maxRetries`: Maximum retry attempts (default: 3)
+- `retryDelay`: Base retry delay in ms (default: 30000)
+- `rateLimitResetBuffer`: Buffer after rate limit expires (default: 60000)
+
+#### **API Caching**
+- `cache.enabled`: Enable caching (default: true)
+- `cache.installationsTTL`: Installations cache TTL (default: 24h)
+- `cache.featuresTTL`: Features cache TTL (default: 2min)
+- `cache.devicesTTL`: Devices cache TTL (default: 6h)
+- `cache.gatewaysTTL`: Gateways cache TTL (default: 12h)
+- `cache.maxEntries`: Maximum cache entries (default: 1000)
+- `cache.enableSmartRefresh`: Background cache warming (default: false)
+- `cache.enableConditionalRequests`: Use ETags (default: false)
+
+#### **Feature Control**
+- `features.enableBoilerAccessories`: Enable boiler controls
+- `features.enableDHWAccessories`: Enable DHW controls
+- `features.enableHeatingCircuitAccessories`: Enable heating circuits
+- `features.enableTemperaturePrograms`: Enable temperature programs
+- `features.enableQuickSelections`: Enable holiday modes
+- `features.enableBurnerStatus`: Enable burner status accessories
+
+#### **Advanced Settings**
+- `advanced.baseDelay`: Base exponential backoff delay
+- `advanced.maxDelay`: Maximum backoff delay
+- `advanced.maxConsecutiveErrors`: Max consecutive errors
+- `advanced.deviceUpdateDelay`: Delay between device updates
+- `advanced.userAgent`: Custom User-Agent string
 
 ## 🛡️ Rate Limiting Protection
 
@@ -152,47 +201,75 @@ The plugin includes advanced protection against Viessmann API rate limits:
 - **📊 Adaptive Intervals**: Automatic adjustment of refresh intervals based on API availability
 - **🚫 Request Blocking**: Prevention of additional requests when rate limited
 - **📈 Status Monitoring**: Real-time monitoring of rate limit status
-
-### Configuration for Rate Limit Protection
-
-```json
-{
-    "refreshInterval": 180000,          // 3 minutes (recommended for multiple installations)
-    "enableRateLimitProtection": true,  // Enable protection (default: true)
-    "maxRetries": 3,                   // Maximum retry attempts
-    "retryDelay": 60000,               // Base delay: 1 minute
-    "installationFilter": "Main"       // Reduce API calls by filtering
-}
-```
+- **💾 Cache Integration**: Automatic cache TTL extension during rate limiting
 
 ### Recommended Settings by Usage
 
 **Single Installation (Low API Usage):**
 ```json
 {
-    "refreshInterval": 60000,    // 1 minute
-    "enableRateLimitProtection": true
+    "refreshInterval": 60000,
+    "enableRateLimitProtection": true,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 120000
+    }
 }
 ```
 
 **Multiple Installations (High API Usage):**
 ```json
 {
-    "refreshInterval": 300000,   // 5 minutes
+    "refreshInterval": 300000,
     "enableRateLimitProtection": true,
-    "installationFilter": "Main House"  // Filter to reduce calls
+    "installationFilter": "Main House",
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 300000,
+        "enableSmartRefresh": true
+    }
 }
 ```
 
 **Recovery from Rate Limiting:**
 ```json
 {
-    "refreshInterval": 600000,   // 10 minutes
+    "refreshInterval": 900000,
     "enableRateLimitProtection": true,
     "maxRetries": 1,
-    "retryDelay": 300000        // 5 minute delays
+    "retryDelay": 300000,
+    "cache": {
+        "enabled": true,
+        "featuresTTL": 1800000
+    }
 }
 ```
+
+## 💾 Intelligent Cache Management
+
+### Multi-Layer Caching System
+
+The plugin implements a sophisticated caching system with different TTL values for different data types:
+
+- **Installations**: Cached for 24 hours (rarely change)
+- **Gateways**: Cached for 12 hours (stable data)
+- **Devices**: Cached for 6 hours (moderate stability)
+- **Features**: Cached for 2 minutes (frequently changing data)
+- **Commands**: Never cached (always fresh execution)
+
+### Cache Features
+
+- **LRU Eviction**: Least Recently Used items are removed when cache is full
+- **Smart Refresh**: Optional background warming of frequently accessed data
+- **Conditional Requests**: ETags and Last-Modified headers support
+- **Memory Monitoring**: Track cache size and hit rates
+- **Pattern Invalidation**: Selective cache clearing on commands
+
+### Cache Performance Estimates
+
+- **Aggressive Caching**: 70-90% API call reduction
+- **Conservative Caching**: 40-60% API call reduction
+- **Minimal Caching**: 20-40% API call reduction
 
 ## 🔐 Authentication Methods
 
@@ -206,26 +283,12 @@ The plugin handles OAuth authentication automatically:
 4. **Authorize the application** 
 5. **Tokens are saved automatically** for future use
 
-```json
-{
-    "authMethod": "auto"  // Default, can be omitted
-}
-```
-
 ### 🔧 Manual Authentication
 
 For server/headless environments or if automatic OAuth fails:
 
 1. **Get tokens manually** following instructions in logs
 2. **Add tokens to configuration**
-
-```json
-{
-    "authMethod": "manual",
-    "accessToken": "eyJ...",
-    "refreshToken": "abc123..."
-}
-```
 
 ### 🔄 Intelligent Fallback Logic
 
@@ -238,7 +301,7 @@ The plugin automatically uses the best method:
 
 ## 🏠 HomeKit Accessories Created
 
-The plugin automatically creates these accessories:
+The plugin automatically creates these accessories (configurable via feature flags):
 
 ### 🔥 Boiler
 - **Name**: `[Installation] Boiler`
@@ -292,8 +355,8 @@ Reduce API calls by filtering installations:
 
 ```json
 {
-    "installationFilter": "Main House",     // Show only installations containing "Main House"
-    "installationIds": [123456, 789012]    // Or specify exact installation IDs
+    "installationFilter": "Main House",
+    "installationIds": [123456, 789012]
 }
 ```
 
@@ -310,8 +373,9 @@ Reduce API calls by filtering installations:
 1. ✅ **Increase refresh interval**: Set to 180000ms (3 minutes) or higher
 2. ✅ **Enable rate limit protection**: Ensure `enableRateLimitProtection: true`
 3. ✅ **Use installation filtering**: Filter to only needed installations
-4. ✅ **Close ViCare app**: Temporarily close mobile app to reduce API usage
-5. ✅ **Wait for reset**: API limits typically reset after 24 hours
+4. ✅ **Increase cache TTL**: Set longer cache durations
+5. ✅ **Close ViCare app**: Temporarily close mobile app to reduce API usage
+6. ✅ **Wait for reset**: API limits typically reset after 24 hours
 
 ### Authentication Issues
 
@@ -319,20 +383,15 @@ Reduce API calls by filtering installations:
 2. ✅ Check that devices are registered in ViCare
 3. ✅ Ensure Client ID is valid
 4. ✅ Try manual authentication method
+5. ✅ Check redirect URI configuration
 
-### Devices Not Found
+### Performance Issues
 
-1. ✅ Verify heating system is online in ViCare app
-2. ✅ Check that installation has active gateways
-3. ✅ Ensure devices support required features
-4. ✅ Enable debug logging for details
-
-### Commands Not Working
-
-1. ✅ Verify device supports specific commands
-2. ✅ Check device is in correct operating mode
-3. ✅ Some features require specific system states
-4. ✅ Enable debug logging to see API responses
+1. ✅ Enable caching with appropriate TTL values
+2. ✅ Increase request timeout for slow connections
+3. ✅ Use installation filtering to reduce load
+4. ✅ Disable unnecessary accessory types via feature flags
+5. ✅ Monitor cache hit rates in debug logs
 
 ### Debug Logging
 
@@ -340,18 +399,59 @@ Enable comprehensive debug logging:
 
 ```json
 {
-    "platform": "ViessmannPlatform",
-    "debug": true,
-    // ... other configuration
+    "debug": true
 }
 ```
 
 Debug logs show:
-- 📊 Rate limit status
+- 📊 Rate limit status and cache statistics
 - 🔄 API call attempts and retries
 - 🛡️ Rate limit protection actions
-- 📈 Performance metrics
+- 📈 Performance metrics and cache hit rates
 - 🔍 Detailed error information
+
+## 📊 Performance Optimization
+
+### Performance Profiles
+
+**Real-Time Profile (High API Usage):**
+```json
+{
+    "refreshInterval": 60000,
+    "cache": {
+        "featuresTTL": 60000
+    }
+}
+```
+
+**Balanced Profile (Recommended):**
+```json
+{
+    "refreshInterval": 120000,
+    "cache": {
+        "featuresTTL": 120000
+    }
+}
+```
+
+**Conservative Profile (Low API Usage):**
+```json
+{
+    "refreshInterval": 300000,
+    "cache": {
+        "featuresTTL": 300000,
+        "enableSmartRefresh": true
+    }
+}
+```
+
+### Monitoring Performance
+
+Check these metrics in debug logs:
+- Cache hit rates (target: >80%)
+- API response times
+- Rate limit status
+- Memory usage
 
 ## 🔧 Viessmann APIs Used
 
@@ -366,36 +466,6 @@ Debug logs show:
 3. **Command Latency**: Commands may take several seconds to execute
 4. **Regional Differences**: Some features may vary by region/device model
 5. **Initial Setup**: First-time OAuth setup requires manual browser interaction
-
-## 📊 Performance Optimization
-
-### Recommended Settings
-
-**For minimal API usage:**
-```json
-{
-    "refreshInterval": 300000,           // 5 minutes
-    "enableRateLimitProtection": true,
-    "installationFilter": "specific_name" // Filter to one installation
-}
-```
-
-**For multiple installations:**
-```json
-{
-    "refreshInterval": 180000,    // 3 minutes
-    "enableRateLimitProtection": true,
-    "installationIds": [12345]   // Specify only needed installations
-}
-```
-
-### Monitoring
-
-Check rate limit status in debug logs:
-- Current rate limit state
-- Time until reset
-- Retry attempts
-- Backoff multipliers
 
 ## 🤝 Contributing
 
@@ -434,22 +504,34 @@ For issues and questions:
    - Full debug logs
    - Device model information
    - Plugin version
+   - Cache statistics
 
 ## 📈 Changelog
 
 ### v2.0.0
-- ✨ Advanced rate limiting protection with exponential backoff
-- ✨ Installation filtering by name or ID
-- ✨ Individual temperature programs (Reduced/Normal/Comfort)
-- ✨ Holiday and quick selection modes
-- ✨ Extended heating (comfort boost) functionality
-- ✨ Intelligent retry logic with alternative API endpoints
-- ✨ Adaptive refresh intervals based on API availability
-- ✨ Enhanced error handling and recovery
-- ✨ Real-time rate limit monitoring and diagnostics
-- 🐛 Improved token refresh mechanism
-- 🐛 Better handling of device feature detection
-- 🐛 Fixed temperature constraint validation
+- ✨ **Major Release**: Complete rewrite with advanced features
+- ✨ **Intelligent Cache Management**: Multi-layer caching with configurable TTL
+- ✨ **Advanced Rate Limiting Protection**: Exponential backoff with smart recovery
+- ✨ **Complete UI Configuration**: All parameters exposed in Homebridge Config UI X
+- ✨ **Enhanced Installation Filtering**: Filter by name or ID with debug information
+- ✨ **Feature Toggle Controls**: Enable/disable specific accessory types
+- ✨ **Individual Temperature Programs**: Separate controls for Reduced/Normal/Comfort modes
+- ✨ **Enhanced Holiday Modes**: Full support for Holiday and Holiday at Home programs
+- ✨ **Extended Heating Mode**: Quick comfort boost functionality
+- ✨ **Advanced Timeout Controls**: Configurable timeouts and retry mechanisms
+- ✨ **Intelligent Retry Logic**: Alternative API endpoints and smart backoff
+- ✨ **Performance Monitoring**: Real-time diagnostics and cache statistics
+- ✨ **Improved Error Recovery**: Better handling of temporary API issues
+- 🐛 **Enhanced Token Management**: More robust token refresh mechanism
+- 🐛 **Better Device Detection**: Improved handling of device feature detection
+- 🐛 **Fixed Temperature Constraints**: Proper validation of temperature ranges
+- 🔧 **Code Refactoring**: Complete modularization and improved maintainability
+
+### v1.0.0
+- 🎉 **Initial Release**: Basic functionality with boiler, DHW, and heating circuit support
+- 🔐 **OAuth Authentication**: Automatic and manual authentication methods
+- 📊 **Basic Rate Limiting**: Simple retry logic
+- 🏠 **HomeKit Integration**: Full compatibility with Apple Home app
 
 ---
 
