@@ -1,5 +1,5 @@
 import { Logger } from 'homebridge';
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import { URLSearchParams } from 'url';
 import * as crypto from 'crypto';
 import * as http from 'http';
@@ -18,6 +18,13 @@ interface StoredTokens {
   expiresAt: number;
 }
 
+interface RateLimitInfo {
+  retryAfter: number;
+  blockedUntil: number;
+  retryCount: number;
+  lastError?: string;
+}
+
 export class ViessmannAPI {
   private readonly baseURL = 'https://api.viessmann.com';
   private readonly authURL = 'https://iam.viessmann.com/idp/v3';
@@ -33,8 +40,21 @@ export class ViessmannAPI {
   private codeChallenge?: string;
   private authServer?: http.Server;
   
+  // Rate limiting management
+  private rateLimitInfo: RateLimitInfo = {
+    retryAfter: 0,
+    blockedUntil: 0,
+    retryCount: 0
+  };
+  
   // In-memory token storage (in a real implementation, you'd want persistent storage)
   private tokenStorage: Map<string, StoredTokens> = new Map();
+
+  // Configuration for rate limiting and retries
+  private readonly maxRetries = 3;
+  private readonly baseDelay = 1000; // 1 second
+  private readonly maxDelay = 300000; // 5 minutes
+  private readonly rateLimitResetBuffer = 60000; // 1 minute buffer after rate limit expires
 
   constructor(
     private readonly log: Logger,
@@ -54,6 +74,31 @@ export class ViessmannAPI {
         'Content-Type': 'application/json',
       },
     });
+
+    // Add request interceptor for rate limiting
+    this.httpClient.interceptors.request.use(
+      (config) => {
+        // Check if we're currently rate limited
+        if (this.isRateLimited()) {
+          const waitTime = this.rateLimitInfo.blockedUntil - Date.now();
+          this.log.warn(`API is rate limited. Waiting ${Math.ceil(waitTime / 1000)} seconds before next request.`);
+          return Promise.reject(new Error(`Rate limited. Wait ${Math.ceil(waitTime / 1000)} seconds.`));
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+
+    // Add response interceptor for handling rate limit responses
+    this.httpClient.interceptors.response.use(
+      (response) => response,
+      (error: AxiosError) => {
+        if (error.response?.status === 429) {
+          this.handleRateLimit(error);
+        }
+        return Promise.reject(error);
+      }
+    );
 
     // Generate PKCE codes for OAuth
     this.generatePKCECodes();
@@ -124,6 +169,177 @@ export class ViessmannAPI {
       });
       this.log.debug('Saved tokens to storage');
     }
+  }
+
+  // Rate limiting management methods
+  private isRateLimited(): boolean {
+    return Date.now() < this.rateLimitInfo.blockedUntil;
+  }
+
+  private handleRateLimit(error: AxiosError) {
+    const response = error.response;
+    const retryAfter = this.parseRetryAfter(response?.headers?.['retry-after'] || response?.headers?.['Retry-After']);
+    
+    // Default to exponential backoff if no Retry-After header
+    const backoffDelay = retryAfter || Math.min(
+      this.baseDelay * Math.pow(2, this.rateLimitInfo.retryCount),
+      this.maxDelay
+    );
+
+    this.rateLimitInfo = {
+      retryAfter: backoffDelay,
+      blockedUntil: Date.now() + backoffDelay + this.rateLimitResetBuffer,
+      retryCount: this.rateLimitInfo.retryCount + 1,
+      lastError: this.getErrorMessage(error)
+    };
+
+    this.log.warn(`Rate limit exceeded (429). Blocked for ${Math.ceil(backoffDelay / 1000)} seconds.`);
+    this.log.warn(`Rate limit details: ${this.rateLimitInfo.lastError}`);
+    
+    // Log user-friendly advice
+    this.logRateLimitAdvice();
+  }
+
+  private parseRetryAfter(retryAfter: string | undefined): number {
+    if (!retryAfter) return 0;
+    
+    const seconds = parseInt(retryAfter, 10);
+    return isNaN(seconds) ? 0 : seconds * 1000; // Convert to milliseconds
+  }
+
+  private getErrorMessage(error: AxiosError): string {
+    if (error.response?.data && typeof error.response.data === 'object') {
+      const data = error.response.data as any;
+      if (data.message) {
+        return data.message;
+      }
+      if (data.errorType && data.message) {
+        return `${data.errorType}: ${data.message}`;
+      }
+    }
+    return error.message || 'Unknown rate limit error';
+  }
+
+  private logRateLimitAdvice() {
+    this.log.warn('='.repeat(80));
+    this.log.warn('VIESSMANN API RATE LIMIT EXCEEDED');
+    this.log.warn('='.repeat(80));
+    this.log.warn('The Viessmann API has rate limits to prevent abuse:');
+    this.log.warn('- Basic plan: Limited calls per day (exact limit varies)');
+    this.log.warn('- When exceeded: 24-hour block typically applied');
+    this.log.warn('');
+    this.log.warn('To reduce API calls:');
+    this.log.warn('1. Increase refreshInterval in config (e.g., 300000 = 5 minutes)');
+    this.log.warn('2. Close ViCare mobile app temporarily');
+    this.log.warn('3. Disable other Viessmann integrations temporarily');
+    this.log.warn('4. Consider upgrading to paid Viessmann API plan');
+    this.log.warn('');
+    this.log.warn(`Plugin will automatically retry after: ${new Date(this.rateLimitInfo.blockedUntil).toLocaleString()}`);
+    this.log.warn('='.repeat(80));
+  }
+
+  private resetRateLimit() {
+    this.rateLimitInfo = {
+      retryAfter: 0,
+      blockedUntil: 0,
+      retryCount: 0
+    };
+    this.log.info('Rate limit has been reset - API calls can resume');
+  }
+
+  // Enhanced API call wrapper with retry logic
+  private async makeAPICall<T>(
+    requestFn: () => Promise<AxiosResponse<T>>,
+    operationName: string,
+    retryCount: number = 0
+  ): Promise<AxiosResponse<T>> {
+    try {
+      // Check if rate limit has expired
+      if (this.rateLimitInfo.blockedUntil > 0 && Date.now() >= this.rateLimitInfo.blockedUntil) {
+        this.resetRateLimit();
+      }
+
+      // Don't proceed if still rate limited
+      if (this.isRateLimited()) {
+        const waitTime = Math.ceil((this.rateLimitInfo.blockedUntil - Date.now()) / 1000);
+        throw new Error(`Rate limited: wait ${waitTime} seconds`);
+      }
+
+      const response = await requestFn();
+      
+      // Reset retry count on successful request
+      if (retryCount > 0) {
+        this.log.info(`API call '${operationName}' succeeded after ${retryCount} retries`);
+      }
+
+      return response;
+
+    } catch (error) {
+      const axiosError = error as AxiosError;
+      
+      if (axiosError.response?.status === 429) {
+        this.handleRateLimit(axiosError);
+        
+        if (retryCount < this.maxRetries) {
+          const delay = Math.min(this.baseDelay * Math.pow(2, retryCount), this.maxDelay);
+          this.log.warn(`Retrying '${operationName}' in ${delay / 1000} seconds (attempt ${retryCount + 1}/${this.maxRetries})`);
+          
+          await this.sleep(delay);
+          return this.makeAPICall(requestFn, operationName, retryCount + 1);
+        } else {
+          throw new Error(`Max retries exceeded for '${operationName}': ${this.rateLimitInfo.lastError}`);
+        }
+      } else if (axiosError.response?.status === 401 || axiosError.response?.status === 403) {
+        // Token might be expired, try to refresh
+        if (this.refreshToken && retryCount === 0) {
+          try {
+            this.log.warn(`Authentication error for '${operationName}', attempting token refresh...`);
+            await this.refreshAccessToken();
+            return this.makeAPICall(requestFn, operationName, retryCount + 1);
+          } catch (refreshError) {
+            this.log.error('Token refresh failed:', refreshError);
+            throw error;
+          }
+        } else {
+          throw error;
+        }
+      } else {
+        // For other errors, retry with exponential backoff
+        if (retryCount < this.maxRetries) {
+          const delay = Math.min(this.baseDelay * Math.pow(2, retryCount), 30000); // Max 30 seconds for non-rate-limit retries
+          this.log.warn(`Error in '${operationName}': ${axiosError.message}. Retrying in ${delay / 1000} seconds...`);
+          
+          await this.sleep(delay);
+          return this.makeAPICall(requestFn, operationName, retryCount + 1);
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Status methods for monitoring
+  public getRateLimitStatus(): {
+    isLimited: boolean;
+    blockedUntil?: Date;
+    waitSeconds?: number;
+    retryCount: number;
+    lastError?: string;
+  } {
+    const now = Date.now();
+    const isLimited = this.isRateLimited();
+    
+    return {
+      isLimited,
+      blockedUntil: isLimited ? new Date(this.rateLimitInfo.blockedUntil) : undefined,
+      waitSeconds: isLimited ? Math.ceil((this.rateLimitInfo.blockedUntil - now) / 1000) : undefined,
+      retryCount: this.rateLimitInfo.retryCount,
+      lastError: this.rateLimitInfo.lastError
+    };
   }
 
   async authenticate(): Promise<void> {
@@ -404,8 +620,8 @@ export class ViessmannAPI {
       code: authCode,
     });
 
-    try {
-      const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
+    const response: AxiosResponse<AuthResponse> = await this.makeAPICall(
+      () => this.httpClient.post(
         `${this.authURL}/token`,
         tokenData,
         {
@@ -413,15 +629,12 @@ export class ViessmannAPI {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
         }
-      );
+      ),
+      'exchangeCodeForTokens'
+    );
 
-      this.setTokens(response.data);
-      this.log.info('Authentication successful! Tokens acquired.');
-      
-    } catch (error) {
-      this.log.error('Token exchange failed:', error);
-      throw new Error('Failed to exchange authorization code for tokens');
-    }
+    this.setTokens(response.data);
+    this.log.info('Authentication successful! Tokens acquired.');
   }
 
   private async refreshAccessToken(): Promise<void> {
@@ -435,8 +648,8 @@ export class ViessmannAPI {
       refresh_token: this.refreshToken,
     });
 
-    try {
-      const response: AxiosResponse<AuthResponse> = await this.httpClient.post(
+    const response: AxiosResponse<AuthResponse> = await this.makeAPICall(
+      () => this.httpClient.post(
         `${this.authURL}/token`,
         tokenData,
         {
@@ -444,15 +657,12 @@ export class ViessmannAPI {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
         }
-      );
+      ),
+      'refreshAccessToken'
+    );
 
-      this.setTokens(response.data);
-      this.log.debug('Token refreshed successfully');
-      
-    } catch (error) {
-      this.log.error('Token refresh failed:', error);
-      throw error;
-    }
+    this.setTokens(response.data);
+    this.log.debug('Token refreshed successfully');
   }
 
   private setTokens(authData: AuthResponse): void {
@@ -469,133 +679,127 @@ export class ViessmannAPI {
   async getInstallations(): Promise<ViessmannInstallation[]> {
     await this.authenticate();
 
-    try {
-      const response = await this.httpClient.get(
+    const response = await this.makeAPICall(
+      () => this.httpClient.get(
         `${this.baseURL}/iot/v2/equipment/installations?includeGateways=true`,
         {
           headers: {
             'Authorization': `Bearer ${this.accessToken}`,
           },
         }
-      );
+      ),
+      'getInstallations'
+    );
 
-      const installations: ViessmannInstallation[] = response.data.data.map((installation: any) => {
-        // Get gateways for this installation
-        const gateways = installation.gateways || [];
-        
-        return {
-          id: installation.id,
-          description: installation.description || `Installation ${installation.id}`,
-          gateways: gateways.map((gateway: any) => ({
-            serial: gateway.serial,
-            devices: [], // Will be populated by getGatewayDevices
-          })),
-        };
-      });
+    const installations: ViessmannInstallation[] = response.data.data.map((installation: any) => {
+      // Get gateways for this installation
+      const gateways = installation.gateways || [];
+      
+      return {
+        id: installation.id,
+        description: installation.description || `Installation ${installation.id}`,
+        gateways: gateways.map((gateway: any) => ({
+          serial: gateway.serial,
+          devices: [], // Will be populated by getGatewayDevices
+        })),
+      };
+    });
 
-      // Get devices for each gateway
-      for (const installation of installations) {
-        for (const gateway of installation.gateways) {
-          gateway.devices = await this.getGatewayDevices(installation.id, gateway.serial);
-        }
+    // Get devices for each gateway
+    for (const installation of installations) {
+      for (const gateway of installation.gateways) {
+        gateway.devices = await this.getGatewayDevices(installation.id, gateway.serial);
       }
-
-      return installations;
-
-    } catch (error) {
-      this.log.error('Failed to get installations:', error);
-      throw error;
     }
+
+    return installations;
   }
 
   async getGatewayDevices(installationId: number, gatewaySerial: string) {
     await this.authenticate();
 
-    try {
-      const response = await this.httpClient.get(
+    const response = await this.makeAPICall(
+      () => this.httpClient.get(
         `${this.baseURL}/iot/v2/equipment/installations/${installationId}/gateways/${gatewaySerial}/devices`,
         {
           headers: {
             'Authorization': `Bearer ${this.accessToken}`,
           },
         }
-      );
+      ),
+      `getGatewayDevices-${gatewaySerial}`
+    );
 
-      return response.data.data.map((device: any) => ({
-        id: device.id,
-        deviceType: device.deviceType,
-        modelId: device.modelId,
-        status: device.status,
-        gatewaySerial: device.gatewaySerial,
-      }));
-
-    } catch (error) {
-      this.log.error(`Failed to get devices for gateway ${gatewaySerial}:`, error);
-      throw error;
-    }
+    return response.data.data.map((device: any) => ({
+      id: device.id,
+      deviceType: device.deviceType,
+      modelId: device.modelId,
+      status: device.status,
+      gatewaySerial: device.gatewaySerial,
+    }));
   }
 
   async getDeviceFeatures(installationId: number, gatewaySerial: string, deviceId: string): Promise<ViessmannFeature[]> {
     await this.authenticate();
 
-    try {
-      const response = await this.httpClient.get(
+    const response = await this.makeAPICall(
+      () => this.httpClient.get(
         `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features`,
         {
           headers: {
             'Authorization': `Bearer ${this.accessToken}`,
           },
         }
-      );
+      ),
+      `getDeviceFeatures-${deviceId}`
+    );
 
-      // The response.data should be a JSON string that needs parsing
-      let featuresData;
-      if (typeof response.data === 'string') {
-        featuresData = JSON.parse(response.data);
-      } else {
-        featuresData = response.data;
-      }
+    // The response.data should be a JSON string that needs parsing
+    let featuresData;
+    if (typeof response.data === 'string') {
+      featuresData = JSON.parse(response.data);
+    } else {
+      featuresData = response.data;
+    }
 
-      // Convert the features object to array
-      const features: ViessmannFeature[] = [];
-      
-      if (featuresData.data && Array.isArray(featuresData.data)) {
-        features.push(...featuresData.data);
-      } else if (typeof featuresData === 'object') {
-        // Handle case where features are returned as object properties
-        for (const [featureName, featureData] of Object.entries(featuresData)) {
-          if (typeof featureData === 'object' && featureData !== null) {
-            features.push({
-              feature: featureName,
-              properties: (featureData as any).properties || {},
-              commands: (featureData as any).commands || {},
-              isEnabled: (featureData as any).isEnabled || true,
-              isReady: (featureData as any).isReady || true,
-              timestamp: (featureData as any).timestamp || new Date().toISOString(),
-            });
-          }
+    // Convert the features object to array
+    const features: ViessmannFeature[] = [];
+    
+    if (featuresData.data && Array.isArray(featuresData.data)) {
+      features.push(...featuresData.data);
+    } else if (typeof featuresData === 'object') {
+      // Handle case where features are returned as object properties
+      for (const [featureName, featureData] of Object.entries(featuresData)) {
+        if (typeof featureData === 'object' && featureData !== null) {
+          features.push({
+            feature: featureName,
+            properties: (featureData as any).properties || {},
+            commands: (featureData as any).commands || {},
+            isEnabled: (featureData as any).isEnabled || true,
+            isReady: (featureData as any).isReady || true,
+            timestamp: (featureData as any).timestamp || new Date().toISOString(),
+          });
         }
       }
-
-      return features;
-
-    } catch (error) {
-      this.log.error(`Failed to get features for device ${deviceId}:`, error);
-      throw error;
     }
+
+    return features;
   }
 
   async getFeature(installationId: number, gatewaySerial: string, deviceId: string, featureName: string): Promise<ViessmannFeature | null> {
     await this.authenticate();
 
     try {
-      const response = await this.httpClient.get(
-        `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-          },
-        }
+      const response = await this.makeAPICall(
+        () => this.httpClient.get(
+          `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${this.accessToken}`,
+            },
+          }
+        ),
+        `getFeature-${featureName}`
       );
 
       let featureData;
@@ -635,18 +839,21 @@ export class ViessmannAPI {
     await this.authenticate();
 
     try {
-      const response = await this.httpClient.post(
-        `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}/commands/${commandName}`,
-        params,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }
+      const response = await this.makeAPICall(
+        () => this.httpClient.post(
+          `${this.baseURL}/iot/v2/features/installations/${installationId}/gateways/${gatewaySerial}/devices/${deviceId}/features/${featureName}/commands/${commandName}`,
+          params,
+          {
+            headers: {
+              'Authorization': `Bearer ${this.accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        ),
+        `executeCommand-${featureName}-${commandName}`
       );
 
-      return response.status === 200 && response.data?.data?.success === true;
+      return response.status === 200 || response.status === 202;
 
     } catch (error) {
       this.log.error(`Failed to execute command ${commandName} on feature ${featureName}:`, error);
