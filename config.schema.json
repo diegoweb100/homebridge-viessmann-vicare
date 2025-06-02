@@ -2,8 +2,8 @@
   "pluginAlias": "ViessmannPlatform",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits.",
-  "footerDisplay": "For help and support visit: [GitHub Repository](https://github.com/your-username/homebridge-viessmann-control)",
+  "headerDisplay": "Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection and automatic retry logic.",
+  "footerDisplay": "For help and support visit: [GitHub Repository](https://github.com/diegoweb100/homebridge-viessmann-vicare)",
   "schema": {
     "type": "object",
     "properties": {
@@ -17,7 +17,7 @@
         "title": "Client ID",
         "type": "string",
         "required": true,
-        "description": "Your Viessmann API Client ID"
+        "description": "Your Viessmann API Client ID from the developer portal"
       },
       "clientSecret": {
         "title": "Client Secret",
@@ -70,13 +70,50 @@
         "required": false,
         "description": "Manual refresh token (only required if authMethod is 'manual')"
       },
+      "installationFilter": {
+        "title": "Installation Filter",
+        "type": "string",
+        "required": false,
+        "description": "Filter installations by name (case-insensitive substring match). Leave empty to show all installations."
+      },
+      "installationIds": {
+        "title": "Installation IDs",
+        "type": "array",
+        "items": {
+          "type": "integer"
+        },
+        "required": false,
+        "description": "Array of specific installation IDs to include. Takes priority over installationFilter if specified."
+      },
       "refreshInterval": {
-        "title": "Refresh Interval",
+        "title": "Refresh Interval (ms)",
         "type": "integer",
         "default": 60000,
         "minimum": 30000,
+        "maximum": 900000,
+        "description": "How often to update device data (in milliseconds). Default: 60000 (1 minute). Increase to reduce API calls."
+      },
+      "enableRateLimitProtection": {
+        "title": "Enable Rate Limit Protection",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable automatic rate limit protection with exponential backoff (recommended)"
+      },
+      "maxRetries": {
+        "title": "Maximum Retries",
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 10,
+        "description": "Maximum number of retry attempts for failed API calls"
+      },
+      "retryDelay": {
+        "title": "Retry Delay (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 5000,
         "maximum": 300000,
-        "description": "How often to update device data (in milliseconds). Default: 60000 (1 minute)"
+        "description": "Base delay between retry attempts in milliseconds (will be multiplied by backoff factor)"
       },
       "debug": {
         "title": "Enable Debug Logging",
@@ -132,12 +169,35 @@
     },
     {
       "type": "fieldset",
-      "title": "Advanced Settings",
-      "description": "Optional advanced configuration",
+      "title": "Installation Filtering",
+      "description": "Filter which installations to show in HomeKit",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "installationFilter",
+        "installationIds"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Rate Limiting & Performance",
+      "description": "Configure API rate limiting protection and performance settings",
       "expandable": true,
       "expanded": false,
       "items": [
         "refreshInterval",
+        "enableRateLimitProtection",
+        "maxRetries",
+        "retryDelay"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced Settings",
+      "description": "Debug and troubleshooting options",
+      "expandable": true,
+      "expanded": false,
+      "items": [
         "debug"
       ]
     }
