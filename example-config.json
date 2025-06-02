@@ -1,21 +1,72 @@
 {
-    "bridge": {
-        "name": "Homebridge",
-        "username": "CC:22:3D:E3:CE:30",
-        "port": 51826,
-        "pin": "031-45-154"
+  "name": "Esempi di Configurazione Filtri Installazioni",
+  "examples": [
+    {
+      "description": "Mostra tutte le installazioni (comportamento predefinito)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password"
+      }
     },
-    "accessories": [],
-    "platforms": [
-        {
-            "platform": "ViessmannPlatform",
-            "name": "Viessmann",
-            "clientId": "79742319e39245de5f91d15ff4cac2a8",
-            "clientSecret": "",
-            "username": "your-email@example.com",
-            "password": "your-password",
-            "refreshInterval": 60000,
-            "debug": false
-        }
-    ]
+    {
+      "description": "Mostra solo installazioni con 'Ciriè' nel nome",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password",
+        "installationFilter": "Ciriè"
+      }
+    },
+    {
+      "description": "Mostra solo installazioni con 'Mathi' nel nome",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password",
+        "installationFilter": "Mathi"
+      }
+    },
+    {
+      "description": "Mostra solo installazioni con 'Casa' nel nome (trova 'Casa Principale', 'Casa Vacanze', etc.)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password",
+        "installationFilter": "Casa"
+      }
+    },
+    {
+      "description": "Usa IDs specifici delle installazioni (opzione avanzata)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password",
+        "installationIds": [2045780, 1234567]
+      }
+    },
+    {
+      "description": "Configurazione completa con filtro per debug",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username",
+        "password": "your-password",
+        "installationFilter": "Ciriè",
+        "debug": true,
+        "refreshInterval": 60000
+      }
+    }
+  ]
 }
