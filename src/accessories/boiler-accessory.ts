@@ -2,16 +2,24 @@ import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice } from '../platform';
 
 export class ViessmannBoilerAccessory {
-  private service: Service;
+  private heaterCoolerService: Service;
   private informationService: Service;
+  private modulationService?: Service;
+  private burnerService?: Service;
+  
+  private supportsTemperatureControl = false;
+  private temperatureConstraints = { min: 10, max: 80 };
+  private currentBurnerState = false;
+  private currentModulation = 0;
 
   private states = {
-    On: false,
     CurrentTemperature: 20,
-    TargetTemperature: 20,
+    HeatingThresholdTemperature: 20,
     TemperatureDisplayUnits: 0, // Celsius
-    CurrentHeatingCoolingState: 0, // Off
-    TargetHeatingCoolingState: 0, // Off
+    BurnerActive: false,
+    Modulation: 0,
+    BurnerHours: 0,
+    BurnerStarts: 0,
   };
 
   constructor(
@@ -29,41 +37,148 @@ export class ViessmannBoilerAccessory {
       .setCharacteristic(this.platform.Characteristic.SerialNumber, gateway.serial)
       .setCharacteristic(this.platform.Characteristic.FirmwareRevision, '1.0.0');
 
-    // Get or create the Thermostat service
-    this.service = this.accessory.getService(this.platform.Service.Thermostat) || 
-                   this.accessory.addService(this.platform.Service.Thermostat);
+    // Main HeaterCooler service for boiler
+    this.heaterCoolerService = this.accessory.getService(this.platform.Service.HeaterCooler) || 
+                               this.accessory.addService(this.platform.Service.HeaterCooler);
 
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.displayName);
-
-    // Configure characteristics
-    this.setupCharacteristics();
+    this.heaterCoolerService.setCharacteristic(this.platform.Characteristic.Name, accessory.displayName);
 
     // Set update handler for platform to call
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
-    // Initial update
-    this.updateStatus();
+    // Initialize capabilities and setup characteristics
+    this.initializeCapabilities();
+  }
+
+  private async initializeCapabilities() {
+    try {
+      const features = await this.platform.viessmannAPI.getDeviceFeatures(
+        this.installation.id,
+        this.gateway.serial,
+        this.device.id
+      );
+      
+      this.analyzeCapabilities(features);
+      this.setupCharacteristics();
+      await this.updateFromFeatures(features);
+      
+    } catch (error) {
+      this.platform.log.error('Error initializing boiler capabilities:', error);
+      // Fallback to basic setup
+      this.setupCharacteristics();
+    }
+  }
+
+  private analyzeCapabilities(features: any[]) {
+    // Analyze boiler temperature control
+    const boilerTempFeature = features.find(f => f.feature === 'heating.boiler.temperature');
+    if (boilerTempFeature?.commands?.setTargetTemperature) {
+      this.supportsTemperatureControl = true;
+      const constraints = boilerTempFeature.commands.setTargetTemperature.params?.temperature?.constraints;
+      if (constraints) {
+        this.temperatureConstraints.min = constraints.min || 10;
+        this.temperatureConstraints.max = constraints.max || 80;
+      }
+      this.platform.log.info(`Boiler temperature control: ${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C`);
+    }
+
+    // Check burner capabilities
+    const burnerFeature = features.find(f => f.feature === 'heating.burners.0');
+    const modulationFeature = features.find(f => f.feature === 'heating.burners.0.modulation');
+    const statisticsFeature = features.find(f => f.feature === 'heating.burners.0.statistics');
+
+    if (burnerFeature) {
+      this.currentBurnerState = burnerFeature.properties?.active?.value || false;
+    }
+
+    if (modulationFeature) {
+      this.currentModulation = modulationFeature.properties?.value?.value || 0;
+    }
+
+    if (statisticsFeature) {
+      this.states.BurnerHours = statisticsFeature.properties?.hours?.value || 0;
+      this.states.BurnerStarts = statisticsFeature.properties?.starts?.value || 0;
+    }
+
+    // Get current boiler temperature
+    if (boilerTempFeature?.properties?.value?.value !== undefined) {
+      this.states.HeatingThresholdTemperature = boilerTempFeature.properties.value.value;
+    }
+
+    this.platform.log.info(`Boiler Capabilities - Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}, Burner: ${burnerFeature ? 'Yes' : 'No'}, Modulation: ${modulationFeature ? 'Yes' : 'No'}`);
   }
 
   private setupCharacteristics() {
-    // Current Heating Cooling State (read-only)
-    this.service.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
-      .onGet(this.getCurrentHeatingCoolingState.bind(this));
+    // Remove any existing conflicting services
+    this.removeConflictingServices();
 
-    // Target Heating Cooling State
-    this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(this.getTargetHeatingCoolingState.bind(this))
-      .onSet(this.setTargetHeatingCoolingState.bind(this))
-      .setProps({
-        validValues: [
-          this.platform.Characteristic.TargetHeatingCoolingState.OFF,
-          this.platform.Characteristic.TargetHeatingCoolingState.HEAT,
-          this.platform.Characteristic.TargetHeatingCoolingState.AUTO,
-        ],
+    // Configure HeaterCooler service
+    this.setupHeaterCoolerService();
+
+    // Setup burner status service
+    this.setupBurnerService();
+
+    // Setup modulation service
+    this.setupModulationService();
+  }
+
+  private removeConflictingServices() {
+    // Remove existing thermostat, temperature sensor services
+    const servicesToRemove = [
+      this.platform.Service.Thermostat,
+      this.platform.Service.TemperatureSensor
+    ];
+
+    for (const serviceType of servicesToRemove) {
+      const services = this.accessory.services.filter(service => service.UUID === serviceType.UUID);
+      for (const service of services) {
+        try {
+          this.accessory.removeService(service);
+          this.platform.log.debug(`Removed existing ${service.constructor.name} service for boiler`);
+        } catch (error) {
+          this.platform.log.debug(`Could not remove service: ${error}`);
+        }
+      }
+    }
+  }
+
+  private setupHeaterCoolerService() {
+    // Active characteristic (On/Off) - based on burner state
+    this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.Active)
+      .onGet(() => this.currentBurnerState ? 
+        this.platform.Characteristic.Active.ACTIVE : 
+        this.platform.Characteristic.Active.INACTIVE)
+      .onSet(async (value: CharacteristicValue) => {
+        // Boiler active state is read-only, controlled by system
+        setTimeout(() => {
+          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
+            this.currentBurnerState ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
+        }, 100);
+        this.platform.log.warn('Boiler active state is read-only and controlled automatically by the system');
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
       });
 
-    // Current Temperature (read-only)
-    this.service.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+    // Current Heater Cooler State (read-only)
+    this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
+      .onGet(() => {
+        if (!this.currentBurnerState) {
+          return this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE;
+        }
+        // Boiler is always in heating mode when active
+        return this.platform.Characteristic.CurrentHeaterCoolerState.HEATING;
+      });
+
+    // Target Heater Cooler State
+    this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
+      .updateValue(this.platform.Characteristic.TargetHeaterCoolerState.HEAT) // Set valid value FIRST
+      .onGet(() => this.platform.Characteristic.TargetHeaterCoolerState.HEAT) // Boilers are always heating
+      .onSet(() => {}) // Read-only - always heat for boilers
+      .setProps({
+        validValues: [this.platform.Characteristic.TargetHeaterCoolerState.HEAT],
+      });
+
+    // Current Temperature
+    this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
       .onGet(this.getCurrentTemperature.bind(this))
       .setProps({
         minValue: -50,
@@ -71,86 +186,138 @@ export class ViessmannBoilerAccessory {
         minStep: 0.1,
       });
 
-    // Target Temperature
-    this.service.getCharacteristic(this.platform.Characteristic.TargetTemperature)
-      .onGet(this.getTargetTemperature.bind(this))
-      .onSet(this.setTargetTemperature.bind(this))
-      .setProps({
-        minValue: 10,
-        maxValue: 80,
-        minStep: 1,
-      });
+    // Heating Threshold Temperature (target temperature for heating)
+    if (this.supportsTemperatureControl) {
+      const validTemp = Math.min(Math.max(this.states.HeatingThresholdTemperature, this.temperatureConstraints.min), this.temperatureConstraints.max);
+      
+      this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+        .updateValue(validTemp) // Set valid value FIRST
+        .onGet(this.getHeatingThresholdTemperature.bind(this))
+        .onSet(this.setHeatingThresholdTemperature.bind(this))
+        .setProps({
+          minValue: this.temperatureConstraints.min,
+          maxValue: this.temperatureConstraints.max,
+          minStep: 1,
+        });
+
+      // Update internal state
+      this.states.HeatingThresholdTemperature = validTemp;
+    }
 
     // Temperature Display Units
-    this.service.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
-      .onGet(this.getTemperatureDisplayUnits.bind(this))
-      .onSet(this.setTemperatureDisplayUnits.bind(this));
+    this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
+      .onGet(() => this.platform.Characteristic.TemperatureDisplayUnits.CELSIUS)
+      .onSet(() => {}); // Read-only
   }
 
-  async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
-    return this.states.CurrentHeatingCoolingState;
-  }
+  private setupBurnerService() {
+    // Remove existing burner services first
+    const existingBurnerService = this.accessory.services.find(service => 
+      service.UUID === this.platform.Service.Switch.UUID && 
+      service.subtype === 'boiler-burner'
+    );
 
-  async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
-    return this.states.TargetHeatingCoolingState;
-  }
-
-  async setTargetHeatingCoolingState(value: CharacteristicValue) {
-    const targetState = value as number;
-    this.states.TargetHeatingCoolingState = targetState;
-
-    // Map HomeKit states to Viessmann operating modes
-    let mode: string;
-    switch (targetState) {
-      case this.platform.Characteristic.TargetHeatingCoolingState.OFF:
-        mode = 'standby';
-        break;
-      case this.platform.Characteristic.TargetHeatingCoolingState.HEAT:
-        mode = 'heating';
-        break;
-      case this.platform.Characteristic.TargetHeatingCoolingState.AUTO:
-        mode = 'dhwAndHeating';
-        break;
-      default:
-        mode = 'standby';
-    }
-
-    try {
-      // Set operating mode for circuit 0 (main circuit)
-      const success = await this.platform.viessmannAPI.setOperatingMode(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id,
-        0,
-        mode
-      );
-
-      if (success) {
-        this.platform.log.info(`Set boiler operating mode to: ${mode}`);
-      } else {
-        this.platform.log.error(`Failed to set boiler operating mode to: ${mode}`);
-        throw new Error('Failed to set operating mode');
+    if (existingBurnerService) {
+      try {
+        this.accessory.removeService(existingBurnerService);
+        this.platform.log.debug('Removed existing burner service');
+      } catch (error) {
+        this.platform.log.debug(`Could not remove burner service: ${error}`);
       }
-    } catch (error) {
-      this.platform.log.error('Error setting target heating cooling state:', error);
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+
+    // Create burner status service (read-only switch)
+    const installationName = this.installation.description;
+    const burnerServiceName = `${installationName} Boiler Burner`;
+    this.burnerService = this.accessory.addService(this.platform.Service.Switch, burnerServiceName, 'boiler-burner');
+    
+    this.burnerService.setCharacteristic(this.platform.Characteristic.Name, burnerServiceName);
+    this.burnerService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.states.BurnerActive)
+      .onSet(async (value: CharacteristicValue) => {
+        // Burner is read-only, restore previous state
+        setTimeout(() => {
+          this.burnerService?.updateCharacteristic(this.platform.Characteristic.On, this.states.BurnerActive);
+        }, 100);
+        this.platform.log.warn('Burner state is read-only and controlled automatically by the system');
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
+      });
+  }
+
+  private setupModulationService() {
+    // Remove existing modulation services first
+    const existingModulationService = this.accessory.services.find(service => 
+      service.UUID === this.platform.Service.Lightbulb.UUID && 
+      service.subtype === 'boiler-modulation'
+    );
+
+    if (existingModulationService) {
+      try {
+        this.accessory.removeService(existingModulationService);
+        this.platform.log.debug('Removed existing modulation service');
+      } catch (error) {
+        this.platform.log.debug(`Could not remove modulation service: ${error}`);
+      }
+    }
+
+    // Create modulation service using Lightbulb with brightness (read-only)
+    const installationName = this.installation.description;
+    const modulationServiceName = `${installationName} Boiler Modulation`;
+    this.modulationService = this.accessory.addService(this.platform.Service.Lightbulb, modulationServiceName, 'boiler-modulation');
+    
+    this.modulationService.setCharacteristic(this.platform.Characteristic.Name, modulationServiceName);
+    
+    this.modulationService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.states.Modulation > 0)
+      .onSet(async (value: CharacteristicValue) => {
+        // Modulation is read-only, restore previous state
+        setTimeout(() => {
+          this.modulationService?.updateCharacteristic(this.platform.Characteristic.On, this.states.Modulation > 0);
+        }, 100);
+        this.platform.log.warn('Modulation is read-only and controlled automatically by the system');
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
+      });
+
+    this.modulationService.getCharacteristic(this.platform.Characteristic.Brightness)
+      .onGet(() => this.states.Modulation)
+      .onSet(async (value: CharacteristicValue) => {
+        // Modulation is read-only, restore previous state
+        setTimeout(() => {
+          this.modulationService?.updateCharacteristic(this.platform.Characteristic.Brightness, this.states.Modulation);
+        }, 100);
+        this.platform.log.warn('Modulation level is read-only and controlled automatically by the system');
+        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
+      })
+      .setProps({
+        minValue: 0,
+        maxValue: 100,
+        minStep: 1,
+      });
   }
 
   async getCurrentTemperature(): Promise<CharacteristicValue> {
     return this.states.CurrentTemperature;
   }
 
-  async getTargetTemperature(): Promise<CharacteristicValue> {
-    return this.states.TargetTemperature;
+  async getHeatingThresholdTemperature(): Promise<CharacteristicValue> {
+    return Math.min(Math.max(this.states.HeatingThresholdTemperature, this.temperatureConstraints.min), this.temperatureConstraints.max);
   }
 
-  async setTargetTemperature(value: CharacteristicValue) {
+  async setHeatingThresholdTemperature(value: CharacteristicValue) {
+    if (!this.supportsTemperatureControl) {
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
+    }
+
     const temperature = value as number;
-    this.states.TargetTemperature = temperature;
+    
+    if (temperature < this.temperatureConstraints.min || temperature > this.temperatureConstraints.max) {
+      this.platform.log.error(`Invalid boiler temperature: ${temperature}°C (must be between ${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C)`);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+    
+    this.states.HeatingThresholdTemperature = temperature;
 
     try {
-      // Set boiler temperature
       const success = await this.platform.viessmannAPI.executeCommand(
         this.installation.id,
         this.gateway.serial,
@@ -161,104 +328,93 @@ export class ViessmannBoilerAccessory {
       );
 
       if (success) {
-        this.platform.log.info(`Set boiler target temperature to: ${temperature}°C`);
+        this.platform.log.info(`Boiler target temperature set to: ${temperature}°C`);
       } else {
         this.platform.log.error(`Failed to set boiler target temperature to: ${temperature}°C`);
-        throw new Error('Failed to set target temperature');
+        throw new Error('Failed to set boiler target temperature');
       }
     } catch (error) {
-      this.platform.log.error('Error setting target temperature:', error);
+      this.platform.log.error('Error setting boiler target temperature:', error);
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
-  }
-
-  async getTemperatureDisplayUnits(): Promise<CharacteristicValue> {
-    return this.states.TemperatureDisplayUnits;
-  }
-
-  async setTemperatureDisplayUnits(value: CharacteristicValue) {
-    this.states.TemperatureDisplayUnits = value as number;
   }
 
   private async handleUpdate(features: any[]) {
     try {
       await this.updateFromFeatures(features);
     } catch (error) {
-      this.platform.log.error('Error handling update:', error);
-    }
-  }
-
-  private async updateStatus() {
-    try {
-      const features = await this.platform.viessmannAPI.getDeviceFeatures(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id
-      );
-      
-      await this.updateFromFeatures(features);
-    } catch (error) {
-      this.platform.log.error('Error updating boiler status:', error);
+      this.platform.log.error('Error handling boiler update:', error);
     }
   }
 
   private async updateFromFeatures(features: any[]) {
-    // Update boiler temperature
-    const boilerTempFeature = features.find(f => f.feature === 'heating.boiler.sensors.temperature.main');
+    // Update boiler current temperature (common supply temperature)
+    const boilerTempFeature = features.find(f => f.feature === 'heating.boiler.sensors.temperature.commonSupply');
     if (boilerTempFeature?.properties?.value?.value !== undefined) {
       this.states.CurrentTemperature = boilerTempFeature.properties.value.value;
-      this.service.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
     }
 
     // Update boiler target temperature
     const boilerTargetTempFeature = features.find(f => f.feature === 'heating.boiler.temperature');
-    if (boilerTargetTempFeature?.properties?.value?.value !== undefined) {
-      this.states.TargetTemperature = boilerTargetTempFeature.properties.value.value;
-      this.service.updateCharacteristic(this.platform.Characteristic.TargetTemperature, this.states.TargetTemperature);
-    }
-
-    // Update operating state based on burner status
-    const burnerFeature = features.find(f => f.feature.includes('heating.burners.0'));
-    if (burnerFeature?.properties?.active?.value !== undefined) {
-      const isActive = burnerFeature.properties.active.value;
-      this.states.CurrentHeatingCoolingState = isActive ? 
-        this.platform.Characteristic.CurrentHeatingCoolingState.HEAT : 
-        this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
-      
-      this.service.updateCharacteristic(
-        this.platform.Characteristic.CurrentHeatingCoolingState, 
-        this.states.CurrentHeatingCoolingState
-      );
-    }
-
-    // Update operating mode
-    const operatingModeFeature = features.find(f => f.feature === 'heating.circuits.0.operating.modes.active');
-    if (operatingModeFeature?.properties?.value?.value !== undefined) {
-      const mode = operatingModeFeature.properties.value.value;
-      let targetState: number;
-      
-      switch (mode) {
-        case 'standby':
-          targetState = this.platform.Characteristic.TargetHeatingCoolingState.OFF;
-          break;
-        case 'heating':
-          targetState = this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
-          break;
-        case 'dhwAndHeating':
-        case 'dhwAndHeatingCooling':
-          targetState = this.platform.Characteristic.TargetHeatingCoolingState.AUTO;
-          break;
-        default:
-          targetState = this.platform.Characteristic.TargetHeatingCoolingState.OFF;
+    if (boilerTargetTempFeature?.properties?.value?.value !== undefined && this.supportsTemperatureControl) {
+      const targetTemp = boilerTargetTempFeature.properties.value.value;
+      if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
+        this.states.HeatingThresholdTemperature = targetTemp;
+        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemp);
       }
-      
-      this.states.TargetHeatingCoolingState = targetState;
-      this.service.updateCharacteristic(
-        this.platform.Characteristic.TargetHeatingCoolingState, 
-        this.states.TargetHeatingCoolingState
-      );
     }
 
-    this.platform.log.debug('Updated boiler accessory state:', this.states);
+    // Update burner status
+    const burnerFeature = features.find(f => f.feature === 'heating.burners.0');
+    if (burnerFeature?.properties?.active?.value !== undefined) {
+      const newBurnerState = burnerFeature.properties.active.value;
+      if (newBurnerState !== this.states.BurnerActive) {
+        this.states.BurnerActive = newBurnerState;
+        this.currentBurnerState = newBurnerState;
+        
+        // Update HeaterCooler active state
+        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
+          newBurnerState ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
+        
+        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState,
+          newBurnerState ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
+                           this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE);
+        
+        if (this.burnerService) {
+          this.burnerService.updateCharacteristic(this.platform.Characteristic.On, newBurnerState);
+        }
+        
+        this.platform.log.debug(`Boiler burner ${newBurnerState ? 'activated' : 'deactivated'}`);
+      }
+    }
+
+    // Update modulation
+    const modulationFeature = features.find(f => f.feature === 'heating.burners.0.modulation');
+    if (modulationFeature?.properties?.value?.value !== undefined) {
+      const newModulation = modulationFeature.properties.value.value;
+      if (newModulation !== this.states.Modulation) {
+        this.states.Modulation = newModulation;
+        this.currentModulation = newModulation;
+        
+        if (this.modulationService) {
+          this.modulationService.updateCharacteristic(this.platform.Characteristic.On, newModulation > 0);
+          this.modulationService.updateCharacteristic(this.platform.Characteristic.Brightness, newModulation);
+        }
+        
+        this.platform.log.debug(`Boiler modulation: ${newModulation}%`);
+      }
+    }
+
+    // Update burner statistics
+    const statisticsFeature = features.find(f => f.feature === 'heating.burners.0.statistics');
+    if (statisticsFeature?.properties?.hours?.value !== undefined) {
+      this.states.BurnerHours = statisticsFeature.properties.hours.value;
+    }
+    if (statisticsFeature?.properties?.starts?.value !== undefined) {
+      this.states.BurnerStarts = statisticsFeature.properties.starts.value;
+    }
+
+    this.platform.log.debug(`Boiler Status - Temp: ${this.states.CurrentTemperature}°C → ${this.states.HeatingThresholdTemperature}°C, Burner: ${this.states.BurnerActive ? 'ON' : 'OFF'}, Modulation: ${this.states.Modulation}%`);
   }
 }
