@@ -54,6 +54,12 @@ export const DEFAULT_CONFIG = {
     deviceUpdateDelay: 1000,
     userAgent: `homebridge-viessmann-vicare/${PLUGIN_VERSION}`,
   },
+  monitoring: {
+    enableHealthReports: true,
+    healthReportInterval: 3600000, // 1 hour
+    enablePerformanceTracking: true,
+    maxPerformanceHistory: 100,
+  },  
 };
 
 /**
