@@ -3,145 +3,13 @@ import axios, { AxiosInstance, AxiosResponse, AxiosError, InternalAxiosRequestCo
 import { AuthManager } from './auth-manager';
 import { RateLimitManager, RateLimitConfig } from './rate-limit-manager';
 import { APICache, CacheConfig } from './api-cache';
+import { APIHealthMonitor, APIMetrics } from './api-health-monitor';
 
 // Create our own interface that extends the Axios config
 interface AxiosRequestConfigWithMetadata extends InternalAxiosRequestConfig {
   metadata?: {
     startTime: number;
   };
-}
-
-// Simplified health monitor to avoid import issues
-interface APIMetrics {
-  totalRequests: number;
-  successfulRequests: number;
-  failedRequests: number;
-  rateLimitHits: number;
-  averageResponseTime: number;
-  lastSuccessfulRequest: number;
-  lastFailedRequest: number;
-  healthScore: number;
-  uptime: number;
-  requestsPerMinute: number;
-  errorRate: number;
-  lastResetTime: number;
-}
-
-class SimpleAPIHealthMonitor {
-  private metrics!: APIMetrics;
-  private responseTimes: number[] = [];
-  private requestTimestamps: number[] = [];
-  private readonly maxResponseTimeHistory = 50;
-  private readonly startTime: number;
-
-  constructor(private readonly log?: Logger) {
-    this.startTime = Date.now();
-    this.resetMetrics();
-  }
-
-  private resetMetrics(): void {
-    this.metrics = {
-      totalRequests: 0,
-      successfulRequests: 0,
-      failedRequests: 0,
-      rateLimitHits: 0,
-      averageResponseTime: 0,
-      lastSuccessfulRequest: 0,
-      lastFailedRequest: 0,
-      healthScore: 100,
-      uptime: 0,
-      requestsPerMinute: 0,
-      errorRate: 0,
-      lastResetTime: Date.now()
-    };
-  }
-
-  public recordRequest(success: boolean, responseTime: number): void {
-    const now = Date.now();
-    
-    this.metrics.totalRequests++;
-    this.requestTimestamps.push(now);
-    
-    if (success) {
-      this.metrics.successfulRequests++;
-      this.metrics.lastSuccessfulRequest = now;
-    } else {
-      this.metrics.failedRequests++;
-      this.metrics.lastFailedRequest = now;
-    }
-    
-    // Track response times
-    this.responseTimes.push(responseTime);
-    if (this.responseTimes.length > this.maxResponseTimeHistory) {
-      this.responseTimes.shift();
-    }
-    
-    // Clean old request timestamps (keep only last hour)
-    const oneHourAgo = now - (60 * 60 * 1000);
-    this.requestTimestamps = this.requestTimestamps.filter(timestamp => timestamp > oneHourAgo);
-    
-    this.updateCalculatedMetrics();
-  }
-
-  public recordRateLimit(): void {
-    this.metrics.rateLimitHits++;
-    this.updateCalculatedMetrics();
-  }
-
-  private updateCalculatedMetrics(): void {
-    const now = Date.now();
-    
-    // Calculate average response time
-    if (this.responseTimes.length > 0) {
-      this.metrics.averageResponseTime = this.responseTimes.reduce((sum, time) => sum + time, 0) / this.responseTimes.length;
-    }
-    
-    // Calculate error rate
-    if (this.metrics.totalRequests > 0) {
-      this.metrics.errorRate = (this.metrics.failedRequests / this.metrics.totalRequests) * 100;
-    }
-    
-    // Calculate requests per minute (based on last hour)
-    const oneMinuteAgo = now - (60 * 1000);
-    const recentRequests = this.requestTimestamps.filter(timestamp => timestamp > oneMinuteAgo);
-    this.metrics.requestsPerMinute = recentRequests.length;
-    
-    // Calculate uptime
-    this.metrics.uptime = now - this.startTime;
-    
-    // Calculate health score (simplified)
-    const recentWindow = 5 * 60 * 1000; // 5 minutes
-    const recentRequests2 = this.requestTimestamps.filter(timestamp => timestamp > (now - recentWindow));
-    
-    if (recentRequests2.length === 0) {
-      this.metrics.healthScore = 75;
-      return;
-    }
-    
-    let score = 100;
-    
-    // Success rate impact
-    const successRate = this.metrics.totalRequests > 0 ? (this.metrics.successfulRequests / this.metrics.totalRequests) : 1;
-    score -= (1 - successRate) * 40;
-    
-    // Response time impact
-    if (this.metrics.averageResponseTime > 5000) {
-      score -= 20;
-    } else if (this.metrics.averageResponseTime > 2000) {
-      score -= 10;
-    }
-    
-    this.metrics.healthScore = Math.max(0, Math.min(100, score));
-  }
-
-  public getHealthScore(): number {
-    return Math.round(this.metrics.healthScore);
-  }
-
-  public getMetrics(): APIMetrics {
-    this.updateCalculatedMetrics();
-    return { ...this.metrics };
-  }
 }
 
 export interface APIClientConfig extends RateLimitConfig {
@@ -155,7 +23,7 @@ export interface APIClientConfig extends RateLimitConfig {
 export class APIClient {
   private readonly baseURL = 'https://api.viessmann.com';
   private readonly httpClient: AxiosInstance;
-  private readonly healthMonitor: SimpleAPIHealthMonitor;
+  private readonly healthMonitor: APIHealthMonitor;
   private readonly rateLimitManager: RateLimitManager;
   private readonly cache: APICache;
 
@@ -164,8 +32,8 @@ export class APIClient {
     private readonly config: APIClientConfig,
     private readonly authManager: AuthManager
   ) {
-    // Initialize health monitor
-    this.healthMonitor = new SimpleAPIHealthMonitor(this.log);
+    // Initialize advanced health monitor
+    this.healthMonitor = new APIHealthMonitor(this.log);
     
     // Initialize cache system
     this.cache = new APICache(config.cache || this.getDefaultCacheConfig(), this.log);
@@ -175,7 +43,7 @@ export class APIClient {
     
     // Setup HTTP client with proper base URL
     this.httpClient = axios.create({
-      baseURL: this.baseURL, // This is the critical fix!
+      baseURL: this.baseURL,
       timeout: this.config.requestTimeout,
       headers: {
         'User-Agent': this.config.userAgent || 'homebridge-viessmann-vicare/2.0.0',
@@ -188,6 +56,9 @@ export class APIClient {
 
     this.log.debug(`🔗 API Client initialized with base URL: ${this.baseURL}`);
     this.setupInterceptors();
+    
+    // Start periodic health monitoring
+    this.startHealthMonitoring();
   }
 
   private getDefaultCacheConfig(): CacheConfig {
@@ -244,7 +115,7 @@ export class APIClient {
     // Add response interceptor for handling rate limit responses and caching
     this.httpClient.interceptors.response.use(
       (response) => {
-        // Track metrics
+        // Track metrics with advanced health monitor
         const config = response.config as AxiosRequestConfigWithMetadata;
         const duration = Date.now() - (config.metadata?.startTime || Date.now());
         this.healthMonitor.recordRequest(true, duration);
@@ -259,7 +130,7 @@ export class APIClient {
         return response;
       },
       (error: AxiosError) => {
-        // Track metrics
+        // Track metrics with advanced health monitor
         const config = error.config as AxiosRequestConfigWithMetadata;
         const duration = Date.now() - (config?.metadata?.startTime || Date.now());
         this.healthMonitor.recordRequest(false, duration);
@@ -284,6 +155,20 @@ export class APIClient {
         return Promise.reject(error);
       }
     );
+  }
+
+  private startHealthMonitoring(): void {
+    // Reset metrics daily to prevent memory bloat
+    setInterval(() => {
+      this.healthMonitor.resetMetricsIfNeeded();
+    }, 60 * 60 * 1000); // Check every hour
+
+    // Log detailed health report every 6 hours
+    setInterval(() => {
+      if (this.config.enableApiMetrics) {
+        this.healthMonitor.logHealthReport();
+      }
+    }, 6 * 60 * 60 * 1000); // Every 6 hours
   }
 
   public async makeAPICall<T>(
@@ -416,8 +301,32 @@ export class APIClient {
     return this.rateLimitManager.getRateLimitStatus();
   }
 
-  public getAPIMetrics() {
+  public getAPIMetrics(): APIMetrics {
     return this.healthMonitor.getMetrics();
+  }
+
+  public getAPIHealthScore(): number {
+    return this.healthMonitor.getHealthScore();
+  }
+
+  public getAPIHealthStatus(): 'excellent' | 'good' | 'fair' | 'poor' | 'critical' {
+    return this.healthMonitor.getHealthStatus();
+  }
+
+  public getDetailedHealthStatus() {
+    return this.healthMonitor.getDetailedStatus();
+  }
+
+  public getPerformanceHistory() {
+    return this.healthMonitor.getPerformanceHistory();
+  }
+
+  public exportPerformanceData() {
+    return this.healthMonitor.exportPerformanceData();
+  }
+
+  public logHealthReport(): void {
+    this.healthMonitor.logHealthReport();
   }
 
   public getCacheStats() {
