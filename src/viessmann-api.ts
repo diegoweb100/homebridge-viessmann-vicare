@@ -3,6 +3,7 @@ import { AuthManager, AuthConfig } from './auth-manager';
 import { APIClient, APIClientConfig } from './api-client';
 import { ViessmannAPIEndpoints, ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
 import { CacheConfig, CacheStats } from './api-cache';
+import { APIMetrics } from './api-health-monitor';
 import axios from 'axios';
 
 // Simple network utility functions inline (avoiding external dependency)
@@ -53,6 +54,31 @@ export interface ViessmannPlatformConfig extends AuthConfig {
     userAgent?: string;
   };
   
+// 🆕 NUOVA SEZIONE per nomi personalizzati
+  customNames?: {
+    installationPrefix?: string;           // "Casa" invece di "HomeName/ID"
+    boiler?: string;                      // "Caldaia" invece di "Boiler"
+    dhw?: string;                         // "Acqua Calda" invece di "Hot Water"
+    heatingCircuit?: string;              // "Riscaldamento" invece di "Heating Circuit"
+    
+    // Programmi temperatura
+    reduced?: string;                     // "Ridotto" invece di "Reduced"
+    normal?: string;                      // "Normale" invece di "Normal"
+    comfort?: string;                     // "Comfort" (stesso)
+    
+    // Modalità DHW
+    eco?: string;                         // "Eco" (stesso)
+    off?: string;                         // "Spento" invece di "Off"
+    
+    // Altri componenti
+    burner?: string;                      // "Bruciatore" invece di "Burner"
+    modulation?: string;                  // "Modulazione" invece di "Modulation"
+    
+    // Quick selections
+    holiday?: string;                     // "Vacanza" invece di "Holiday Mode"
+    holidayAtHome?: string;               // "Vacanza Casa" invece di "Holiday At Home"
+    extendedHeating?: string;             // "Riscaldamento Extra" invece di "Extended Heating"
+  };  
   // Cache configuration
   cache?: {
     enabled?: boolean;
@@ -70,22 +96,6 @@ export interface ViessmannPlatformConfig extends AuthConfig {
 
 // Re-export types for backward compatibility
 export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice };
-
-// Export APIMetrics type to fix return type issue
-export interface APIMetrics {
-  totalRequests: number;
-  successfulRequests: number;
-  failedRequests: number;
-  rateLimitHits: number;
-  averageResponseTime: number;
-  lastSuccessfulRequest: number;
-  lastFailedRequest: number;
-  healthScore: number;
-  uptime: number;
-  requestsPerMinute: number;
-  errorRate: number;
-  lastResetTime: number;
-}
 
 export class ViessmannAPI {
   private readonly authManager: AuthManager;
@@ -276,6 +286,68 @@ export class ViessmannAPI {
 
   public getAPIMetrics(): APIMetrics {
     return this.apiClient.getAPIMetrics();
+  }
+
+  // 🆕 NEW: Advanced Health Monitoring Methods
+  public getAPIHealthScore(): number {
+    return this.apiClient.getAPIHealthScore();
+  }
+
+  public getAPIHealthStatus(): 'excellent' | 'good' | 'fair' | 'poor' | 'critical' {
+    return this.apiClient.getAPIHealthStatus();
+  }
+
+  public getDetailedHealthStatus() {
+    return this.apiClient.getDetailedHealthStatus();
+  }
+
+  public getPerformanceHistory() {
+    return this.apiClient.getPerformanceHistory();
+  }
+
+  public exportPerformanceData() {
+    return this.apiClient.exportPerformanceData();
+  }
+
+  public logHealthReport(): void {
+    this.apiClient.logHealthReport();
+  }
+
+  // 🆕 NEW: Complete System Status Overview
+  public getSystemStatus() {
+    const rateLimitStatus = this.getRateLimitStatus();
+    const tokenStatus = this.getTokenStatus();
+    const healthStatus = this.getDetailedHealthStatus();
+    const cacheStats = this.getCacheStats();
+
+    return {
+      overall: {
+        status: healthStatus.status,
+        score: healthStatus.score,
+        emoji: healthStatus.emoji
+      },
+      authentication: {
+        hasTokens: tokenStatus.hasTokens,
+        expiresInSeconds: tokenStatus.expiresInSeconds,
+        hasRefreshToken: tokenStatus.hasRefreshToken
+      },
+      rateLimiting: {
+        isLimited: rateLimitStatus.isLimited,
+        waitSeconds: rateLimitStatus.waitSeconds,
+        retryCount: rateLimitStatus.retryCount,
+        dailyQuotaExceeded: rateLimitStatus.dailyQuotaExceeded
+      },
+      performance: {
+        healthScore: healthStatus.score,
+        issues: healthStatus.issues,
+        recommendations: healthStatus.recommendations
+      },
+      cache: cacheStats ? {
+        hitRate: cacheStats.hitRate,
+        totalEntries: cacheStats.totalEntries,
+        memoryUsage: cacheStats.memoryUsage
+      } : null
+    };
   }
 
   public getCacheStats(): CacheStats | null {
