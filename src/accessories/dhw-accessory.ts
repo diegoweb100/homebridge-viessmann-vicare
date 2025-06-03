@@ -206,29 +206,45 @@ export class ViessmannDHWAccessory {
 
     // Heating Threshold Temperature (target temperature for heating)
     if (this.supportsTemperatureControl) {
-      // Ensure the current value is within constraints before setting props
-      const validTemp = Math.min(Math.max(this.states.HeatingThresholdTemperature, this.temperatureConstraints.min), this.temperatureConstraints.max);
+      // Validate and fix temperature constraints
+      let minTemp = this.temperatureConstraints.min;
+      let maxTemp = this.temperatureConstraints.max;
       
-      // Validate constraints one more time before setting props
-      if (this.temperatureConstraints.min >= this.temperatureConstraints.max) {
-        this.platform.log.error(`Invalid temperature constraints: min=${this.temperatureConstraints.min}, max=${this.temperatureConstraints.max}. Fixing...`);
-        this.temperatureConstraints = { min: 30, max: 60 };
+      // Ensure constraints are valid
+      if (minTemp >= maxTemp || minTemp < 0 || maxTemp > 100) {
+        this.platform.log.warn(`Invalid DHW temperature constraints from API: min=${minTemp}, max=${maxTemp}. Using safe defaults.`);
+        minTemp = 30;
+        maxTemp = 60;
+        this.temperatureConstraints = { min: minTemp, max: maxTemp };
       }
       
-      this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
-        .updateValue(validTemp) // Set valid value FIRST
-        .onGet(this.getHeatingThresholdTemperature.bind(this))
-        .onSet(this.setHeatingThresholdTemperature.bind(this))
-        .setProps({
-          minValue: this.temperatureConstraints.min,
-          maxValue: this.temperatureConstraints.max,
-          minStep: 1,
-        });
-
-      // Update internal state
-      this.states.HeatingThresholdTemperature = validTemp;
+      // Ensure the current target temperature is within valid bounds
+      let targetTemp = this.states.HeatingThresholdTemperature;
+      if (targetTemp < minTemp || targetTemp > maxTemp) {
+        targetTemp = Math.max(minTemp, Math.min(maxTemp, 50)); // Default to 50°C if out of range
+        this.states.HeatingThresholdTemperature = targetTemp;
+        this.platform.log.warn(`DHW target temperature was out of range, set to ${targetTemp}°C`);
+      }
       
-      this.platform.log.debug(`DHW HeatingThresholdTemperature configured: value=${validTemp}°C, range=${this.temperatureConstraints.min}-${this.temperatureConstraints.max}°C`);
+      // Get the characteristic reference
+      const heatingThresholdChar = this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature);
+      
+      // First, set a valid initial value within the new range
+      heatingThresholdChar.updateValue(targetTemp);
+      
+      // Then configure the properties
+      heatingThresholdChar.setProps({
+        minValue: minTemp,
+        maxValue: maxTemp,
+        minStep: 1,
+      });
+      
+      // Finally, set up the handlers
+      heatingThresholdChar
+        .onGet(this.getHeatingThresholdTemperature.bind(this))
+        .onSet(this.setHeatingThresholdTemperature.bind(this));
+      
+      this.platform.log.debug(`DHW HeatingThresholdTemperature configured: value=${targetTemp}°C, range=${minTemp}-${maxTemp}°C`);
     }
 
     // Temperature Display Units
