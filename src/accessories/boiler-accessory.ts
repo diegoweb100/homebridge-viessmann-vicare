@@ -1,6 +1,7 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice } from '../platform';
 
+
 export class ViessmannBoilerAccessory {
   private heaterCoolerService: Service;
   private informationService: Service;
