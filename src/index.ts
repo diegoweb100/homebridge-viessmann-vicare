@@ -7,5 +7,5 @@ import { ViessmannPlatform } from './platform';
  * This method registers the platform with Homebridge
  */
 export = (api: API) => {
-  api.registerPlatform(PLATFORM_NAME, ViessmannPlatform);
+  api.registerPlatform(PLATFORM_NAME, ViessmannPlatform as any);
 };
