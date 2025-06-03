@@ -360,9 +360,19 @@ export class ViessmannHeatingCircuitAccessory {
     // Remove existing temperature program services first
     this.removeAllTemperatureProgramServices();
 
+    // Helper function to sanitize service names for HomeKit
+    const sanitizeName = (name: string): string => {
+      // Remove special characters, keep only alphanumeric, spaces, and apostrophes
+      // Also remove parentheses and temperature symbols that HomeKit doesn't like
+      return name
+        .replace(/[^\w\s']/g, ' ') // Replace special chars with spaces
+        .replace(/\s+/g, ' ')      // Collapse multiple spaces
+        .trim();                   // Remove leading/trailing spaces
+    };
+
     // Create services for each available temperature program
     if (this.availablePrograms.includes('reduced')) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Ridotta (${this.programTemperatures.reduced}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Reduced ${this.programTemperatures.reduced}C`);
       this.ridottaService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-reduced`);
       this.ridottaService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
       this.ridottaService.getCharacteristic(this.platform.Characteristic.On)
@@ -371,7 +381,7 @@ export class ViessmannHeatingCircuitAccessory {
     }
 
     if (this.availablePrograms.includes('normal')) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Normale (${this.programTemperatures.normal}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Normal ${this.programTemperatures.normal}C`);
       this.normaleService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-normal`);
       this.normaleService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
       this.normaleService.getCharacteristic(this.platform.Characteristic.On)
@@ -380,7 +390,7 @@ export class ViessmannHeatingCircuitAccessory {
     }
 
     if (this.availablePrograms.includes('comfort')) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Comfort (${this.programTemperatures.comfort}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Comfort ${this.programTemperatures.comfort}C`);
       this.comfortService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-comfort`);
       this.comfortService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
@@ -1268,19 +1278,27 @@ export class ViessmannHeatingCircuitAccessory {
   private updateServiceNames() {
     const installationName = this.installation.description;
     
+    // Helper function to sanitize service names for HomeKit
+    const sanitizeName = (name: string): string => {
+      return name
+        .replace(/[^\w\s']/g, ' ') // Replace special chars with spaces
+        .replace(/\s+/g, ' ')      // Collapse multiple spaces
+        .trim();                   // Remove leading/trailing spaces
+    };
+    
     // Update service names to show current temperatures
     if (this.ridottaService) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Ridotta (${this.programTemperatures.reduced}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Reduced ${this.programTemperatures.reduced}C`);
       this.ridottaService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
     }
     
     if (this.normaleService) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Normale (${this.programTemperatures.normal}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Normal ${this.programTemperatures.normal}C`);
       this.normaleService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
     }
     
     if (this.comfortService) {
-      const serviceName = `${installationName} HC${this.circuitNumber} Comfort (${this.programTemperatures.comfort}°C)`;
+      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Comfort ${this.programTemperatures.comfort}C`);
       this.comfortService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
     }
   }
