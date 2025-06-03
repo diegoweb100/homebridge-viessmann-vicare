@@ -26,6 +26,42 @@ A comprehensive Homebridge plugin for Viessmann heating systems with **full cont
 - **🎛️ Easy configuration**: Full support for Homebridge Config UI X with all parameters exposed
 - **🎯 Native integration**: Complete compatibility with Apple Home app and Siri controls
 
+## 🏗️ Plugin Architecture (v2.0)
+
+The plugin has been completely refactored into a modular architecture for better maintainability and debugging:
+
+### Core Modules
+
+```
+src/
+├── 🔐 auth-manager.ts           # OAuth2 authentication & token management
+├── 🛡️ rate-limit-manager.ts    # API rate limiting protection
+├── 📡 api-client.ts             # HTTP client with retry logic
+├── 🌐 viessmann-api-endpoints.ts # Viessmann-specific API calls
+├── 🔧 network-utils.ts          # Network utilities (IP, browser)
+├── 💾 api-cache.ts              # Intelligent multi-layer caching
+├── 📊 api-health-monitor.ts     # Performance monitoring
+└── 🎯 viessmann-api.ts          # Main API facade
+```
+
+### Benefits
+
+- **🐛 Better Debugging**: Each module handles specific errors
+- **🚀 Improved Performance**: Specialized caching and retry logic  
+- **🛡️ Enhanced Reliability**: Advanced rate limiting protection
+- **🔧 Easier Maintenance**: Modular, testable code structure
+- **📊 Better Monitoring**: Real-time performance metrics
+
+### Debugging Guide
+
+**Authentication Issues** → Check `auth-manager.ts` logs
+**Rate Limiting** → Monitor `rate-limit-manager.ts` output  
+**Performance** → Review `api-client.ts` and cache metrics
+**API Errors** → Debug `viessmann-api-endpoints.ts` parsing
+**Network Issues** → Examine `network-utils.ts` detection
+
+For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## 🆕 What's New in v2.0
 
 - **🛡️ Advanced Rate Limiting Protection**: Intelligent handling of Viessmann API rate limits (429 errors)
@@ -188,6 +224,109 @@ All parameters are now configurable through the Homebridge Config UI X interface
 - `advanced.maxConsecutiveErrors`: Max consecutive errors
 - `advanced.deviceUpdateDelay`: Delay between device updates
 - `advanced.userAgent`: Custom User-Agent string
+
+## 🔧 Advanced Troubleshooting (v2.0)
+
+### 🔍 Modular Debugging
+
+With the new modular architecture, you can pinpoint issues more precisely:
+
+#### 🔐 Authentication Issues
+**Module**: `auth-manager.ts`
+```bash
+# Check debug logs for:
+[AuthManager] 🔑 Using existing valid token
+[AuthManager] ⚠️ Token refresh failed, will try to get new tokens
+[AuthManager] ✅ Authentication successful! Access and refresh tokens acquired
+```
+
+**Solutions:**
+- Check token storage: `~/.homebridge/viessmann-tokens.json`
+- Verify OAuth redirect URI configuration
+- Try manual authentication method
+
+#### 🛡️ Rate Limiting Protection  
+**Module**: `rate-limit-manager.ts`
+```bash
+# Look for these patterns:
+[RateLimitManager] ⚠️ Rate limit exceeded (429). Blocked for X seconds
+[RateLimitManager] 🚫 Daily API quota exceeded
+[RateLimitManager] ✅ Rate limit has been reset - API calls can resume
+```
+
+**Auto-Recovery Features:**
+- Automatic exponential backoff
+- Cache TTL extension during rate limiting
+- Daily quota detection and management
+- Intelligent retry scheduling
+
+#### 📡 API Client Issues
+**Module**: `api-client.ts`
+```bash
+# Monitor for:
+[APIClient] 💨 Cache hit for getDeviceFeatures
+[APIClient] 🔄 Retrying 'getInstallations' in X seconds
+[APIClient] ✅ API call succeeded after X retries
+```
+
+**Performance Metrics:**
+- Cache hit rates (target: >80%)
+- Response times and retry counts
+- Health scores and success rates
+
+#### 🌐 Network & Environment
+**Module**: `network-utils.ts`
+```bash
+# Environment detection:
+[NetworkUtils] 🖥️ Detected headless Linux environment
+[NetworkUtils] 🐳 Detected container environment  
+[NetworkUtils] 🌐 Opening browser for authentication
+```
+
+### 📊 Real-Time Monitoring
+
+Enable comprehensive monitoring with:
+```json
+{
+    "debug": true,
+    "enableApiMetrics": true,
+    "cache": {
+        "enabled": true
+    }
+}
+```
+
+**Key Metrics to Watch:**
+- **Cache Hit Rate**: Should be >70% for optimal performance
+- **Rate Limit Status**: Should show "OK" most of the time
+- **API Health Score**: Should be >85 for good performance
+- **Response Times**: Should be <5 seconds typically
+
+### 🔧 Module-Specific Debug Commands
+
+**Check Authentication Status:**
+```javascript
+// Available in debug logs
+this.viessmannAPI.getTokenStatus()
+```
+
+**Monitor Rate Limiting:**
+```javascript
+// Real-time rate limit status
+this.viessmannAPI.getRateLimitStatus()
+```
+
+**Cache Performance:**
+```javascript
+// Cache statistics and hit rates
+this.viessmannAPI.getCacheStats()
+```
+
+**API Health:**
+```javascript
+// Overall API performance metrics
+this.viessmannAPI.getAPIMetrics()
+```
 
 ## 🛡️ Rate Limiting Protection
 
@@ -489,7 +628,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Based on the plugin structure of [homebridge-melcloud-control](https://github.com/grzegorz914/homebridge-melcloud-control)
 - Viessmann API documentation available at [Viessmann Developer Portal](https://developer.viessmann.com/)
 - Community feedback and contributions
 
@@ -497,7 +635,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For issues and questions:
 
-1. Check the [🔧 Troubleshooting](#🔧-troubleshooting) section
+1. Check the [🔧 Troubleshooting](#🔧-advanced-troubleshooting-v20) section
 2. Search [existing issues](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)
 3. Create a new issue with:
    - Complete configuration (without passwords)
