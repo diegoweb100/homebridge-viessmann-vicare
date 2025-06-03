@@ -1,5 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
-import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice } from '../platform';
+import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 export class ViessmannDHWAccessory {
   private heaterCoolerService: Service;
@@ -37,7 +37,7 @@ export class ViessmannDHWAccessory {
       .setCharacteristic(this.platform.Characteristic.SerialNumber, gateway.serial + '-DHW')
       .setCharacteristic(this.platform.Characteristic.FirmwareRevision, '1.0.0');
 
-    // Create HeaterCooler service
+    // Create HeaterCooler service (configured for DHW use)
     this.heaterCoolerService = this.accessory.getService(this.platform.Service.HeaterCooler) || 
                                this.accessory.addService(this.platform.Service.HeaterCooler);
 
@@ -140,7 +140,7 @@ export class ViessmannDHWAccessory {
     // Remove any existing conflicting services
     this.removeConflictingServices();
 
-    // Configure HeaterCooler service
+    // Configure HeaterCooler service (optimized for DHW)
     this.setupHeaterCoolerService();
 
     // Create mode switches
@@ -204,7 +204,7 @@ export class ViessmannDHWAccessory {
         minStep: 0.1,
       });
 
-    // Heating Threshold Temperature (target temperature for heating)
+    // 🔧 CORRECTED: Use HeatingThresholdTemperature with proper range configuration
     if (this.supportsTemperatureControl) {
       // Validate and fix temperature constraints
       let minTemp = this.temperatureConstraints.min;
@@ -226,22 +226,23 @@ export class ViessmannDHWAccessory {
         this.platform.log.warn(`DHW target temperature was out of range, set to ${targetTemp}°C`);
       }
       
-      // Get the characteristic reference
+      // Use HeatingThresholdTemperature with CORRECT range setup
       const heatingThresholdChar = this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature);
       
-      // First, set a valid initial value within the new range
-      heatingThresholdChar.updateValue(targetTemp);
+      // CRITICAL FIX: Set default value to minimum before setting props to avoid 0°C validation error
+      heatingThresholdChar.value = Math.max(targetTemp, minTemp);
       
-      // Then configure the properties
+      // THEN: Set properties with correct range
       heatingThresholdChar.setProps({
         minValue: minTemp,
         maxValue: maxTemp,
         minStep: 1,
       });
       
-      // Finally, set up the handlers
+      // FINALLY: Update value and set handlers
       heatingThresholdChar
-        .onGet(this.getHeatingThresholdTemperature.bind(this))
+        .updateValue(targetTemp)
+        .onGet(() => this.states.HeatingThresholdTemperature)
         .onSet(this.setHeatingThresholdTemperature.bind(this));
       
       this.platform.log.debug(`DHW HeatingThresholdTemperature configured: value=${targetTemp}°C, range=${minTemp}-${maxTemp}°C`);
@@ -253,40 +254,90 @@ export class ViessmannDHWAccessory {
       .onSet(() => {}); // Read-only
   }
 
-  private setupModeServices() {
-    const installationName = this.installation.description;
+private setupModeServices() {
+  const config = this.platform.config as ViessmannPlatformConfig;
+  const customNames = config.customNames || {};  
+  
+  // 🔧 FIXED: Use custom names properly with fallbacks - KEEPING installation name
+  const installationName = customNames.installationPrefix || this.installation.description;
+  const dhwName = customNames.dhw || 'DHW';
+  const comfortName = customNames.comfort || 'Comfort';
+  const ecoName = customNames.eco || 'Eco';
+  const offName = customNames.off || 'Off';
 
-    // First, remove ALL existing mode services to avoid conflicts
-    this.removeAllModeServices();
+  // 🔍 DEBUG: Log dei nomi per verificare la generazione
+  this.platform.log.info(`🏷️ DHW Setup - Installation: "${installationName}", DHW: "${dhwName}"`);
+  this.platform.log.info(`🏷️ DHW Setup - Comfort: "${comfortName}", Eco: "${ecoName}", Off: "${offName}"`);
 
-    // Create services for each available mode with unique subtypes
-    if (this.availableModes.includes('comfort')) {
-      const comfortServiceName = `${installationName} Hot Water Comfort`;
-      this.comfortService = this.accessory.addService(this.platform.Service.Switch, comfortServiceName, 'hw-comfort');
-      this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
-      this.comfortService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'comfort')
-        .onSet(this.setComfortMode.bind(this));
-    }
+  // First, remove ALL existing mode services to avoid conflicts
+  this.removeAllModeServices();
 
-    if (this.availableModes.includes('eco')) {
-      const ecoServiceName = `${installationName} Hot Water Eco`;
-      this.ecoService = this.accessory.addService(this.platform.Service.Switch, ecoServiceName, 'hw-eco');
-      this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
-      this.ecoService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'eco')
-        .onSet(this.setEcoMode.bind(this));
-    }
+  // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
+  const subtypeVersion = 'v3'; // Change this when you need to force recreation
 
-    if (this.availableModes.includes('off')) {
-      const offServiceName = `${installationName} Hot Water Off`;
-      this.offService = this.accessory.addService(this.platform.Service.Switch, offServiceName, 'hw-off');
-      this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
-      this.offService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentMode === 'off')
-        .onSet(this.setOffMode.bind(this));
-    }
+  // 🔧 FIXED: Create services with installation name like other accessories
+  if (this.availableModes.includes('comfort')) {
+    // Format with installation name: "Casa Mia DHW Comfort"
+    const comfortServiceName = `${installationName} ${dhwName} ${comfortName}`;
+    this.platform.log.info(`🏷️ Creating Comfort service: "${comfortServiceName}"`);
+    
+    this.comfortService = this.accessory.addService(
+      this.platform.Service.Switch, 
+      comfortServiceName, 
+      `dhw-comfort-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+    );
+    
+    // 🔧 CRITICAL: Set both Name characteristic AND displayName
+    this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
+    this.comfortService.displayName = comfortServiceName;
+    
+    this.comfortService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.currentMode === 'comfort')
+      .onSet(this.setComfortMode.bind(this));
   }
+
+  if (this.availableModes.includes('eco')) {
+    // Format with installation name: "Casa Mia DHW Eco"
+    const ecoServiceName = `${installationName} ${dhwName} ${ecoName}`;
+    this.platform.log.info(`🏷️ Creating Eco service: "${ecoServiceName}"`);
+    
+    this.ecoService = this.accessory.addService(
+      this.platform.Service.Switch, 
+      ecoServiceName, 
+      `dhw-eco-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+    );
+    
+    // 🔧 CRITICAL: Set both Name characteristic AND displayName
+    this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
+    this.ecoService.displayName = ecoServiceName;
+    
+    this.ecoService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.currentMode === 'eco')
+      .onSet(this.setEcoMode.bind(this));
+  }
+
+  if (this.availableModes.includes('off')) {
+    // Format with installation name: "Casa Mia DHW Off"
+    const offServiceName = `${installationName} ${dhwName} ${offName}`;
+    this.platform.log.info(`🏷️ Creating Off service: "${offServiceName}"`);
+    
+    this.offService = this.accessory.addService(
+      this.platform.Service.Switch, 
+      offServiceName, 
+      `dhw-off-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+    );
+    
+    // 🔧 CRITICAL: Set both Name characteristic AND displayName  
+    this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
+    this.offService.displayName = offServiceName;
+    
+    this.offService.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.currentMode === 'off')
+      .onSet(this.setOffMode.bind(this));
+  }
+
+  this.platform.log.info(`✅ DHW mode services setup completed for modes: [${this.availableModes.join(', ')}] with subtype version: ${subtypeVersion}`);
+}
 
   private removeAllModeServices() {
     // Get all switch services and remove them
