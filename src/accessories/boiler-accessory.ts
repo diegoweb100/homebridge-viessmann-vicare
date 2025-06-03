@@ -1,5 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
-import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice } from '../platform';
+import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 
 export class ViessmannBoilerAccessory {
@@ -212,10 +212,21 @@ export class ViessmannBoilerAccessory {
   }
 
   private setupBurnerService() {
+    const config = this.platform.config as ViessmannPlatformConfig;
+    const customNames = config.customNames || {};
+  
+    // 🔧 FIXED: Use custom names properly with fallbacks
+    const installationName = customNames.installationPrefix || this.installation.description;
+    const boilerName = customNames.boiler || 'Boiler';
+    const burnerName = customNames.burner || 'Burner';
+
+    // 🔍 DEBUG: Log dei nomi per verificare la generazione
+    this.platform.log.info(`🏷️ Boiler Setup - Installation: "${installationName}", Boiler: "${boilerName}", Burner: "${burnerName}"`);
+    
     // Remove existing burner services first
     const existingBurnerService = this.accessory.services.find(service => 
       service.UUID === this.platform.Service.Switch.UUID && 
-      service.subtype === 'boiler-burner'
+      (service.subtype === 'boiler-burner' || service.subtype?.startsWith('boiler-burner-'))
     );
 
     if (existingBurnerService) {
@@ -227,12 +238,23 @@ export class ViessmannBoilerAccessory {
       }
     }
 
-    // Create burner status service (read-only switch)
-    const installationName = this.installation.description;
-    const burnerServiceName = `${installationName} Boiler Burner`;
-    this.burnerService = this.accessory.addService(this.platform.Service.Switch, burnerServiceName, 'boiler-burner');
+    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
+    const subtypeVersion = 'v3'; // Change this when you need to force recreation
+
+    // Create burner status service (read-only switch)  
+    const burnerServiceName = `${installationName} ${boilerName} ${burnerName}`;
+    this.platform.log.info(`🏷️ Creating Burner service: "${burnerServiceName}"`);
     
+    this.burnerService = this.accessory.addService(
+      this.platform.Service.Switch, 
+      burnerServiceName, 
+      `boiler-burner-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+    );
+    
+    // 🔧 CRITICAL: Set both Name characteristic AND displayName
     this.burnerService.setCharacteristic(this.platform.Characteristic.Name, burnerServiceName);
+    this.burnerService.displayName = burnerServiceName;
+    
     this.burnerService.getCharacteristic(this.platform.Characteristic.On)
       .onGet(() => this.states.BurnerActive)
       .onSet(async (value: CharacteristicValue) => {
@@ -243,13 +265,26 @@ export class ViessmannBoilerAccessory {
         this.platform.log.warn('Burner state is read-only and controlled automatically by the system');
         throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.READ_ONLY_CHARACTERISTIC);
       });
+
+    this.platform.log.info(`✅ Boiler burner service setup completed with subtype version: ${subtypeVersion}`);
   }
 
   private setupModulationService() {
+    const config = this.platform.config as ViessmannPlatformConfig;
+    const customNames = config.customNames || {};
+  
+    // 🔧 FIXED: Use custom names properly with fallbacks
+    const installationName = customNames.installationPrefix || this.installation.description;
+    const boilerName = customNames.boiler || 'Boiler';
+    const modulationName = customNames.modulation || 'Modulation';
+
+    // 🔍 DEBUG: Log dei nomi per verificare la generazione
+    this.platform.log.info(`🏷️ Boiler Setup - Installation: "${installationName}", Boiler: "${boilerName}", Modulation: "${modulationName}"`);
+    
     // Remove existing modulation services first
     const existingModulationService = this.accessory.services.find(service => 
       service.UUID === this.platform.Service.Lightbulb.UUID && 
-      service.subtype === 'boiler-modulation'
+      (service.subtype === 'boiler-modulation' || service.subtype?.startsWith('boiler-modulation-'))
     );
 
     if (existingModulationService) {
@@ -261,12 +296,22 @@ export class ViessmannBoilerAccessory {
       }
     }
 
+    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
+    const subtypeVersion = 'v3'; // Same version as burner
+
     // Create modulation service using Lightbulb with brightness (read-only)
-    const installationName = this.installation.description;
-    const modulationServiceName = `${installationName} Boiler Modulation`;
-    this.modulationService = this.accessory.addService(this.platform.Service.Lightbulb, modulationServiceName, 'boiler-modulation');
+    const modulationServiceName = `${installationName} ${boilerName} ${modulationName}`;
+    this.platform.log.info(`🏷️ Creating Modulation service: "${modulationServiceName}"`);
     
+    this.modulationService = this.accessory.addService(
+      this.platform.Service.Lightbulb, 
+      modulationServiceName, 
+      `boiler-modulation-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+    );
+    
+    // 🔧 CRITICAL: Set both Name characteristic AND displayName
     this.modulationService.setCharacteristic(this.platform.Characteristic.Name, modulationServiceName);
+    this.modulationService.displayName = modulationServiceName;
     
     this.modulationService.getCharacteristic(this.platform.Characteristic.On)
       .onGet(() => this.states.Modulation > 0)
@@ -294,6 +339,8 @@ export class ViessmannBoilerAccessory {
         maxValue: 100,
         minStep: 1,
       });
+
+    this.platform.log.info(`✅ Boiler modulation service setup completed with subtype version: ${subtypeVersion}`);
   }
 
   async getCurrentTemperature(): Promise<CharacteristicValue> {
