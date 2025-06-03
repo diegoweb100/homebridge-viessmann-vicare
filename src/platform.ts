@@ -10,59 +10,14 @@ import {
   Characteristic,
 } from 'homebridge';
 
-import { ViessmannAPI } from './viessmann-api';
+import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
+// Export types from viessmann-api-endpoints for accessories
+export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
+import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
-import { PLUGIN_NAME } from './settings'; // Import the plugin name
-
-export interface ViessmannPlatformConfig extends PlatformConfig {
-  clientId: string;
-  clientSecret?: string;
-  username: string;
-  password: string;
-  authMethod?: 'auto' | 'manual';
-  hostIp?: string;
-  redirectPort?: number;
-  accessToken?: string;
-  refreshToken?: string;
-  installationFilter?: string; // NEW: Filter installations by name
-  installationIds?: number[]; // NEW: Specific installation IDs to include
-  refreshInterval?: number;
-  debug?: boolean;
-  // NEW: Rate limiting options
-  maxRetries?: number;
-  retryDelay?: number;
-  enableRateLimitProtection?: boolean;
-}
-
-export interface ViessmannInstallation {
-  id: number;
-  description: string;
-  gateways: ViessmannGateway[];
-}
-
-export interface ViessmannGateway {
-  serial: string;
-  devices: ViessmannDevice[];
-}
-
-export interface ViessmannDevice {
-  id: string;
-  deviceType: string;
-  modelId: string;
-  status: string;
-  gatewaySerial: string;
-}
-
-export interface ViessmannFeature {
-  feature: string;
-  properties: any;
-  commands: any;
-  isEnabled: boolean;
-  isReady: boolean;
-  timestamp: string;
-}
+import { PLUGIN_NAME } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -80,14 +35,14 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
   constructor(
     public readonly log: Logger,
-    public readonly config: ViessmannPlatformConfig,
+    public readonly config: ViessmannPlatformConfig & PlatformConfig,
     public readonly api: API,
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
     this.viessmannAPI = new ViessmannAPI(this.log, this.config);
 
-    this.log.debug('Finished initializing platform:', this.config.name);
+    this.log.debug('Finished initializing platform:', this.config.name || 'Viessmann');
 
     this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => {
       log.debug('Executed didFinishLaunching callback');
@@ -98,6 +53,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
       }
+      this.viessmannAPI.cleanup();
     });
   }
 
