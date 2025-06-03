@@ -1,5 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
-import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice } from '../platform';
+import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 type ProgramType = 'reduced' | 'normal' | 'comfort';
 
@@ -354,85 +354,176 @@ export class ViessmannHeatingCircuitAccessory {
       .onSet(() => {}); // Read-only
   }
 
-  private setupTemperatureProgramServices() {
-    const installationName = this.installation.description;
+private setupTemperatureProgramServices() {
+    const config = this.platform.config as ViessmannPlatformConfig;
+    const customNames = config.customNames || {};
+    
+    // 🔧 FIXED: Use custom names properly with fallbacks
+    const installationName = customNames.installationPrefix || this.installation.description;
+    const heatingCircuitName = customNames.heatingCircuit || 'Heating Circuit';
+    const reducedName = customNames.reduced || 'Reduced';
+    const normalName = customNames.normal || 'Normal';
+    const comfortName = customNames.comfort || 'Comfort';
+
+    // 🔍 DEBUG: Log dei nomi per verificare la generazione
+    this.platform.log.info(`🏷️ HC${this.circuitNumber} Setup - Installation: "${installationName}", HC: "${heatingCircuitName}"`);
+    this.platform.log.info(`🏷️ HC${this.circuitNumber} Setup - Reduced: "${reducedName}", Normal: "${normalName}", Comfort: "${comfortName}"`);
 
     // Remove existing temperature program services first
     this.removeAllTemperatureProgramServices();
 
+    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
+    const subtypeVersion = 'v3'; // Change this when you need to force recreation
+
     // Helper function to sanitize service names for HomeKit
     const sanitizeName = (name: string): string => {
-      // Remove special characters, keep only alphanumeric, spaces, and apostrophes
-      // Also remove parentheses and temperature symbols that HomeKit doesn't like
       return name
         .replace(/[^\w\s']/g, ' ') // Replace special chars with spaces
         .replace(/\s+/g, ' ')      // Collapse multiple spaces
         .trim();                   // Remove leading/trailing spaces
     };
 
-    // Create services for each available temperature program
+    // Create services for each available temperature program - KEEPING installation name
     if (this.availablePrograms.includes('reduced')) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Reduced ${this.programTemperatures.reduced}C`);
-      this.ridottaService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-reduced`);
+      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${reducedName} ${this.programTemperatures.reduced}C`);
+      this.platform.log.info(`🏷️ Creating Reduced service: "${serviceName}"`);
+      
+      this.ridottaService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-reduced-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.ridottaService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.ridottaService.displayName = serviceName;
+      
       this.ridottaService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentProgram === 'reduced')
         .onSet(this.setReducedProgram.bind(this));
     }
 
     if (this.availablePrograms.includes('normal')) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Normal ${this.programTemperatures.normal}C`);
-      this.normaleService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-normal`);
+      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${normalName} ${this.programTemperatures.normal}C`);
+      this.platform.log.info(`🏷️ Creating Normal service: "${serviceName}"`);
+      
+      this.normaleService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-normal-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+ 
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.normaleService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.normaleService.displayName = serviceName;
+      
       this.normaleService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentProgram === 'normal')
         .onSet(this.setNormalProgram.bind(this));
     }
 
     if (this.availablePrograms.includes('comfort')) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Comfort ${this.programTemperatures.comfort}C`);
-      this.comfortService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-comfort`);
+      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${comfortName} ${this.programTemperatures.comfort}C`);
+      this.platform.log.info(`🏷️ Creating Comfort service: "${serviceName}"`);
+      
+      this.comfortService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-comfort-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.comfortService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.comfortService.displayName = serviceName;
+      
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentProgram === 'comfort')
         .onSet(this.setComfortProgram.bind(this));
     }
+
+    this.platform.log.info(`✅ HC${this.circuitNumber} temperature program services setup completed for programs: [${this.availablePrograms.join(', ')}] with subtype version: ${subtypeVersion}`);
   }
 
   private setupQuickSelectionServices() {
-    const installationName = this.installation.description;
+    const config = this.platform.config as ViessmannPlatformConfig;
+    const customNames = config.customNames || {};
+    
+    // 🔧 FIXED: Use custom names - KEEPING installation name
+    const installationName = customNames.installationPrefix || this.installation.description;
+    const holidayName = customNames.holiday || 'Holiday Mode';
+    const holidayAtHomeName = customNames.holidayAtHome || 'Holiday At Home';
+    const extendedHeatingName = customNames.extendedHeating || 'Extended Heating';
+
+    // 🔍 DEBUG: Log dei nomi
+    this.platform.log.info(`🏷️ HC${this.circuitNumber} Quick Selections - Holiday: "${holidayName}", HolidayAtHome: "${holidayAtHomeName}", Extended: "${extendedHeatingName}"`);
 
     // Remove existing quick selection services first
     this.removeAllQuickSelectionServices();
 
-    // Create services for each available quick selection
+    // 🔧 STRATEGY: Use versioned subtypes for quick selections too
+    const subtypeVersion = 'v3'; // Same version as temperature programs
+
+    // Create services for each available quick selection - KEEPING installation name
     if (this.availableQuickSelections.includes('holiday')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Holiday Mode`;
-      this.holidayService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-holiday`);
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${holidayName}`;
+      this.platform.log.info(`🏷️ Creating Holiday service: "${serviceName}"`);
+      
+      this.holidayService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-holiday-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.holidayService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.holidayService.displayName = serviceName;
+      
       this.holidayService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.states.HolidayActive)
         .onSet(this.setHolidayMode.bind(this));
     }
 
     if (this.availableQuickSelections.includes('holidayAtHome')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Holiday At Home`;
-      this.holidayAtHomeService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-holiday-at-home`);
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${holidayAtHomeName}`;
+      this.platform.log.info(`🏷️ Creating Holiday At Home service: "${serviceName}"`);
+      
+      this.holidayAtHomeService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-holiday-at-home-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.holidayAtHomeService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.holidayAtHomeService.displayName = serviceName;
+      
       this.holidayAtHomeService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.states.HolidayAtHomeActive)
         .onSet(this.setHolidayAtHomeMode.bind(this));
     }
 
     if (this.availableQuickSelections.includes('extendedHeating')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} Extended Heating`;
-      this.extendedHeatingService = this.accessory.addService(this.platform.Service.Switch, serviceName, `hc${this.circuitNumber}-extended-heating`);
+      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${extendedHeatingName}`;
+      this.platform.log.info(`🏷️ Creating Extended Heating service: "${serviceName}"`);
+      
+      this.extendedHeatingService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        serviceName, 
+        `hc${this.circuitNumber}-extended-heating-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
       this.extendedHeatingService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
+      this.extendedHeatingService.displayName = serviceName;
+      
       this.extendedHeatingService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.states.ExtendedHeatingActive)
         .onSet(this.setExtendedHeatingMode.bind(this));
     }
+
+    this.platform.log.info(`✅ HC${this.circuitNumber} quick selection services setup completed for selections: [${this.availableQuickSelections.join(', ')}] with subtype version: ${subtypeVersion}`);
   }
+
 
   private removeAllTemperatureProgramServices() {
     // Remove existing temperature program switch services
