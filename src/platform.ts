@@ -13,6 +13,7 @@ import {
 import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
 // Export types from viessmann-api-endpoints for accessories
 export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
+export { ViessmannPlatformConfig } from './viessmann-api';
 import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
@@ -28,6 +29,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
   private installations: ViessmannInstallation[] = [];
   private refreshTimer?: NodeJS.Timeout;
+  private healthMonitoringTimer?: NodeJS.Timeout;
   private isUpdating = false;
   private consecutiveErrors = 0;
   private maxConsecutiveErrors = 5;
@@ -47,12 +49,21 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => {
       log.debug('Executed didFinishLaunching callback');
       this.discoverDevices();
+      
+      // Initialize health monitoring
+      this.startHealthMonitoring();
     });
 
     this.api.on(APIEvent.SHUTDOWN, () => {
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
       }
+      
+      // Cleanup health monitoring
+      if (this.healthMonitoringTimer) {
+        clearInterval(this.healthMonitoringTimer);
+      }
+      
       this.viessmannAPI.cleanup();
     });
   }
@@ -263,7 +274,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     }
 
     const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-boiler`);
-    const displayName = `${installation.description} Boiler`;
+    const customNames = this.config.customNames || {};
+    const boilerName = customNames.boiler || 'Boiler';
+    const displayName = `${installation.description} ${boilerName}`;
 
     const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
 
@@ -295,7 +308,11 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     }
 
     const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-dhw`);
-    const displayName = `${installation.description} Hot Water`;
+    
+    // 🆕 AGGIUNTO: Supporto customNames per DHW
+    const customNames = this.config.customNames || {};
+    const dhwName = customNames.dhw || 'Hot Water';
+    const displayName = `${installation.description} ${dhwName}`;
 
     const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
 
@@ -332,7 +349,11 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       
       const circuitNumber = parseInt(match[1]);
       const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-circuit-${circuitNumber}`);
-      const displayName = `${installation.description} Heating Circuit ${circuitNumber}`;
+      
+      // 🆕 AGGIUNTO: Supporto customNames per Heating Circuit
+      const customNames = this.config.customNames || {};
+      const heatingCircuitName = customNames.heatingCircuit || 'Heating Circuit';
+      const displayName = `${installation.description} ${heatingCircuitName} ${circuitNumber}`;
 
       const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
 
@@ -460,10 +481,16 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       this.consecutiveErrors++;
     } else {
       this.log.debug(`Update cycle completed: ${successful}/${total} successful, ${errors} errors`);
+      
       // Reset error tracking on successful cycle
       if (successful > 0 && errors === 0) {
         this.consecutiveErrors = 0;
         this.adjustRefreshInterval(false);
+        
+        // Log health score periodically
+        const healthScore = this.viessmannAPI.getAPIHealthScore();
+        const healthStatus = this.viessmannAPI.getAPIHealthStatus();
+        this.log.debug(`📊 API Health: ${healthScore}/100 (${healthStatus})`);
       }
     }
   }
@@ -492,20 +519,113 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // Health Monitoring Methods
+  private startHealthMonitoring(): void {
+    if (!this.config.enableApiMetrics) {
+      return;
+    }
+
+    // Log health status every hour
+    this.healthMonitoringTimer = setInterval(() => {
+      this.logSystemHealth();
+    }, 60 * 60 * 1000); // 1 hour
+
+    this.log.info('🩺 Health monitoring started - reports every hour');
+  }
+
+  private logSystemHealth(): void {
+    try {
+      const systemStatus = this.viessmannAPI.getSystemStatus();
+      
+      this.log.info('='.repeat(60));
+      this.log.info(`${systemStatus.overall.emoji} SYSTEM HEALTH STATUS - ${systemStatus.overall.status} (${systemStatus.overall.score}/100)`);
+      this.log.info('='.repeat(60));
+      
+      // Authentication Status
+      this.log.info(`🔐 Authentication: ${systemStatus.authentication.hasTokens ? 'OK' : 'FAILED'}`);
+      if (systemStatus.authentication.expiresInSeconds) {
+        const hoursRemaining = Math.round(systemStatus.authentication.expiresInSeconds / 3600);
+        this.log.info(`   Token expires in: ${hoursRemaining} hours`);
+      }
+      
+      // Rate Limiting Status
+      if (systemStatus.rateLimiting.isLimited) {
+        this.log.warn(`🛡️ Rate Limited: Wait ${systemStatus.rateLimiting.waitSeconds} seconds`);
+        if (systemStatus.rateLimiting.dailyQuotaExceeded) {
+          this.log.warn('   Daily quota exceeded - will reset in 24 hours');
+        }
+      } else {
+        this.log.info(`🛡️ Rate Limiting: OK (${systemStatus.rateLimiting.retryCount} total hits)`);
+      }
+      
+      // Performance Status
+      if (systemStatus.performance.issues.length > 0) {
+        this.log.warn(`⚠️ Performance Issues (${systemStatus.performance.issues.length}):`);
+        systemStatus.performance.issues.forEach(issue => {
+          this.log.warn(`   • ${issue}`);
+        });
+        
+        if (systemStatus.performance.recommendations.length > 0) {
+          this.log.info(`💡 Recommendations:`);
+          systemStatus.performance.recommendations.forEach(rec => {
+            this.log.info(`   • ${rec}`);
+          });
+        }
+      } else {
+        this.log.info(`⚡ Performance: Excellent (Score: ${systemStatus.performance.healthScore})`);
+      }
+      
+      // Cache Status
+      if (systemStatus.cache) {
+        const hitRatePercent = (systemStatus.cache.hitRate * 100).toFixed(1);
+        const memoryMB = (systemStatus.cache.memoryUsage / 1024 / 1024).toFixed(1);
+        this.log.info(`💾 Cache: ${hitRatePercent}% hit rate, ${systemStatus.cache.totalEntries} entries, ${memoryMB}MB`);
+      }
+      
+      // System Summary
+      this.log.info(`🏠 Accessories: ${this.accessories.length} total, ${this.installations.length} installations`);
+      this.log.info(`🔄 Update Status: ${this.isUpdating ? 'In Progress' : 'Idle'}, Errors: ${this.consecutiveErrors}/${this.maxConsecutiveErrors}`);
+      
+      this.log.info('='.repeat(60));
+      
+      // Take action based on health score
+      if (systemStatus.overall.score < 50) {
+        this.log.error('🚨 CRITICAL: System health is poor - consider immediate optimization');
+        this.adjustRefreshInterval(true); // Increase intervals to reduce load
+      } else if (systemStatus.overall.score < 70) {
+        this.log.warn('⚠️ WARNING: System health is degraded - optimization recommended');
+      }
+      
+    } catch (error) {
+      this.log.error('❌ Failed to generate health report:', error);
+    }
+  }
+
   // Public method to get rate limit status for diagnostics
   public getRateLimitStatus() {
     return this.viessmannAPI.getRateLimitStatus();
   }
 
-  // Public method to get platform status
+  // Public method to get enhanced platform status
   public getPlatformStatus() {
+    const systemStatus = this.viessmannAPI.getSystemStatus();
+    
     return {
-      isUpdating: this.isUpdating,
-      consecutiveErrors: this.consecutiveErrors,
-      backoffMultiplier: this.backoffMultiplier,
-      accessoryCount: this.accessories.length,
-      installationCount: this.installations.length,
-      rateLimitStatus: this.getRateLimitStatus()
+      platform: {
+        isUpdating: this.isUpdating,
+        consecutiveErrors: this.consecutiveErrors,
+        backoffMultiplier: this.backoffMultiplier,
+        accessoryCount: this.accessories.length,
+        installationCount: this.installations.length,
+      },
+      system: systemStatus,
+      summary: {
+        overallHealth: systemStatus.overall.status,
+        healthScore: systemStatus.overall.score,
+        isHealthy: systemStatus.overall.score >= 70,
+        needsAttention: systemStatus.performance.issues.length > 0,
+        recommendations: systemStatus.performance.recommendations
+      }
     };
   }
 }
