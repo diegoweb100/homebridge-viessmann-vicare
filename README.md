@@ -6,7 +6,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)
 
-A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic.
+A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection, intelligent cache management, automatic retry logic, and **complete localization support**.
 
 ## 🚀 Key Features
 
@@ -15,6 +15,7 @@ A comprehensive Homebridge plugin for Viessmann heating systems with **full cont
 - **🏠 Individual heating circuits**: Full control of each circuit with temperature programs
 - **🎛️ Advanced temperature programs**: Reduced, Normal, Comfort modes with individual temperatures
 - **🏖️ Holiday and quick selection modes**: Holiday, Holiday at Home, Extended Heating programs
+- **🌍 Complete localization**: Custom names for all accessories in your preferred language
 - **↔️ Bidirectional commands**: Read **AND** write all supported parameters
 - **⚡ Intelligent rate limiting**: Advanced protection against API throttling with exponential backoff
 - **🔄 Automatic retry logic**: Smart retry mechanism with alternative API endpoints
@@ -25,6 +26,87 @@ A comprehensive Homebridge plugin for Viessmann heating systems with **full cont
 - **🎯 Installation filtering**: Show only specific installations or filter by name
 - **🎛️ Easy configuration**: Full support for Homebridge Config UI X with all parameters exposed
 - **🎯 Native integration**: Complete compatibility with Apple Home app and Siri controls
+
+## 🌍 Localization & Custom Names
+
+**NEW in v2.0**: Complete support for custom accessory names in any language! Perfect for Italian, German, French, Spanish users or custom naming schemes.
+
+### 🇮🇹 Italian Example
+```json
+{
+  "customNames": {
+    "installationPrefix": "Casa Mia",
+    "boiler": "Caldaia",
+    "dhw": "Acqua Calda",
+    "heatingCircuit": "Riscaldamento",
+    "reduced": "Ridotto",
+    "normal": "Normale",
+    "comfort": "Comfort",
+    "eco": "Eco",
+    "off": "Spento",
+    "burner": "Bruciatore",
+    "modulation": "Modulazione",
+    "holiday": "Vacanza",
+    "holidayAtHome": "Vacanza Casa",
+    "extendedHeating": "Riscaldamento Extra"
+  }
+}
+```
+
+**Resulting HomeKit names:**
+- `Casa Mia Caldaia` (Main boiler control)
+- `Casa Mia Caldaia Bruciatore` (Burner status)
+- `Casa Mia Caldaia Modulazione` (Modulation level)
+- `Casa Mia Acqua Calda` (DHW control)
+- `Casa Mia Acqua Calda Comfort` (DHW comfort mode)
+- `Casa Mia Riscaldamento 1 Ridotto 18C` (Reduced program)
+- `Casa Mia Riscaldamento 1 Normale 20C` (Normal program)
+- `Casa Mia Riscaldamento 1 Comfort 22C` (Comfort program)
+
+### 🇩🇪 German Example
+```json
+{
+  "customNames": {
+    "installationPrefix": "Mein Haus",
+    "boiler": "Kessel",
+    "dhw": "Warmwasser",
+    "heatingCircuit": "Heizkreis",
+    "reduced": "Reduziert",
+    "normal": "Normal",
+    "comfort": "Komfort"
+  }
+}
+```
+
+### 🇫🇷 French Example
+```json
+{
+  "customNames": {
+    "installationPrefix": "Ma Maison",
+    "boiler": "Chaudière",
+    "dhw": "Eau Chaude",
+    "heatingCircuit": "Circuit Chauffage",
+    "reduced": "Réduit",
+    "normal": "Normal",
+    "comfort": "Confort"
+  }
+}
+```
+
+### 🇪🇸 Spanish Example
+```json
+{
+  "customNames": {
+    "installationPrefix": "Mi Casa",
+    "boiler": "Caldera",
+    "dhw": "Agua Caliente",
+    "heatingCircuit": "Circuito Calefacción",
+    "reduced": "Reducido",
+    "normal": "Normal",
+    "comfort": "Confort"
+  }
+}
+```
 
 ## 🏗️ Plugin Architecture (v2.0)
 
@@ -64,6 +146,7 @@ For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 🆕 What's New in v2.0
 
+- **🌍 Complete Localization Support**: Custom names for all accessories in any language
 - **🛡️ Advanced Rate Limiting Protection**: Intelligent handling of Viessmann API rate limits (429 errors)
 - **💾 Intelligent Cache Management**: Multi-layer caching with configurable TTL for different data types
 - **🔄 Smart Retry Logic**: Exponential backoff with alternative API endpoints
@@ -141,6 +224,22 @@ npm install -g homebridge-viessmann-vicare
     "retryDelay": 30000,
     "rateLimitResetBuffer": 60000,
     "installationFilter": "Main House",
+    "customNames": {
+        "installationPrefix": "My Home",
+        "boiler": "Boiler",
+        "dhw": "Hot Water",
+        "heatingCircuit": "Heating Circuit",
+        "reduced": "Reduced",
+        "normal": "Normal",
+        "comfort": "Comfort",
+        "eco": "Eco",
+        "off": "Off",
+        "burner": "Burner",
+        "modulation": "Modulation",
+        "holiday": "Holiday Mode",
+        "holidayAtHome": "Holiday At Home",
+        "extendedHeating": "Extended Heating"
+    },
     "cache": {
         "enabled": true,
         "installationsTTL": 86400000,
@@ -188,6 +287,22 @@ All parameters are now configurable through the Homebridge Config UI X interface
 - `accessToken`: Manual access token (manual auth only)
 - `refreshToken`: Manual refresh token (manual auth only)
 
+#### **🌍 Custom Names & Localization**
+- `customNames.installationPrefix`: Custom prefix instead of full installation name
+- `customNames.boiler`: Custom name for boiler accessories
+- `customNames.dhw`: Custom name for DHW accessories
+- `customNames.heatingCircuit`: Custom name for heating circuit accessories
+- `customNames.reduced`: Custom name for reduced temperature program
+- `customNames.normal`: Custom name for normal temperature program
+- `customNames.comfort`: Custom name for comfort temperature program
+- `customNames.eco`: Custom name for DHW eco mode
+- `customNames.off`: Custom name for off mode
+- `customNames.burner`: Custom name for burner accessories
+- `customNames.modulation`: Custom name for modulation accessories
+- `customNames.holiday`: Custom name for holiday mode
+- `customNames.holidayAtHome`: Custom name for holiday at home mode
+- `customNames.extendedHeating`: Custom name for extended heating mode
+
 #### **Installation Filtering**
 - `installationFilter`: Filter by name (case-insensitive)
 - `installationIds`: Array of specific installation IDs
@@ -225,6 +340,20 @@ All parameters are now configurable through the Homebridge Config UI X interface
 - `advanced.deviceUpdateDelay`: Delay between device updates
 - `advanced.userAgent`: Custom User-Agent string
 
+### 🔧 Custom Names Setup Guide
+
+1. **Configure in Homebridge Config UI X**: Navigate to the "Custom Names & Localization" section
+2. **Set your language**: Use the examples above for common languages
+3. **Enable Force Service Recreation**: Set `forceServiceRecreation: true` **temporarily** to test changes
+4. **Restart Homebridge**: Full restart required for names to take effect
+5. **Disable Force Recreation**: Set `forceServiceRecreation: false` for production use
+
+**Important Notes:**
+- Custom names require a Homebridge restart to take effect
+- Use `forceServiceRecreation: true` only for testing, then disable it
+- Names include temperatures automatically (e.g., "Ridotto 18C")
+- All names are sanitized for HomeKit compatibility
+
 ## 🔧 Advanced Troubleshooting (v2.0)
 
 ### 🔍 Modular Debugging
@@ -259,6 +388,22 @@ With the new modular architecture, you can pinpoint issues more precisely:
 - Cache TTL extension during rate limiting
 - Daily quota detection and management
 - Intelligent retry scheduling
+
+#### 🌍 Custom Names Issues
+**Module**: `platform.ts`, accessory files
+```bash
+# Check for name application:
+[Platform] 🏷️ DHW Setup - Installation: "Casa Mia", DHW: "Acqua Calda"
+[Platform] 🏷️ Creating Comfort service: "Casa Mia Acqua Calda Comfort"
+[Platform] ✅ DHW mode services setup completed
+```
+
+**Solutions:**
+- Verify `customNames` configuration is correct
+- Check for typos in custom name fields
+- Enable `forceServiceRecreation: true` temporarily
+- Restart Homebridge completely
+- Check logs for service creation messages
 
 #### 📡 API Client Issues
 **Module**: `api-client.ts`
@@ -443,31 +588,37 @@ The plugin automatically uses the best method:
 The plugin automatically creates these accessories (configurable via feature flags):
 
 ### 🔥 Boiler
-- **Name**: `[Installation] Boiler`
+- **Name**: `[Installation] [Custom Boiler Name]`
 - **Type**: HeaterCooler
 - **Controls**: Target temperature, active state
 - **Sensors**: Current temperature, heating state, burner status
 - **Additional**: Modulation level (as Lightbulb brightness)
+- **Additional Services**: 
+  - `[Installation] [Custom Boiler Name] [Custom Burner Name]` (Switch)
+  - `[Installation] [Custom Boiler Name] [Custom Modulation Name]` (Lightbulb)
 
 ### 🚿 Domestic Hot Water (DHW)
-- **Name**: `[Installation] Hot Water`
+- **Name**: `[Installation] [Custom DHW Name]`
 - **Type**: HeaterCooler
 - **Controls**: DHW temperature (30-60°C), operating modes
-- **Modes**: Off, Eco, Comfort (as separate switches)
+- **Mode Services**: 
+  - `[Installation] [Custom DHW Name] [Custom Comfort Name]` (Switch)
+  - `[Installation] [Custom DHW Name] [Custom Eco Name]` (Switch)
+  - `[Installation] [Custom DHW Name] [Custom Off Name]` (Switch)
 - **Sensors**: Current DHW temperature, heating state
 
 ### 🏠 Heating Circuits
-- **Name**: `[Installation] Heating Circuit X`
+- **Name**: `[Installation] [Custom Heating Circuit Name] X`
 - **Type**: HeaterCooler (main control)
 - **Controls**: Circuit temperature, operating modes
 - **Temperature Programs**: 
-  - Reduced Mode (Ridotta) - Switch
-  - Normal Mode (Normale) - Switch  
-  - Comfort Mode - Switch
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Reduced Name] XXC` (Switch)
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Normal Name] XXC` (Switch)
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Comfort Name] XXC` (Switch)
 - **Quick Selections**:
-  - Holiday Mode - Switch (7-day schedule)
-  - Holiday at Home - Switch (today only)
-  - Extended Heating - Switch (comfort boost)
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Holiday Name]` (Switch)
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Holiday At Home Name]` (Switch)
+  - `[Installation] [Custom Heating Circuit Name] X [Custom Extended Heating Name]` (Switch)
 - **Sensors**: Room temperature, supply temperature
 
 ## 🎯 Advanced Features
@@ -476,8 +627,8 @@ The plugin automatically creates these accessories (configurable via feature fla
 
 Each heating circuit supports individual temperature programs:
 
-- **🌙 Reduced (Ridotta)**: Low temperature for unoccupied periods
-- **🏠 Normal (Normale)**: Standard comfort temperature
+- **🌙 Reduced**: Low temperature for unoccupied periods
+- **🏠 Normal**: Standard comfort temperature
 - **☀️ Comfort**: Higher temperature for maximum comfort
 
 Each program maintains its own temperature setting and can be activated independently.
@@ -499,7 +650,46 @@ Reduce API calls by filtering installations:
 }
 ```
 
+### Custom Names Examples
+
+**🇮🇹 Complete Italian Setup:**
+```json
+{
+    "customNames": {
+        "installationPrefix": "Casa Principale",
+        "boiler": "Caldaia Viessmann",
+        "dhw": "Acqua Calda Sanitaria",
+        "heatingCircuit": "Zona Riscaldamento",
+        "reduced": "Temperatura Ridotta",
+        "normal": "Temperatura Normale", 
+        "comfort": "Temperatura Comfort",
+        "eco": "Modalità Eco",
+        "off": "Spento",
+        "burner": "Stato Bruciatore",
+        "modulation": "Modulazione Fiamma",
+        "holiday": "Modalità Vacanza",
+        "holidayAtHome": "Vacanza in Casa",
+        "extendedHeating": "Riscaldamento Potenziato"
+    }
+}
+```
+
 ## 🔧 Troubleshooting
+
+### 🌍 Custom Names Not Updating
+
+**Symptoms:**
+- Accessories still show English names
+- New names don't appear in HomeKit
+- Services have old names
+
+**Solutions:**
+1. ✅ **Verify configuration**: Check `customNames` is properly configured
+2. ✅ **Restart Homebridge**: Full restart required for name changes
+3. ✅ **Enable force recreation**: Set `forceServiceRecreation: true` temporarily
+4. ✅ **Check logs**: Look for service creation messages
+5. ✅ **Disable force recreation**: Set to `false` after successful update
+6. ✅ **Clear HomeKit cache**: Remove and re-add accessories if needed
 
 ### Rate Limiting (429 Errors)
 
@@ -548,6 +738,7 @@ Debug logs show:
 - 🛡️ Rate limit protection actions
 - 📈 Performance metrics and cache hit rates
 - 🔍 Detailed error information
+- 🏷️ Custom name application and service creation
 
 ## 📊 Performance Optimization
 
@@ -605,6 +796,7 @@ Check these metrics in debug logs:
 3. **Command Latency**: Commands may take several seconds to execute
 4. **Regional Differences**: Some features may vary by region/device model
 5. **Initial Setup**: First-time OAuth setup requires manual browser interaction
+6. **Name Changes**: Custom names require Homebridge restart to take effect
 
 ## 🤝 Contributing
 
@@ -621,6 +813,7 @@ Contributions are welcome! Please:
 - **Node.js**: >= 18.15.0
 - **Viessmann API**: v1 and v2
 - **iOS**: All HomeKit-supported devices
+- **Languages**: All languages supported via custom names
 
 ## 📄 License
 
@@ -630,6 +823,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - Viessmann API documentation available at [Viessmann Developer Portal](https://developer.viessmann.com/)
 - Community feedback and contributions
+- International user community for localization feedback
 
 ## 📞 Support
 
@@ -643,11 +837,13 @@ For issues and questions:
    - Device model information
    - Plugin version
    - Cache statistics
+   - Custom names configuration (if applicable)
 
 ## 📈 Changelog
 
 ### v2.0.0
 - ✨ **Major Release**: Complete rewrite with advanced features
+- ✨ **Complete Localization Support**: Custom names for all accessories in any language
 - ✨ **Intelligent Cache Management**: Multi-layer caching with configurable TTL
 - ✨ **Advanced Rate Limiting Protection**: Exponential backoff with smart recovery
 - ✨ **Complete UI Configuration**: All parameters exposed in Homebridge Config UI X
