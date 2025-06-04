@@ -372,8 +372,12 @@ private setupTemperatureProgramServices() {
     // Remove existing temperature program services first
     this.removeAllTemperatureProgramServices();
 
-    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
-    const subtypeVersion = 'v3'; // Change this when you need to force recreation
+    // 🔧 DYNAMIC: Use timestamp-based version for automatic recreation
+    const subtypeVersion = config.forceServiceRecreation ? 
+      Date.now().toString().slice(-8) : // Last 8 digits of timestamp
+      'stable'; // Use stable version normally
+    
+    this.platform.log.info(`🔧 HC${this.circuitNumber} Using service subtype version: ${subtypeVersion}`);
 
     // Helper function to sanitize service names for HomeKit
     const sanitizeName = (name: string): string => {
@@ -391,7 +395,7 @@ private setupTemperatureProgramServices() {
       this.ridottaService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-reduced-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-reduced-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
 
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -410,7 +414,7 @@ private setupTemperatureProgramServices() {
       this.normaleService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-normal-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-normal-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
  
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -429,7 +433,7 @@ private setupTemperatureProgramServices() {
       this.comfortService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-comfort-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-comfort-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
       
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -460,8 +464,12 @@ private setupTemperatureProgramServices() {
     // Remove existing quick selection services first
     this.removeAllQuickSelectionServices();
 
-    // 🔧 STRATEGY: Use versioned subtypes for quick selections too
-    const subtypeVersion = 'v3'; // Same version as temperature programs
+    // 🔧 DYNAMIC: Use timestamp-based version for automatic recreation
+    const subtypeVersion = config.forceServiceRecreation ? 
+      Date.now().toString().slice(-8) : // Last 8 digits of timestamp
+      'stable'; // Use stable version normally
+    
+    this.platform.log.info(`🔧 HC${this.circuitNumber} Quick Selections using service subtype version: ${subtypeVersion}`);
 
     // Create services for each available quick selection - KEEPING installation name
     if (this.availableQuickSelections.includes('holiday')) {
@@ -471,7 +479,7 @@ private setupTemperatureProgramServices() {
       this.holidayService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-holiday-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-holiday-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
       
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -490,7 +498,7 @@ private setupTemperatureProgramServices() {
       this.holidayAtHomeService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-holiday-at-home-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-holiday-at-home-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
       
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -509,7 +517,7 @@ private setupTemperatureProgramServices() {
       this.extendedHeatingService = this.accessory.addService(
         this.platform.Service.Switch, 
         serviceName, 
-        `hc${this.circuitNumber}-extended-heating-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+        `hc${this.circuitNumber}-extended-heating-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
       
       // 🔧 CRITICAL: Set both Name characteristic AND displayName
