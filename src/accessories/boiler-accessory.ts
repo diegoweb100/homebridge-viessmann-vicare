@@ -211,7 +211,7 @@ export class ViessmannBoilerAccessory {
       .onSet(() => {}); // Read-only
   }
 
-  private setupBurnerService() {
+private setupBurnerService() {
     const config = this.platform.config as ViessmannPlatformConfig;
     const customNames = config.customNames || {};
   
@@ -238,8 +238,12 @@ export class ViessmannBoilerAccessory {
       }
     }
 
-    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
-    const subtypeVersion = 'v3'; // Change this when you need to force recreation
+    // 🔧 DYNAMIC: Use timestamp-based version for automatic recreation
+    const subtypeVersion = config.forceServiceRecreation ? 
+      Date.now().toString().slice(-8) : // Last 8 digits of timestamp
+      'stable'; // Use stable version normally
+    
+    this.platform.log.info(`🔧 Boiler Burner using service subtype version: ${subtypeVersion}`);
 
     // Create burner status service (read-only switch)  
     const burnerServiceName = `${installationName} ${boilerName} ${burnerName}`;
@@ -248,7 +252,7 @@ export class ViessmannBoilerAccessory {
     this.burnerService = this.accessory.addService(
       this.platform.Service.Switch, 
       burnerServiceName, 
-      `boiler-burner-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      `boiler-burner-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
     );
     
     // 🔧 CRITICAL: Set both Name characteristic AND displayName
@@ -296,8 +300,12 @@ export class ViessmannBoilerAccessory {
       }
     }
 
-    // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
-    const subtypeVersion = 'v3'; // Same version as burner
+    // 🔧 DYNAMIC: Use timestamp-based version for automatic recreation
+    const subtypeVersion = config.forceServiceRecreation ? 
+      Date.now().toString().slice(-8) : // Last 8 digits of timestamp
+      'stable'; // Use stable version normally
+    
+    this.platform.log.info(`🔧 Boiler Modulation using service subtype version: ${subtypeVersion}`);
 
     // Create modulation service using Lightbulb with brightness (read-only)
     const modulationServiceName = `${installationName} ${boilerName} ${modulationName}`;
@@ -306,7 +314,7 @@ export class ViessmannBoilerAccessory {
     this.modulationService = this.accessory.addService(
       this.platform.Service.Lightbulb, 
       modulationServiceName, 
-      `boiler-modulation-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
+      `boiler-modulation-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
     );
     
     // 🔧 CRITICAL: Set both Name characteristic AND displayName
