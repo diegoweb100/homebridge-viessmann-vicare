@@ -45,6 +45,9 @@ export interface ViessmannPlatformConfig extends AuthConfig {
   installationFilter?: string;
   installationIds?: number[];
   
+  // 🔧 NEW: Dynamic service recreation control
+  forceServiceRecreation?: boolean;  
+  
   // Advanced settings
   advanced?: {
     baseDelay?: number;
@@ -78,7 +81,8 @@ export interface ViessmannPlatformConfig extends AuthConfig {
     holiday?: string;                     // "Vacanza" invece di "Holiday Mode"
     holidayAtHome?: string;               // "Vacanza Casa" invece di "Holiday At Home"
     extendedHeating?: string;             // "Riscaldamento Extra" invece di "Extended Heating"
-  };  
+  }; 
+   
   // Cache configuration
   cache?: {
     enabled?: boolean;
