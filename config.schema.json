@@ -170,6 +170,117 @@
         "default": false,
         "description": "Enable verbose debug logging for troubleshooting. Warning: May expose sensitive information in logs."
       },
+      "forceServiceRecreation": {
+        "title": "Force Service Recreation",
+        "type": "boolean",
+        "default": false,
+        "description": "🔧 DEVELOPMENT: Force recreation of HomeKit services with new subtypes to refresh names immediately. Enable temporarily if custom names don't appear, then disable after restart."
+      },
+      "customNames": {
+        "title": "🎯 Custom Names & Localization",
+        "type": "object",
+        "description": "Customize accessory names for localization or personal preference. Perfect for non-English users or custom naming schemes.",
+        "properties": {
+          "installationPrefix": {
+            "title": "Installation Prefix",
+            "type": "string",
+            "required": false,
+            "placeholder": "My Home",
+            "description": "Custom prefix for installation names instead of using the full installation description from ViCare. Example: 'Casa Mia' instead of 'HomeName/ID 12345'"
+          },
+          "boiler": {
+            "title": "Boiler Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Caldaia",
+            "description": "Custom name for boiler accessories. Default: 'Boiler'. Italian example: 'Caldaia'"
+          },
+          "dhw": {
+            "title": "Hot Water Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Acqua Calda",
+            "description": "Custom name for domestic hot water (DHW) accessories. Default: 'Hot Water'. Italian example: 'Acqua Calda'"
+          },
+          "heatingCircuit": {
+            "title": "Heating Circuit Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Riscaldamento",
+            "description": "Custom name for heating circuit accessories. Default: 'Heating Circuit'. Italian example: 'Riscaldamento'"
+          },
+          "reduced": {
+            "title": "Reduced Program Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Ridotto",
+            "description": "Custom name for reduced temperature program. Default: 'Reduced'. Italian example: 'Ridotto'"
+          },
+          "normal": {
+            "title": "Normal Program Name", 
+            "type": "string",
+            "required": false,
+            "placeholder": "Normale",
+            "description": "Custom name for normal temperature program. Default: 'Normal'. Italian example: 'Normale'"
+          },
+          "comfort": {
+            "title": "Comfort Program Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Comfort",
+            "description": "Custom name for comfort temperature program. Default: 'Comfort'. Usually the same in most languages."
+          },
+          "eco": {
+            "title": "Eco Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Eco",
+            "description": "Custom name for DHW eco mode. Default: 'Eco'. Usually the same in most languages."
+          },
+          "off": {
+            "title": "Off Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Spento",
+            "description": "Custom name for off mode. Default: 'Off'. Italian example: 'Spento'"
+          },
+          "burner": {
+            "title": "Burner Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Bruciatore",
+            "description": "Custom name for burner status accessories. Default: 'Burner'. Italian example: 'Bruciatore'"
+          },
+          "modulation": {
+            "title": "Modulation Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Modulazione",
+            "description": "Custom name for modulation level accessories. Default: 'Modulation'. Italian example: 'Modulazione'"
+          },
+          "holiday": {
+            "title": "Holiday Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Vacanza",
+            "description": "Custom name for holiday mode (7-day schedule). Default: 'Holiday Mode'. Italian example: 'Vacanza'"
+          },
+          "holidayAtHome": {
+            "title": "Holiday At Home Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Vacanza Casa",
+            "description": "Custom name for holiday at home mode (today only). Default: 'Holiday At Home'. Italian example: 'Vacanza Casa'"
+          },
+          "extendedHeating": {
+            "title": "Extended Heating Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Riscaldamento Extra",
+            "description": "Custom name for extended heating mode (comfort boost). Default: 'Extended Heating'. Italian example: 'Riscaldamento Extra'"
+          }
+        }
+      },
       "cache": {
         "title": "🗄️ Enhanced API Cache Configuration",
         "type": "object",
@@ -429,6 +540,30 @@
       "items": [
         "installationFilter",
         "installationIds"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🎯 Custom Names & Localization",
+      "description": "🌍 Customize accessory names for different languages or personal preferences. Perfect for Italian, German, French, Spanish users or custom naming schemes. Changes require Homebridge restart.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "customNames.installationPrefix",
+        "customNames.boiler",
+        "customNames.dhw",
+        "customNames.heatingCircuit",
+        "customNames.reduced",
+        "customNames.normal",
+        "customNames.comfort",
+        "customNames.eco",
+        "customNames.off",
+        "customNames.burner",
+        "customNames.modulation",
+        "customNames.holiday",
+        "customNames.holidayAtHome",
+        "customNames.extendedHeating",
+        "forceServiceRecreation"
       ]
     },
     {
