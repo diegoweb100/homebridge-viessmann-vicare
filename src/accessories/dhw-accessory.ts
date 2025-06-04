@@ -255,89 +255,101 @@ export class ViessmannDHWAccessory {
   }
 
 private setupModeServices() {
-  const config = this.platform.config as ViessmannPlatformConfig;
-  const customNames = config.customNames || {};  
-  
-  // 🔧 FIXED: Use custom names properly with fallbacks - KEEPING installation name
-  const installationName = customNames.installationPrefix || this.installation.description;
-  const dhwName = customNames.dhw || 'DHW';
-  const comfortName = customNames.comfort || 'Comfort';
-  const ecoName = customNames.eco || 'Eco';
-  const offName = customNames.off || 'Off';
-
-  // 🔍 DEBUG: Log dei nomi per verificare la generazione
-  this.platform.log.info(`🏷️ DHW Setup - Installation: "${installationName}", DHW: "${dhwName}"`);
-  this.platform.log.info(`🏷️ DHW Setup - Comfort: "${comfortName}", Eco: "${ecoName}", Off: "${offName}"`);
-
-  // First, remove ALL existing mode services to avoid conflicts
-  this.removeAllModeServices();
-
-  // 🔧 STRATEGY: Use versioned subtypes to force HomeKit to recreate services
-  const subtypeVersion = 'v3'; // Change this when you need to force recreation
-
-  // 🔧 FIXED: Create services with installation name like other accessories
-  if (this.availableModes.includes('comfort')) {
-    // Format with installation name: "Casa Mia DHW Comfort"
-    const comfortServiceName = `${installationName} ${dhwName} ${comfortName}`;
-    this.platform.log.info(`🏷️ Creating Comfort service: "${comfortServiceName}"`);
+    const config = this.platform.config as ViessmannPlatformConfig;
+    const customNames = config.customNames || {};  
     
-    this.comfortService = this.accessory.addService(
-      this.platform.Service.Switch, 
-      comfortServiceName, 
-      `dhw-comfort-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
-    );
+    // 🔧 FIXED: Use custom names properly with fallbacks - KEEPING installation name
+    const installationName = customNames.installationPrefix || this.installation.description;
+    const dhwName = customNames.dhw || 'DHW';
+    const comfortName = customNames.comfort || 'Comfort';
+    const ecoName = customNames.eco || 'Eco';
+    const offName = customNames.off || 'Off';
+
+    // 🔍 DEBUG: Log dei nomi per verificare la generazione
+    this.platform.log.info(`🏷️ DHW Setup - Installation: "${installationName}", DHW: "${dhwName}"`);
+    this.platform.log.info(`🏷️ DHW Setup - Comfort: "${comfortName}", Eco: "${ecoName}", Off: "${offName}"`);
+
+    // First, remove ALL existing mode services to avoid conflicts
+    this.removeAllModeServices();
+
+    // 🔧 DYNAMIC: Use timestamp-based version for automatic recreation
+    const subtypeVersion = config.forceServiceRecreation ? 
+      Date.now().toString().slice(-8) : // Last 8 digits of timestamp
+      'stable'; // Use stable version normally
     
-    // 🔧 CRITICAL: Set both Name characteristic AND displayName
-    this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
-    this.comfortService.displayName = comfortServiceName;
-    
-    this.comfortService.getCharacteristic(this.platform.Characteristic.On)
-      .onGet(() => this.currentMode === 'comfort')
-      .onSet(this.setComfortMode.bind(this));
+    this.platform.log.info(`🔧 DHW using service subtype version: ${subtypeVersion}`);
+
+    // 🔧 FIXED: Create services with installation name like other accessories
+    if (this.availableModes.includes('comfort')) {
+      // Format with installation name: "Casa Mia DHW Comfort"
+      const comfortServiceName = `${installationName} ${dhwName} ${comfortName}`;
+      this.platform.log.info(`🏷️ Creating Comfort service: "${comfortServiceName}"`);
+      
+      this.comfortService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        comfortServiceName, 
+        `dhw-comfort-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
+      );
+      
+	// 🔧 CRITICAL: Set displayName immediately
+	this.comfortService.displayName = comfortServiceName;
+	
+	// 🔧 IMPROVED: Set Name characteristic with delay and safety check
+	setTimeout(() => {
+	  if (this.comfortService) { // 🛡️ SAFETY CHECK - prevents undefined error
+		this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
+		this.comfortService.updateCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
+	  }
+	}, 1000);
+
+      
+      this.comfortService.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentMode === 'comfort')
+        .onSet(this.setComfortMode.bind(this));
+    }
+
+    if (this.availableModes.includes('eco')) {
+      // Format with installation name: "Casa Mia DHW Eco"
+      const ecoServiceName = `${installationName} ${dhwName} ${ecoName}`;
+      this.platform.log.info(`🏷️ Creating Eco service: "${ecoServiceName}"`);
+      
+      this.ecoService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        ecoServiceName, 
+        `dhw-eco-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName
+      this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
+      this.ecoService.displayName = ecoServiceName;
+      
+      this.ecoService.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentMode === 'eco')
+        .onSet(this.setEcoMode.bind(this));
+    }
+
+    if (this.availableModes.includes('off')) {
+      // Format with installation name: "Casa Mia DHW Off"
+      const offServiceName = `${installationName} ${dhwName} ${offName}`;
+      this.platform.log.info(`🏷️ Creating Off service: "${offServiceName}"`);
+      
+      this.offService = this.accessory.addService(
+        this.platform.Service.Switch, 
+        offServiceName, 
+        `dhw-off-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
+      );
+      
+      // 🔧 CRITICAL: Set both Name characteristic AND displayName  
+      this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
+      this.offService.displayName = offServiceName;
+      
+      this.offService.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentMode === 'off')
+        .onSet(this.setOffMode.bind(this));
+    }
+
+    this.platform.log.info(`✅ DHW mode services setup completed for modes: [${this.availableModes.join(', ')}] with subtype version: ${subtypeVersion}`);
   }
-
-  if (this.availableModes.includes('eco')) {
-    // Format with installation name: "Casa Mia DHW Eco"
-    const ecoServiceName = `${installationName} ${dhwName} ${ecoName}`;
-    this.platform.log.info(`🏷️ Creating Eco service: "${ecoServiceName}"`);
-    
-    this.ecoService = this.accessory.addService(
-      this.platform.Service.Switch, 
-      ecoServiceName, 
-      `dhw-eco-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
-    );
-    
-    // 🔧 CRITICAL: Set both Name characteristic AND displayName
-    this.ecoService.setCharacteristic(this.platform.Characteristic.Name, ecoServiceName);
-    this.ecoService.displayName = ecoServiceName;
-    
-    this.ecoService.getCharacteristic(this.platform.Characteristic.On)
-      .onGet(() => this.currentMode === 'eco')
-      .onSet(this.setEcoMode.bind(this));
-  }
-
-  if (this.availableModes.includes('off')) {
-    // Format with installation name: "Casa Mia DHW Off"
-    const offServiceName = `${installationName} ${dhwName} ${offName}`;
-    this.platform.log.info(`🏷️ Creating Off service: "${offServiceName}"`);
-    
-    this.offService = this.accessory.addService(
-      this.platform.Service.Switch, 
-      offServiceName, 
-      `dhw-off-${subtypeVersion}` // 🔧 VERSIONED SUBTYPE
-    );
-    
-    // 🔧 CRITICAL: Set both Name characteristic AND displayName  
-    this.offService.setCharacteristic(this.platform.Characteristic.Name, offServiceName);
-    this.offService.displayName = offServiceName;
-    
-    this.offService.getCharacteristic(this.platform.Characteristic.On)
-      .onGet(() => this.currentMode === 'off')
-      .onSet(this.setOffMode.bind(this));
-  }
-
-  this.platform.log.info(`✅ DHW mode services setup completed for modes: [${this.availableModes.join(', ')}] with subtype version: ${subtypeVersion}`);
-}
 
   private removeAllModeServices() {
     // Get all switch services and remove them
