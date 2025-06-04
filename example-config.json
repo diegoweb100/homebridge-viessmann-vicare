@@ -17,6 +17,130 @@
       }
     },
     {
+      "description": "🇮🇹 Italian localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Casa Mia",
+          "boiler": "Caldaia",
+          "dhw": "Acqua Calda",
+          "heatingCircuit": "Riscaldamento",
+          "reduced": "Ridotto",
+          "normal": "Normale",
+          "comfort": "Comfort",
+          "eco": "Eco",
+          "off": "Spento",
+          "burner": "Bruciatore",
+          "modulation": "Modulazione",
+          "holiday": "Vacanza",
+          "holidayAtHome": "Vacanza Casa",
+          "extendedHeating": "Riscaldamento Extra"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇩🇪 German localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Mein Haus",
+          "boiler": "Kessel",
+          "dhw": "Warmwasser",
+          "heatingCircuit": "Heizkreis",
+          "reduced": "Reduziert",
+          "normal": "Normal",
+          "comfort": "Komfort",
+          "eco": "Eco",
+          "off": "Aus",
+          "burner": "Brenner",
+          "modulation": "Modulation",
+          "holiday": "Urlaub",
+          "holidayAtHome": "Urlaub Zuhause",
+          "extendedHeating": "Zusatzheizung"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇫🇷 French localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Ma Maison",
+          "boiler": "Chaudière",
+          "dhw": "Eau Chaude",
+          "heatingCircuit": "Circuit Chauffage",
+          "reduced": "Réduit",
+          "normal": "Normal",
+          "comfort": "Confort",
+          "eco": "Eco",
+          "off": "Arrêt",
+          "burner": "Brûleur",
+          "modulation": "Modulation",
+          "holiday": "Vacances",
+          "holidayAtHome": "Vacances Maison",
+          "extendedHeating": "Chauffage Prolongé"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇪🇸 Spanish localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Mi Casa",
+          "boiler": "Caldera",
+          "dhw": "Agua Caliente",
+          "heatingCircuit": "Circuito Calefacción",
+          "reduced": "Reducido",
+          "normal": "Normal",
+          "comfort": "Confort",
+          "eco": "Eco",
+          "off": "Apagado",
+          "burner": "Quemador",
+          "modulation": "Modulación",
+          "holiday": "Vacaciones",
+          "holidayAtHome": "Vacaciones Casa",
+          "extendedHeating": "Calefacción Extra"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
       "description": "Aggressive caching for high API usage reduction (multiple installations)",
       "config": {
         "platform": "ViessmannPlatform",
@@ -243,9 +367,139 @@
           "featuresTTL": 120000
         }
       }
+    },
+    {
+      "description": "🔧 Development: Service recreation configuration (for testing name changes)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "forceServiceRecreation": true,
+        "customNames": {
+          "installationPrefix": "Test House",
+          "boiler": "Test Boiler",
+          "dhw": "Test DHW"
+        },
+        "cache": {
+          "enabled": true
+        },
+        "debug": true
+      }
     }
   ],
+  "localizationExamples": {
+    "italian": {
+      "description": "🇮🇹 Complete Italian localization example",
+      "customNames": {
+        "installationPrefix": "Casa Mia",
+        "boiler": "Caldaia",
+        "dhw": "Acqua Calda Sanitaria",
+        "heatingCircuit": "Riscaldamento",
+        "reduced": "Ridotta",
+        "normal": "Normale",
+        "comfort": "Comfort",
+        "eco": "Eco",
+        "off": "Spento",
+        "burner": "Bruciatore",
+        "modulation": "Modulazione",
+        "holiday": "Vacanza",
+        "holidayAtHome": "Vacanza a Casa",
+        "extendedHeating": "Riscaldamento Prolungato"
+      },
+      "resultingNames": [
+        "Casa Mia Caldaia",
+        "Casa Mia Caldaia Bruciatore",
+        "Casa Mia Caldaia Modulazione",
+        "Casa Mia Acqua Calda Sanitaria",
+        "Casa Mia Acqua Calda Sanitaria Comfort",
+        "Casa Mia Acqua Calda Sanitaria Eco",
+        "Casa Mia Acqua Calda Sanitaria Spento",
+        "Casa Mia Riscaldamento 1",
+        "Casa Mia Riscaldamento 1 Ridotta 18C",
+        "Casa Mia Riscaldamento 1 Normale 20C",
+        "Casa Mia Riscaldamento 1 Comfort 22C",
+        "Casa Mia Riscaldamento 1 Vacanza",
+        "Casa Mia Riscaldamento 1 Vacanza a Casa",
+        "Casa Mia Riscaldamento 1 Riscaldamento Prolungato"
+      ]
+    },
+    "german": {
+      "description": "🇩🇪 Complete German localization example",
+      "customNames": {
+        "installationPrefix": "Mein Haus",
+        "boiler": "Heizkessel",
+        "dhw": "Warmwasserbereitung",
+        "heatingCircuit": "Heizkreis",
+        "reduced": "Reduziert",
+        "normal": "Normal",
+        "comfort": "Komfort",
+        "eco": "Öko",
+        "off": "Aus",
+        "burner": "Brenner",
+        "modulation": "Modulationsgrad",
+        "holiday": "Urlaubsmodus",
+        "holidayAtHome": "Heimaturlaub",
+        "extendedHeating": "Zusatzheizung"
+      }
+    },
+    "french": {
+      "description": "🇫🇷 Complete French localization example",
+      "customNames": {
+        "installationPrefix": "Ma Maison",
+        "boiler": "Chaudière",
+        "dhw": "Eau Chaude Sanitaire",
+        "heatingCircuit": "Circuit de Chauffage",
+        "reduced": "Réduit",
+        "normal": "Normal",
+        "comfort": "Confort",
+        "eco": "Éco",
+        "off": "Arrêt",
+        "burner": "Brûleur",
+        "modulation": "Modulation",
+        "holiday": "Mode Vacances",
+        "holidayAtHome": "Vacances à Domicile",
+        "extendedHeating": "Chauffage Prolongé"
+      }
+    },
+    "spanish": {
+      "description": "🇪🇸 Complete Spanish localization example",
+      "customNames": {
+        "installationPrefix": "Mi Casa",
+        "boiler": "Caldera",
+        "dhw": "Agua Caliente Sanitaria",
+        "heatingCircuit": "Circuito de Calefacción",
+        "reduced": "Reducido",
+        "normal": "Normal",
+        "comfort": "Confort",
+        "eco": "Eco",
+        "off": "Apagado",
+        "burner": "Quemador",
+        "modulation": "Modulación",
+        "holiday": "Modo Vacaciones",
+        "holidayAtHome": "Vacaciones en Casa",
+        "extendedHeating": "Calefacción Extendida"
+      }
+    }
+  },
   "configurationGuide": {
+    "customNames": {
+      "type": "object",
+      "description": "Complete customization of accessory names for different languages or personal preferences",
+      "impact": "Names are applied during accessory creation and require Homebridge restart to take effect",
+      "forceServiceRecreation": "Enable temporarily if names don't update, then disable after restart",
+      "recommendations": {
+        "italian_users": "Use the Italian example above for complete localization",
+        "german_users": "Use the German example above for complete localization",
+        "french_users": "Use the French example above for complete localization",
+        "spanish_users": "Use the Spanish example above for complete localization",
+        "custom_naming": "Create your own naming scheme for personal preference",
+        "testing": "Use forceServiceRecreation: true temporarily to test name changes quickly"
+      }
+    },
     "refreshInterval": {
       "type": "number",
       "recommendations": {
@@ -331,6 +585,16 @@
     }
   },
   "troubleshooting": {
+    "customNames": {
+      "symptoms": ["Names not updating", "Accessories still show English names", "Service names unchanged"],
+      "solutions": [
+        "Restart Homebridge completely after configuration change",
+        "Enable forceServiceRecreation: true temporarily",
+        "Check that customNames is properly configured in config.json",
+        "Verify no typos in custom name fields",
+        "Clear HomeKit cache if names are cached in iOS"
+      ]
+    },
     "rateLimiting": {
       "symptoms": ["429 errors", "accessories not updating", "blocked API calls"],
       "solutions": [
@@ -365,18 +629,26 @@
       "refreshInterval": 180000,
       "enableRateLimitProtection": true,
       "cache_enabled": true,
-      "debug": true
+      "debug": true,
+      "customNames": "Configure if using non-English language"
     },
     "production": {
       "refreshInterval": 120000,
       "enableRateLimitProtection": true,
       "cache_enabled": true,
-      "debug": false
+      "debug": false,
+      "forceServiceRecreation": false
     },
     "multiple_installations": {
       "use_filtering": true,
       "refreshInterval": 300000,
       "aggressive_caching": true
+    },
+    "localization": {
+      "configure_custom_names": true,
+      "test_with_force_recreation": true,
+      "restart_homebridge_after_changes": true,
+      "disable_force_recreation_in_production": true
     }
   }
 }
