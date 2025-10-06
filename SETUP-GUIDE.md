@@ -967,7 +967,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.0",
+    "plugin_version": "2.0.4",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",

@@ -302,6 +302,7 @@ export class AuthManager {
 
   public async authenticate(): Promise<void> {
     try {
+    this.logEnvDiagnostics();
       if (this.isTokenValid()) {
         this.log.debug('✅ Using existing valid token');
         return;
@@ -833,6 +834,22 @@ private openBrowser(url: string): void {
       issuedAt: this.tokenIssuedAt ? new Date(this.tokenIssuedAt) : undefined
     };
   }
+
+private logEnvDiagnostics(): void {
+  const env = process.env;
+  this.log.warn(
+    [
+      '🧪 ENV DIAGNOSTICS',
+      `platform=${process.platform}`,
+      `DISPLAY=${env.DISPLAY ?? '(unset)'}`,
+      `WAYLAND_DISPLAY=${env.WAYLAND_DISPLAY ?? '(unset)'}`,
+      `XDG_RUNTIME_DIR=${env.XDG_RUNTIME_DIR ?? '(unset)'}`,
+      `DBUS_SESSION_BUS_ADDRESS=${env.DBUS_SESSION_BUS_ADDRESS ? '(set)' : '(unset)'}`,
+      `SYSTEMD_EXEC_PID=${env.SYSTEMD_EXEC_PID ? '(set)' : '(unset)'}`,
+      `INVOCATION_ID=${env.INVOCATION_ID ? '(set)' : '(unset)'}`
+    ].join(' | ')
+  );
+}
 
   public cleanup(): void {
     if (this.tokenRefreshTimer) {

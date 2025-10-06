@@ -263,7 +263,7 @@ npm install -g homebridge-viessmann-vicare
         "maxDelay": 300000,
         "maxConsecutiveErrors": 5,
         "deviceUpdateDelay": 1000,
-        "userAgent": "homebridge-viessmann-vicare/2.0.0"
+        "userAgent": "homebridge-viessmann-vicare/2.0.4"
     },
     "debug": false
 }
@@ -840,6 +840,18 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.4] - 2025-10-06
+**Added**
+- ✨ `logEnvDiagnostics()` for better detection of graphical environment (X11, Wayland, systemd, headless).
+- ✨ New fallback page `/login` for authentication via another device on the same LAN.
+- ✨ Auto-authentication now supported even in headless environments (Raspberry Pi, systemd, Docker).
+**Changed**
+- ✨ Default `authMethod` is now `"auto"` in all examples and documentation.
+- ✨ Improved resilience in `openBrowser()` on Linux with fallback to `xdg-open`, `gio`, and `xdg-desktop-portal`.
+**Fixed**
+- 🐛 Timeout and fallback flow now properly logged when auto-auth fails.
+- 🐛 Documentation and setup guide reflect the new authentication behavior.
 
 ### v2.0.0
 - ✨ **Major Release**: Complete rewrite with advanced features
