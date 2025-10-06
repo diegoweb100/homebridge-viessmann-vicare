@@ -66,8 +66,8 @@ export const DEFAULT_CONFIG = {
  * Viessmann API endpoints
  */
 export const VIESSMANN_API = {
-  baseURL: 'https://api.viessmann.com',
-  authURL: 'https://iam.viessmann.com/idp/v3',
+  baseURL: 'https://api.viessmann-climatesolutions.com',
+  authURL: 'https://iam.viessmann-climatesolutions.com/idp/v3',
   scope: 'IoT User offline_access',
   
   endpoints: {

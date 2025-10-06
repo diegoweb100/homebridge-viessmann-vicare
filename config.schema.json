@@ -19,7 +19,7 @@
         "type": "string",
         "required": true,
         "pattern": "^[a-zA-Z0-9_-]+$",
-        "description": "Your Viessmann API Client ID from the developer portal. Must contain only alphanumeric characters, underscores, and hyphens. Get it from https://developer.viessmann.com/"
+        "description": "Your Viessmann API Client ID from the developer portal. Must contain only alphanumeric characters, underscores, and hyphens. Get it from https://developer.viessmann-climatesolutions.com/"
       },
       "clientSecret": {
         "title": "Client Secret",

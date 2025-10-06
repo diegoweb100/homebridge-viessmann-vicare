@@ -21,7 +21,7 @@ export interface APIClientConfig extends RateLimitConfig {
 }
 
 export class APIClient {
-  private readonly baseURL = 'https://api.viessmann.com';
+  private readonly baseURL = 'https://api.viessmann-climatesolutions.com';
   private readonly httpClient: AxiosInstance;
   private readonly healthMonitor: APIHealthMonitor;
   private readonly rateLimitManager: RateLimitManager;

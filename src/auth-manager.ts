@@ -38,7 +38,7 @@ interface StoredTokens {
 }
 
 export class AuthManager {
-  private readonly authURL = 'https://iam.viessmann.com/idp/v3';
+  private readonly authURL = 'https://iam.viessmann-climatesolutions.com/idp/v3';
   private readonly redirectUri: string;
   private readonly tokenStoragePath: string;
   
@@ -378,7 +378,7 @@ export class AuthManager {
     this.log.error('');
     this.log.error('📋 Follow these steps:');
     this.log.error('');
-    this.log.error('1. 🌐 Visit: https://developer.viessmann.com/');
+    this.log.error('1. 🌐 Visit: https://developer.viessmann-climatesolutions.com/');
     this.log.error('2. 📝 Create an application with these settings:');
     this.log.error('   • Name: homebridge-viessmann-vicare');
     this.log.error('   • Type: Public Client');
@@ -391,7 +391,7 @@ export class AuthManager {
     this.log.error(`   ${authUrl}`);
     this.log.error('');
     this.log.error('4. ⚡ QUICKLY exchange authorization code for tokens (20 second limit!):');
-    this.log.error('   curl -X POST "https://iam.viessmann.com/idp/v3/token" \\');
+    this.log.error('   curl -X POST "https://iam.viessmann-climatesolutions.com/idp/v3/token" \\');
     this.log.error('   -H "Content-Type: application/x-www-form-urlencoded" \\');
     this.log.error(`   -d "client_id=${this.config.clientId}&redirect_uri=${encodeURIComponent(this.redirectUri)}&grant_type=authorization_code&code_verifier=${this.codeVerifier}&code=YOUR_AUTH_CODE"`);
     this.log.error('');
@@ -555,7 +555,7 @@ export class AuthManager {
     }
   }
 
-  private openBrowser(url: string): void {
+ /** private openBrowser(url: string): void {
     const { exec } = require('child_process');
     
     try {
@@ -588,6 +588,84 @@ export class AuthManager {
       this.log.warn('⚠️ Error opening browser:', error);
     }
   }
+**/
+private openBrowser(url: string): void {
+  const { execFile, exec } = require('child_process');
+
+  const tryExecFile = (cmd: string, args: string[], env: NodeJS.ProcessEnv) =>
+    new Promise<void>((resolve, reject) => {
+      execFile(cmd, args, { env }, (err: any) => err ? reject(err) : resolve());
+    });
+
+  const tryExec = (command: string, env: NodeJS.ProcessEnv) =>
+    new Promise<void>((resolve, reject) => {
+      exec(command, { env }, (err: any) => err ? reject(err) : resolve());
+    });
+
+  // Copia pulita dell'ambiente
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  // Migliora compatibilità Linux (X/Wayland) senza toccare il servizio
+  if (process.platform === 'linux') {
+    if (!env.DISPLAY) {
+      // fallback tipico X11
+      env.DISPLAY = ':0';
+    }
+    if (!env.XDG_RUNTIME_DIR && typeof process.getuid === 'function') {
+      env.XDG_RUNTIME_DIR = `/run/user/${process.getuid()}`;
+    }
+  }
+
+  const tryLinux = async () => {
+    // 1) Standard freedesktop
+    try { await tryExecFile('xdg-open', [url], env); this.log.debug('🌐 xdg-open OK'); return; } catch {}
+
+    // 2) Gio / GVFS
+    try { await tryExec(`gio open "${url}"`, env); this.log.debug('🌐 gio open OK'); return; } catch {}
+
+    // 3) Debian-like helpers
+    try { await tryExecFile('sensible-browser', [url], env); this.log.debug('🌐 sensible-browser OK'); return; } catch {}
+    try { await tryExecFile('x-www-browser', [url], env); this.log.debug('🌐 x-www-browser OK'); return; } catch {}
+
+    // 4) xdg-desktop-portal (DBus OpenURI) — compatibile Wayland/X
+    try {
+      await tryExec(
+        `gdbus call --session ` +
+        `--dest org.freedesktop.portal.Desktop ` +
+        `--object-path /org/freedesktop/portal/desktop ` +
+        `--method org.freedesktop.portal.OpenURI.OpenURI "" "${url}" "{}"`,
+        env
+      );
+      this.log.debug('🌐 xdg-desktop-portal OpenURI OK');
+      return;
+    } catch {}
+
+    // 5) backend specifici (best-effort, non bloccanti)
+    try { await tryExecFile('kde-open5', [url], env); this.log.debug('🌐 kde-open5 OK'); return; } catch {}
+    try { await tryExecFile('gnome-open', [url], env); this.log.debug('🌐 gnome-open OK'); return; } catch {}
+
+    // Nessun metodo disponibile/riuscito
+    throw new Error('No Linux opener succeeded');
+  };
+
+  (async () => {
+    try {
+      switch (process.platform) {
+        case 'darwin':
+          await tryExec(`open "${url}"`, env);
+          break;
+        case 'win32':
+          await tryExec(`start "" "${url}"`, env);
+          break;
+        default:
+          await tryLinux();
+      }
+      this.log.info('✅ Tentativo di apertura browser completato');
+    } catch (e: any) {
+      this.log.warn(`⚠️ Impossibile aprire automaticamente il browser (${e?.message || e}). Apri l’URL manualmente.`);
+    }
+  })();
+}
 
   private async exchangeCodeForTokens(authCode: string): Promise<void> {
     const tokenData = new URLSearchParams({
