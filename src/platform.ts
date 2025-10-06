@@ -12,13 +12,13 @@ import {
 
 import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
 // Export types from viessmann-api-endpoints for accessories
-export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
+export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
 export { ViessmannPlatformConfig } from './viessmann-api';
-import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
+import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
-import { PLUGIN_NAME } from './settings';
+import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -35,6 +35,16 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   private maxConsecutiveErrors = 5;
   private backoffMultiplier = 1;
 
+  // 🆕 NEW: Burner update system
+  private pendingBurnerUpdates: Map<string, NodeJS.Timeout> = new Map();
+  private burnerUpdateStats = {
+    totalUpdates: 0,
+    successfulUpdates: 0,
+    failedUpdates: 0,
+    lastUpdateTime: 0,
+    debounceSkips: 0,
+  };
+
   constructor(
     public readonly log: Logger,
     public readonly config: ViessmannPlatformConfig & PlatformConfig,
@@ -43,6 +53,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
     this.viessmannAPI = new ViessmannAPI(this.log, this.config);
+
+    // 🆕 NEW: Setup burner update callback
+    this.setupBurnerUpdateSystem();
 
     this.log.debug('Finished initializing platform:', this.config.name || 'Viessmann');
 
@@ -64,8 +77,368 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         clearInterval(this.healthMonitoringTimer);
       }
       
+      // 🆕 NEW: Cleanup burner update system
+      this.cleanupBurnerUpdateSystem();
+      
       this.viessmannAPI.cleanup();
     });
+  }
+
+  // 🆕 NEW: Setup burner update system
+  private setupBurnerUpdateSystem(): void {
+    // Set callback in API endpoints to receive burner status updates
+    this.viessmannAPI.setBurnerUpdateCallback(this.handleBurnerStatusUpdate.bind(this));
+    
+    this.log.debug('🔥 Burner update system initialized');
+  }
+
+  // 🆕 NEW: Handle burner status updates from API
+  private async handleBurnerStatusUpdate(
+    installationId: number,
+    gatewaySerial: string,
+    deviceId: string,
+    burnerStatus: BurnerStatus,
+    reason: string
+  ): Promise<void> {
+    const updateKey = `${installationId}-${gatewaySerial}-${deviceId}`;
+    
+    try {
+      // 🛡️ Debounce multiple updates for the same device
+      if (this.pendingBurnerUpdates.has(updateKey)) {
+        if (BURNER_UPDATE_CONFIG.debounce.enabled) {
+          clearTimeout(this.pendingBurnerUpdates.get(updateKey)!);
+          this.burnerUpdateStats.debounceSkips++;
+          this.log.debug(`🔥 Debouncing burner update for device ${deviceId} (reason: ${reason})`);
+        }
+      }
+
+      const timeoutId = setTimeout(async () => {
+        try {
+          this.log.debug(`🔥 Processing burner update for device ${deviceId} (reason: ${reason})`);
+          
+          // Find and update affected accessories
+          await this.updateAccessoriesWithBurnerStatus(installationId, gatewaySerial, deviceId, burnerStatus, reason);
+          
+          this.burnerUpdateStats.successfulUpdates++;
+          this.burnerUpdateStats.lastUpdateTime = Date.now();
+          this.pendingBurnerUpdates.delete(updateKey);
+          
+        } catch (error) {
+          this.log.error(`Failed to process burner update for device ${deviceId}:`, error);
+          this.burnerUpdateStats.failedUpdates++;
+          this.pendingBurnerUpdates.delete(updateKey);
+        }
+      }, BURNER_UPDATE_CONFIG.debounce.enabled ? BURNER_UPDATE_CONFIG.debounce.windowMs : 0);
+
+      this.pendingBurnerUpdates.set(updateKey, timeoutId);
+      this.burnerUpdateStats.totalUpdates++;
+      
+    } catch (error) {
+      this.log.error(`Error handling burner status update for device ${deviceId}:`, error);
+    }
+  }
+
+  // 🆕 NEW: Update accessories with fresh burner status
+  private async updateAccessoriesWithBurnerStatus(
+    installationId: number,
+    gatewaySerial: string,
+    deviceId: string,
+    burnerStatus: BurnerStatus,
+    reason: string
+  ): Promise<void> {
+    // Find accessories for this device
+    const affectedAccessories = this.accessories.filter(accessory => 
+      accessory.context.installation?.id === installationId &&
+      accessory.context.gateway?.serial === gatewaySerial &&
+      accessory.context.device?.id === deviceId
+    );
+
+    let updatedCount = 0;
+
+    for (const accessory of affectedAccessories) {
+      try {
+        // Determine accessory type and update accordingly
+        const isBoilerAccessory = accessory.UUID.includes('-boiler');
+        const isDHWAccessory = accessory.UUID.includes('-dhw');
+        const isHeatingCircuitAccessory = accessory.UUID.includes('-circuit');
+        
+        if (isBoilerAccessory) {
+          await this.updateBoilerAccessoryBurnerStatus(accessory, burnerStatus);
+          updatedCount++;
+        } else if (isDHWAccessory) {
+          await this.updateDHWAccessoryBurnerStatus(accessory, burnerStatus);
+          updatedCount++;
+        } else if (isHeatingCircuitAccessory) {
+          await this.updateHeatingCircuitAccessoryBurnerStatus(accessory, burnerStatus);
+          updatedCount++;
+        }
+        
+        this.log.debug(`🔥 Updated ${accessory.displayName} with fresh burner status`);
+        
+      } catch (error) {
+        this.log.error(`Failed to update accessory ${accessory.displayName} with burner status:`, error);
+      }
+    }
+    
+    if (updatedCount > 0) {
+      this.log.info(`🔥 IMMEDIATE UPDATE: Burner ${burnerStatus.burnerActive ? 'ACTIVATED' : 'DEACTIVATED'} (${burnerStatus.modulation}% modulation) - Updated ${updatedCount} accessories (reason: ${reason})`);
+    }
+  }
+
+  // 🆕 NEW: Update boiler accessory with immediate burner status
+  private async updateBoilerAccessoryBurnerStatus(
+    accessory: PlatformAccessory,
+    burnerStatus: BurnerStatus
+  ): Promise<void> {
+    // Find HeaterCooler service
+    const heaterCoolerService = accessory.getService(this.Service.HeaterCooler);
+    if (heaterCoolerService) {
+      // Update Active state
+      heaterCoolerService.updateCharacteristic(
+        this.Characteristic.Active,
+        burnerStatus.burnerActive ? 
+          this.Characteristic.Active.ACTIVE : 
+          this.Characteristic.Active.INACTIVE
+      );
+      
+      // Update CurrentHeaterCoolerState
+      heaterCoolerService.updateCharacteristic(
+        this.Characteristic.CurrentHeaterCoolerState,
+        burnerStatus.burnerActive ? 
+          this.Characteristic.CurrentHeaterCoolerState.HEATING : 
+          this.Characteristic.CurrentHeaterCoolerState.INACTIVE
+      );
+      
+      // Update temperature if available
+      if (burnerStatus.boilerTemp > 0) {
+        heaterCoolerService.updateCharacteristic(
+          this.Characteristic.CurrentTemperature,
+          burnerStatus.boilerTemp
+        );
+      }
+    }
+
+    // Find Burner Switch service (if exists)
+    const burnerSwitchService = accessory.services.find(service => 
+      service.UUID === this.Service.Switch.UUID && 
+      service.subtype?.includes('burner')
+    );
+    
+    if (burnerSwitchService) {
+      burnerSwitchService.updateCharacteristic(
+        this.Characteristic.On,
+        burnerStatus.burnerActive
+      );
+    }
+
+    // Find Modulation Lightbulb service (if exists)
+    const modulationService = accessory.services.find(service => 
+      service.UUID === this.Service.Lightbulb.UUID && 
+      service.subtype?.includes('modulation')
+    );
+    
+    if (modulationService) {
+      modulationService.updateCharacteristic(
+        this.Characteristic.On,
+        burnerStatus.modulation > 0
+      );
+      
+      modulationService.updateCharacteristic(
+        this.Characteristic.Brightness,
+        burnerStatus.modulation
+      );
+    }
+
+    // 🆕 NEW: Update diagnostic services if they exist
+    
+    // Update Burner Activity Contact Sensor
+    const burnerActivityService = accessory.services.find(service => 
+      service.UUID === this.Service.ContactSensor.UUID && 
+      service.subtype?.includes('burner-activity')
+    );
+    
+    if (burnerActivityService) {
+      burnerActivityService.updateCharacteristic(
+        this.Characteristic.ContactSensorState,
+        burnerStatus.burnerActive ? 
+          this.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED : // Open = Active
+          this.Characteristic.ContactSensorState.CONTACT_DETECTED       // Closed = Inactive
+      );
+    }
+
+    // Update Outside Temperature if available
+    if (burnerStatus.supplyTemp && burnerStatus.supplyTemp > 0) {
+      const outsideTempService = accessory.services.find(service => 
+        service.UUID === this.Service.TemperatureSensor.UUID && 
+        service.subtype?.includes('outside-temp')
+      );
+      
+      if (outsideTempService) {
+        outsideTempService.updateCharacteristic(
+          this.Characteristic.CurrentTemperature,
+          burnerStatus.supplyTemp
+        );
+      }
+    }
+
+    // Update Water Pressure if available
+    if (burnerStatus.pressure && burnerStatus.pressure > 0) {
+      const waterPressureService = accessory.services.find(service => 
+        service.UUID === this.Service.LeakSensor.UUID && 
+        service.subtype?.includes('water-pressure')
+      );
+      
+      if (waterPressureService) {
+        const isOptimal = burnerStatus.pressure >= 1.0 && burnerStatus.pressure <= 2.5;
+        
+        waterPressureService.updateCharacteristic(
+          this.Characteristic.LeakDetected,
+          isOptimal ? 
+            this.Characteristic.LeakDetected.LEAK_NOT_DETECTED :
+            this.Characteristic.LeakDetected.LEAK_DETECTED
+        );
+      }
+    }
+  }
+
+  // 🆕 NEW: Update DHW accessory with immediate burner status 
+  private async updateDHWAccessoryBurnerStatus(
+    accessory: PlatformAccessory,
+    burnerStatus: BurnerStatus
+  ): Promise<void> {
+    // Find HeaterCooler service
+    const heaterCoolerService = accessory.getService(this.Service.HeaterCooler);
+    if (heaterCoolerService) {
+      // Update Active state based on DHW mode
+      heaterCoolerService.updateCharacteristic(
+        this.Characteristic.Active,
+        burnerStatus.dhwActive ? 
+          this.Characteristic.Active.ACTIVE : 
+          this.Characteristic.Active.INACTIVE
+      );
+      
+      // Update CurrentHeaterCoolerState - only show heating if DHW is active AND burner is running
+      const isDHWActiveAndBurnerRunning = burnerStatus.dhwActive && burnerStatus.burnerActive;
+      
+      heaterCoolerService.updateCharacteristic(
+        this.Characteristic.CurrentHeaterCoolerState,
+        isDHWActiveAndBurnerRunning ? 
+          this.Characteristic.CurrentHeaterCoolerState.HEATING : 
+          this.Characteristic.CurrentHeaterCoolerState.INACTIVE
+      );
+    }
+
+    // Update DHW mode switches based on dhwActive status
+    const dhwOffService = accessory.services.find(service => 
+      service.UUID === this.Service.Switch.UUID && 
+      service.subtype?.includes('dhw-off')
+    );
+    
+    if (dhwOffService) {
+      dhwOffService.updateCharacteristic(
+        this.Characteristic.On,
+        !burnerStatus.dhwActive
+      );
+    }
+
+    // Update other DHW mode switches (comfort/eco) - mark as active if DHW is on
+    const dhwModeServices = accessory.services.filter(service => 
+      service.UUID === this.Service.Switch.UUID && 
+      (service.subtype?.includes('dhw-comfort') || service.subtype?.includes('dhw-eco'))
+    );
+    
+    for (const modeService of dhwModeServices) {
+      // If DHW became active and this mode was previously on, keep it on
+      // If DHW became inactive, turn off all modes except off
+      const currentlyOn = modeService.getCharacteristic(this.Characteristic.On).value as boolean;
+      
+      if (!burnerStatus.dhwActive && currentlyOn) {
+        // DHW turned off, disable this mode
+        modeService.updateCharacteristic(this.Characteristic.On, false);
+      }
+      // If DHW is active, we don't change mode switches as we don't know which specific mode is active
+    }
+  }
+
+  // 🆕 NEW: Update heating circuit accessory with immediate burner status
+  private async updateHeatingCircuitAccessoryBurnerStatus(
+    accessory: PlatformAccessory,
+    burnerStatus: BurnerStatus
+  ): Promise<void> {
+    // Find HeaterCooler service
+    const heaterCoolerService = accessory.getService(this.Service.HeaterCooler);
+    if (heaterCoolerService) {
+      // For heating circuits, we mainly update based on burner activity
+      // The specific circuit mode logic is too complex for immediate updates
+      
+      // Update temperature if available
+      if (burnerStatus.supplyTemp && burnerStatus.supplyTemp > 0) {
+        heaterCoolerService.updateCharacteristic(
+          this.Characteristic.CurrentTemperature,
+          burnerStatus.supplyTemp
+        );
+      } else if (burnerStatus.boilerTemp > 0) {
+        // Use boiler temp as fallback, but adjust for circuit (rough estimate)
+        const estimatedCircuitTemp = Math.max(15, burnerStatus.boilerTemp - 10);
+        heaterCoolerService.updateCharacteristic(
+          this.Characteristic.CurrentTemperature,
+          estimatedCircuitTemp
+        );
+      }
+    }
+  }
+
+  // 🆕 NEW: Public method to request immediate burner update (for accessories)
+  public requestImmediateBurnerUpdate(
+    installationId: number,
+    gatewaySerial: string,
+    deviceId: string,
+    reason: string,
+    delayMs: number = BURNER_UPDATE_CONFIG.delays.dhwModeChange
+  ): void {
+    // Request immediate refresh from API
+    this.viessmannAPI.refreshBurnerStatus(installationId, gatewaySerial, deviceId, reason)
+      .then(burnerStatus => {
+        if (burnerStatus) {
+          this.log.debug(`🔥 Immediate burner update completed for device ${deviceId}`);
+        }
+      })
+      .catch(error => {
+        this.log.error(`Failed immediate burner update for device ${deviceId}:`, error);
+      });
+    
+    this.log.debug(`🔥 Requested immediate burner update for device ${deviceId} (reason: ${reason}, delay: ${delayMs}ms)`);
+  }
+
+  // 🆕 NEW: Cleanup burner update system
+  private cleanupBurnerUpdateSystem(): void {
+    // Clear all pending burner updates
+    for (const [key, timeoutId] of this.pendingBurnerUpdates.entries()) {
+      clearTimeout(timeoutId);
+    }
+    this.pendingBurnerUpdates.clear();
+    
+    this.log.debug('🔥 Burner update system cleaned up');
+  }
+
+  // 🆕 NEW: Get burner update statistics
+  public getBurnerUpdateStats(): {
+    totalUpdates: number;
+    successfulUpdates: number;
+    failedUpdates: number;
+    successRate: number;
+    pendingUpdates: number;
+    lastUpdateTime: number;
+    debounceSkips: number;
+  } {
+    const successRate = this.burnerUpdateStats.totalUpdates > 0 ? 
+      (this.burnerUpdateStats.successfulUpdates / this.burnerUpdateStats.totalUpdates) * 100 : 0;
+
+    return {
+      ...this.burnerUpdateStats,
+      successRate,
+      pendingUpdates: this.pendingBurnerUpdates.size,
+    };
   }
 
   configureAccessory(accessory: PlatformAccessory) {
@@ -395,11 +768,23 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     let successfulUpdates = 0;
     let rateLimitedUpdates = 0;
     let errorUpdates = 0;
+    let skippedForBurnerUpdates = 0;
     
     try {
       for (const accessory of this.accessories) {
         try {
           if (accessory.context.device) {
+            const deviceKey = `${accessory.context.installation.id}-${accessory.context.gateway.serial}-${accessory.context.device.id}`;
+            
+            // 🆕 NEW: Skip full update if recent immediate burner update occurred
+            const hasRecentBurnerUpdate = this.pendingBurnerUpdates.has(deviceKey);
+            if (hasRecentBurnerUpdate && this.config.enableImmediateBurnerUpdates !== false) {
+              this.log.debug(`⚡ Skipping full update for device ${accessory.context.device.id} - recent immediate burner update in progress`);
+              skippedForBurnerUpdates++;
+              successfulUpdates++; // Count as successful to avoid error handling
+              continue;
+            }
+
             // Add timeout handling per device
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout per device
@@ -458,7 +843,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       }
 
       // Update statistics and adjust refresh interval if needed
-      this.updateCycleComplete(successfulUpdates, rateLimitedUpdates, errorUpdates);
+      this.updateCycleComplete(successfulUpdates, rateLimitedUpdates, errorUpdates, skippedForBurnerUpdates);
 
     } catch (error) {
       this.log.error('Error during device update cycle:', error);
@@ -468,19 +853,23 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private updateCycleComplete(successful: number, rateLimited: number, errors: number) {
+  private updateCycleComplete(successful: number, rateLimited: number, errors: number, skipped: number) {
     const total = this.accessories.length;
     
     if (rateLimited > 0) {
-      this.log.warn(`Update cycle completed: ${successful}/${total} successful, ${rateLimited} rate limited, ${errors} errors`);
+      this.log.warn(`Update cycle completed: ${successful}/${total} successful, ${rateLimited} rate limited, ${errors} errors, ${skipped} skipped for burner updates`);
       this.adjustRefreshInterval(true);
       this.consecutiveErrors++;
     } else if (errors > total / 2) {
-      this.log.warn(`Update cycle completed with many errors: ${successful}/${total} successful, ${errors} errors`);
+      this.log.warn(`Update cycle completed with many errors: ${successful}/${total} successful, ${errors} errors, ${skipped} skipped for burner updates`);
       this.adjustRefreshInterval(true);
       this.consecutiveErrors++;
     } else {
-      this.log.debug(`Update cycle completed: ${successful}/${total} successful, ${errors} errors`);
+      if (skipped > 0) {
+        this.log.debug(`Update cycle completed: ${successful}/${total} successful, ${errors} errors, ${skipped} skipped for immediate burner updates`);
+      } else {
+        this.log.debug(`Update cycle completed: ${successful}/${total} successful, ${errors} errors`);
+      }
       
       // Reset error tracking on successful cycle
       if (successful > 0 && errors === 0) {
@@ -536,6 +925,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   private logSystemHealth(): void {
     try {
       const systemStatus = this.viessmannAPI.getSystemStatus();
+      const burnerStats = this.getBurnerUpdateStats();
       
       this.log.info('='.repeat(60));
       this.log.info(`${systemStatus.overall.emoji} SYSTEM HEALTH STATUS - ${systemStatus.overall.status} (${systemStatus.overall.score}/100)`);
@@ -556,6 +946,17 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         }
       } else {
         this.log.info(`🛡️ Rate Limiting: OK (${systemStatus.rateLimiting.retryCount} total hits)`);
+      }
+      
+      // 🆕 NEW: Burner Update Status
+      if (this.config.enableImmediateBurnerUpdates !== false) {
+        this.log.info(`🔥 Burner Updates: ${burnerStats.successfulUpdates}/${burnerStats.totalUpdates} successful (${burnerStats.successRate.toFixed(1)}% success rate)`);
+        if (burnerStats.pendingUpdates > 0) {
+          this.log.info(`   Pending updates: ${burnerStats.pendingUpdates}`);
+        }
+        if (burnerStats.debounceSkips > 0) {
+          this.log.info(`   Debounce optimizations: ${burnerStats.debounceSkips}`);
+        }
       }
       
       // Performance Status
@@ -609,6 +1010,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   // Public method to get enhanced platform status
   public getPlatformStatus() {
     const systemStatus = this.viessmannAPI.getSystemStatus();
+    const burnerStats = this.getBurnerUpdateStats();
     
     return {
       platform: {
@@ -618,6 +1020,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         accessoryCount: this.accessories.length,
         installationCount: this.installations.length,
       },
+      burnerUpdates: burnerStats, // 🆕 NEW
       system: systemStatus,
       summary: {
         overallHealth: systemStatus.overall.status,

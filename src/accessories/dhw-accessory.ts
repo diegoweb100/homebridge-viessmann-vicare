@@ -1,5 +1,6 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
+import { BURNER_UPDATE_CONFIG } from '../settings';
 
 export class ViessmannDHWAccessory {
   private heaterCoolerService: Service;
@@ -136,7 +137,7 @@ export class ViessmannDHWAccessory {
     this.platform.log.info(`DHW Capabilities - Modes: [${this.availableModes.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}`);
   }
 
-  private setupCharacteristics() {
+private setupCharacteristics() {
     // Remove any existing conflicting services
     this.removeConflictingServices();
 
@@ -254,7 +255,7 @@ export class ViessmannDHWAccessory {
       .onSet(() => {}); // Read-only
   }
 
-private setupModeServices() {
+  private setupModeServices() {
     const config = this.platform.config as ViessmannPlatformConfig;
     const customNames = config.customNames || {};  
     
@@ -291,17 +292,16 @@ private setupModeServices() {
         `dhw-comfort-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
       );
       
-	// 🔧 CRITICAL: Set displayName immediately
-	this.comfortService.displayName = comfortServiceName;
-	
-	// 🔧 IMPROVED: Set Name characteristic with delay and safety check
-	setTimeout(() => {
-	  if (this.comfortService) { // 🛡️ SAFETY CHECK - prevents undefined error
-		this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
-		this.comfortService.updateCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
-	  }
-	}, 1000);
-
+      // 🔧 CRITICAL: Set displayName immediately
+      this.comfortService.displayName = comfortServiceName;
+      
+      // 🔧 IMPROVED: Set Name characteristic with delay and safety check
+      setTimeout(() => {
+        if (this.comfortService) { // 🛡️ SAFETY CHECK - prevents undefined error
+          this.comfortService.setCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
+          this.comfortService.updateCharacteristic(this.platform.Characteristic.Name, comfortServiceName);
+        }
+      }, 1000);
       
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === 'comfort')
@@ -371,8 +371,8 @@ private setupModeServices() {
     this.ecoService = undefined;
     this.offService = undefined;
   }
-
-  async setActive(value: CharacteristicValue) {
+  
+async setActive(value: CharacteristicValue) {
     const active = value as number;
     
     if (active === this.platform.Characteristic.Active.ACTIVE) {
@@ -472,6 +472,17 @@ private setupModeServices() {
         const oldMode = this.currentMode;
         this.currentMode = mode;
         this.platform.log.info(`DHW mode changed: ${oldMode.toUpperCase()} → ${mode.toUpperCase()}`);
+        
+        // 🆕 NEW: Request immediate burner update after mode change
+        if (this.platform.config.enableImmediateBurnerUpdates !== false) {
+          this.platform.requestImmediateBurnerUpdate(
+            this.installation.id,
+            this.gateway.serial,
+            this.device.id,
+            `DHW mode change: ${oldMode} → ${mode}`,
+            BURNER_UPDATE_CONFIG.delays.dhwModeChange
+          );
+        }
         
         // Update all characteristics
         this.updateAllCharacteristics();
@@ -573,6 +584,18 @@ private setupModeServices() {
 
       if (success) {
         this.platform.log.info(`DHW target temperature: ${temperature}°C (Mode: ${this.currentMode.toUpperCase()})`);
+        
+        // 🆕 NEW: Request immediate burner update after temperature change
+        if (this.platform.config.enableImmediateBurnerUpdates !== false) {
+          this.platform.requestImmediateBurnerUpdate(
+            this.installation.id,
+            this.gateway.serial,
+            this.device.id,
+            `DHW temperature change: ${temperature}°C`,
+            BURNER_UPDATE_CONFIG.delays.dhwTemperatureChange
+          );
+        }
+        
       } else {
         this.platform.log.error(`Failed to set DHW target temperature to: ${temperature}°C`);
         throw new Error('Failed to set DHW target temperature');
@@ -626,4 +649,202 @@ private setupModeServices() {
 
     this.platform.log.debug(`DHW Status - Mode: ${this.currentMode.toUpperCase()}, Temp: ${this.states.CurrentTemperature}°C → ${this.states.HeatingThresholdTemperature}°C`);
   }
-}
+  
+// 🆕 NEW: Handle immediate burner status updates from platform
+  public handleImmediateBurnerUpdate(burnerStatus: any): void {
+    try {
+      // Update DHW characteristics based on burner status
+      if (burnerStatus.dhwActive !== undefined) {
+        const wasDHWActive = this.currentMode !== 'off';
+        const isDHWActive = burnerStatus.dhwActive;
+        
+        if (wasDHWActive !== isDHWActive) {
+          // DHW mode changed, update our state accordingly
+          if (!isDHWActive && this.currentMode !== 'off') {
+            // DHW turned off
+            this.currentMode = 'off';
+            this.updateAllCharacteristics();
+            this.platform.log.debug(`🔥 DHW immediate update: DHW turned OFF`);
+          } else if (isDHWActive && this.currentMode === 'off') {
+            // DHW turned on - we don't know which mode, but we can set to a default
+            const defaultMode = this.availableModes.includes('eco') ? 'eco' : 
+                               this.availableModes.includes('comfort') ? 'comfort' : 
+                               this.availableModes[0];
+            if (defaultMode && defaultMode !== 'off') {
+              this.currentMode = defaultMode;
+              this.updateAllCharacteristics();
+              this.platform.log.debug(`🔥 DHW immediate update: DHW turned ON (mode: ${defaultMode})`);
+            }
+          }
+        }
+      }
+      
+      // Update HeaterCooler state based on combined DHW and burner activity
+      if (burnerStatus.burnerActive !== undefined && burnerStatus.dhwActive !== undefined) {
+        const isHeating = burnerStatus.dhwActive && burnerStatus.burnerActive;
+        
+        this.heaterCoolerService.updateCharacteristic(
+          this.platform.Characteristic.CurrentHeaterCoolerState,
+          isHeating ? 
+            this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
+            this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE
+        );
+        
+        this.platform.log.debug(`🔥 DHW immediate update: Heating state = ${isHeating ? 'HEATING' : 'INACTIVE'} (DHW: ${burnerStatus.dhwActive}, Burner: ${burnerStatus.burnerActive})`);
+      }
+      
+      // Update temperature if available
+      if (burnerStatus.boilerTemp && burnerStatus.boilerTemp > 0) {
+        // For DHW, we can use boiler temperature as an indicator, but we should still prefer DHW-specific sensors
+        // Only update if we don't have a recent DHW temperature reading
+        if (this.states.CurrentTemperature === 40) { // Default value, likely not real
+          this.states.CurrentTemperature = Math.max(20, burnerStatus.boilerTemp - 10); // Rough estimate
+          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
+          this.platform.log.debug(`🔥 DHW immediate update: Estimated temp from boiler = ${this.states.CurrentTemperature}°C`);
+        }
+      }
+      
+    } catch (error) {
+      this.platform.log.error('Error handling immediate DHW burner update:', error);
+    }
+  }
+
+  // 🆕 NEW: Public method to check if DHW supports specific features for platform optimization
+  public getDHWCapabilities(): {
+    availableModes: string[];
+    supportsTemperatureControl: boolean;
+    temperatureRange: { min: number; max: number };
+    currentMode: string;
+    hasComfortMode: boolean;
+    hasEcoMode: boolean;
+    hasOffMode: boolean;
+  } {
+    return {
+      availableModes: [...this.availableModes],
+      supportsTemperatureControl: this.supportsTemperatureControl,
+      temperatureRange: { ...this.temperatureConstraints },
+      currentMode: this.currentMode,
+      hasComfortMode: this.availableModes.includes('comfort'),
+      hasEcoMode: this.availableModes.includes('eco'),
+      hasOffMode: this.availableModes.includes('off'),
+    };
+  }
+
+  // 🆕 NEW: Get current DHW status for platform health reports
+  public getDHWStatus(): {
+    isActive: boolean;
+    currentMode: string;
+    currentTemperature: number;
+    targetTemperature: number;
+    temperatureInRange: boolean;
+    modesAvailable: number;
+    lastModeChange?: number;
+  } {
+    const isActive = this.currentMode !== 'off';
+    const temperatureInRange = this.states.HeatingThresholdTemperature >= this.temperatureConstraints.min && 
+                              this.states.HeatingThresholdTemperature <= this.temperatureConstraints.max;
+
+    return {
+      isActive,
+      currentMode: this.currentMode,
+      currentTemperature: this.states.CurrentTemperature,
+      targetTemperature: this.states.HeatingThresholdTemperature,
+      temperatureInRange,
+      modesAvailable: this.availableModes.length,
+    };
+  }
+
+  // 🆕 NEW: Force DHW mode sync (for troubleshooting)
+  public async forceModeSync(): Promise<boolean> {
+    try {
+      this.platform.log.debug(`🔄 Force syncing DHW mode for device ${this.device.id}`);
+      
+      // Get fresh features to determine current mode
+      const features = await this.platform.viessmannAPI.getDeviceFeatures(
+        this.installation.id,
+        this.gateway.serial,
+        this.device.id
+      );
+      
+      const dhwOperatingModeFeature = features.find(f => f.feature === 'heating.dhw.operating.modes.active');
+      if (dhwOperatingModeFeature?.properties?.value?.value !== undefined) {
+        const actualMode = dhwOperatingModeFeature.properties.value.value;
+        
+        if (actualMode !== this.currentMode) {
+          this.platform.log.info(`🔄 DHW mode sync: ${this.currentMode} → ${actualMode}`);
+          this.currentMode = actualMode;
+          this.updateAllCharacteristics();
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      this.platform.log.error('Failed to force DHW mode sync:', error);
+      return false;
+    }
+  }
+
+  // 🆕 NEW: Validate and fix DHW temperature constraints (for robustness)
+  private validateTemperatureConstraints(): void {
+    // Ensure constraints are sane
+    if (this.temperatureConstraints.min >= this.temperatureConstraints.max) {
+      this.platform.log.warn(`Invalid DHW temperature constraints: min=${this.temperatureConstraints.min}, max=${this.temperatureConstraints.max}. Fixing to 30-60°C`);
+      this.temperatureConstraints = { min: 30, max: 60 };
+    }
+
+    if (this.temperatureConstraints.min < 10 || this.temperatureConstraints.max > 80) {
+      this.platform.log.warn(`DHW temperature constraints out of safe range: min=${this.temperatureConstraints.min}, max=${this.temperatureConstraints.max}. Clamping to 10-80°C`);
+      this.temperatureConstraints.min = Math.max(this.temperatureConstraints.min, 10);
+      this.temperatureConstraints.max = Math.min(this.temperatureConstraints.max, 80);
+    }
+
+    // Ensure current target temperature is within bounds
+    if (this.states.HeatingThresholdTemperature < this.temperatureConstraints.min || 
+        this.states.HeatingThresholdTemperature > this.temperatureConstraints.max) {
+      const newTarget = Math.max(this.temperatureConstraints.min, 
+                                Math.min(this.temperatureConstraints.max, 50));
+      this.platform.log.warn(`DHW target temperature ${this.states.HeatingThresholdTemperature}°C out of range. Setting to ${newTarget}°C`);
+      this.states.HeatingThresholdTemperature = newTarget;
+    }
+  }
+
+  // 🆕 NEW: Emergency mode reset (for critical issues)
+  public async emergencyReset(): Promise<boolean> {
+    try {
+      this.platform.log.warn(`🚨 Emergency reset for DHW device ${this.device.id}`);
+      
+      // Reset to safe defaults
+      this.currentMode = 'off';
+      this.states.HeatingThresholdTemperature = 50;
+      this.validateTemperatureConstraints();
+      
+      // Force set to off mode
+      const success = await this.executeDHWCommand('off');
+      
+      if (success) {
+        this.updateAllCharacteristics();
+        this.platform.log.info(`✅ DHW emergency reset completed - set to OFF mode`);
+        return true;
+      } else {
+        this.platform.log.error(`❌ DHW emergency reset failed - could not set to OFF mode`);
+        return false;
+      }
+      
+    } catch (error) {
+      this.platform.log.error('DHW emergency reset failed:', error);
+      return false;
+    }
+  }
+
+  // 🆕 NEW: Cleanup method for proper resource management
+  public cleanup(): void {
+    // Clear any pending timers or callbacks
+    // Remove service references
+    this.comfortService = undefined;
+    this.ecoService = undefined;
+    this.offService = undefined;
+    
+    this.platform.log.debug(`🧹 DHW accessory cleanup completed for device ${this.device.id}`);
+  }
+}    

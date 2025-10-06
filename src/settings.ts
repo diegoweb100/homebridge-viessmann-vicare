@@ -245,3 +245,24 @@ export const CACHE_PATTERNS = {
   circuits: 'heating.circuits',
   sensors: 'heating.sensors',
 };
+
+/**
+ * 🆕 NEW: Burner update configuration for immediate status updates
+ */
+export const BURNER_UPDATE_CONFIG = {
+  delays: {
+    dhwModeChange: 2000,        // 2 seconds after DHW mode change
+    dhwTemperatureChange: 3000, // 3 seconds after DHW temperature change
+    heatingModeChange: 2000,    // 2 seconds after heating mode change
+    heatingTemperatureChange: 3000, // 3 seconds after heating temperature change
+    programChange: 2000,        // 2 seconds after program change
+    holidayModeChange: 5000,    // 5 seconds after holiday mode change
+    extendedHeatingChange: 2000, // 2 seconds after extended heating change
+  },
+  debounce: {
+    enabled: true,
+    windowMs: 1000,             // 1 second debounce window
+  },
+  maxRetries: 3,
+  retryDelay: 1000,             // 1 second between retries
+};

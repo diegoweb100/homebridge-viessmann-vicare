@@ -198,7 +198,7 @@ npm install -g homebridge-viessmann-vicare
 
 ### Getting API Credentials
 
-1. Visit the [**Viessmann Developer Portal**](https://developer.viessmann.com/)
+1. Visit the [**Viessmann Developer Portal**](https://developer.viessmann-climatesolutions.com)
 2. Register a developer account
 3. **Create a new application**:
    - Name: `homebridge-viessmann-vicare`
@@ -821,7 +821,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Viessmann API documentation available at [Viessmann Developer Portal](https://developer.viessmann.com/)
+- Viessmann API documentation available at [Viessmann Developer Portal](https://developer.viessmann-climatesolutions.com/)
 - Community feedback and contributions
 - International user community for localization feedback
 

@@ -1,9 +1,10 @@
 import { Logger } from 'homebridge';
 import { AuthManager, AuthConfig } from './auth-manager';
 import { APIClient, APIClientConfig } from './api-client';
-import { ViessmannAPIEndpoints, ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice } from './viessmann-api-endpoints';
+import { ViessmannAPIEndpoints, ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
 import { CacheConfig, CacheStats } from './api-cache';
 import { APIMetrics } from './api-health-monitor';
+import { PLUGIN_VERSION } from './settings';
 import axios from 'axios';
 
 // Simple network utility functions inline (avoiding external dependency)
@@ -40,6 +41,11 @@ export interface ViessmannPlatformConfig extends AuthConfig {
   refreshInterval?: number;
   debug?: boolean;
   enableApiMetrics?: boolean;
+  
+  // 🆕 NEW: Immediate burner update options
+  enableImmediateBurnerUpdates?: boolean;
+  burnerUpdateDelay?: number;
+  burnerUpdateDebounce?: number;
   
   // Installation filtering
   installationFilter?: string;
@@ -99,7 +105,7 @@ export interface ViessmannPlatformConfig extends AuthConfig {
 }
 
 // Re-export types for backward compatibility
-export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice };
+export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus };
 
 export class ViessmannAPI {
   private readonly authManager: AuthManager;
@@ -130,7 +136,7 @@ export class ViessmannAPI {
       baseDelay: this.config.advanced?.baseDelay || 1000,
       maxDelay: this.config.advanced?.maxDelay || 300000,
       rateLimitResetBuffer: this.config.rateLimitResetBuffer || 60000,
-      userAgent: this.config.advanced?.userAgent || 'homebridge-viessmann-vicare/2.0.0',
+      userAgent: this.config.advanced?.userAgent || `homebridge-viessmann-vicare/${PLUGIN_VERSION}`,
       cache: this.buildCacheConfig()
     };
     
@@ -168,6 +174,19 @@ export class ViessmannAPI {
     };
   }
 
+  // 🆕 NEW: Set burner update callback for immediate updates
+  public setBurnerUpdateCallback(
+    callback: (
+      installationId: number,
+      gatewaySerial: string,
+      deviceId: string,
+      status: BurnerStatus,
+      reason: string
+    ) => void
+  ): void {
+    this.endpoints.setBurnerUpdateCallback(callback);
+  }
+
   // Authentication methods
   public async authenticate(): Promise<void> {
     return this.authManager.authenticate();
@@ -192,6 +211,33 @@ export class ViessmannAPI {
   public async getFeature(installationId: number, gatewaySerial: string, deviceId: string, featureName: string): Promise<ViessmannFeature | null> {
     await this.authenticate();
     return this.endpoints.getFeature(installationId, gatewaySerial, deviceId, featureName);
+  }
+
+  // 🆕 NEW: Burner status methods
+  public async getBurnerStatus(installationId: number, gatewaySerial: string, deviceId: string): Promise<BurnerStatus> {
+    await this.authenticate();
+    return this.endpoints.getBurnerStatus(installationId, gatewaySerial, deviceId);
+  }
+
+  public async refreshBurnerStatus(
+    installationId: number,
+    gatewaySerial: string,
+    deviceId: string,
+    reason: string = 'Manual refresh'
+  ): Promise<BurnerStatus | null> {
+    await this.authenticate();
+    return this.endpoints.refreshBurnerStatus(installationId, gatewaySerial, deviceId, reason);
+  }
+
+  public async checkBurnerSupport(installationId: number, gatewaySerial: string, deviceId: string): Promise<{
+    hasMainBurner: boolean;
+    hasModulation: boolean;
+    hasStatistics: boolean;
+    hasTemperatureSensors: boolean;
+    supportedFeatures: string[];
+  }> {
+    await this.authenticate();
+    return this.endpoints.checkBurnerSupport(installationId, gatewaySerial, deviceId);
   }
 
   // Command execution methods
@@ -277,6 +323,19 @@ export class ViessmannAPI {
   ): Promise<boolean> {
     await this.authenticate();
     return this.endpoints.setDHWMode(installationId, gatewaySerial, deviceId, mode);
+  }
+
+  // 🆕 NEW: Enhanced command for extended heating with burner update
+  public async setExtendedHeatingMode(
+    installationId: number,
+    gatewaySerial: string,
+    deviceId: string,
+    circuitNumber: number,
+    activate: boolean,
+    temperature?: number
+  ): Promise<boolean> {
+    await this.authenticate();
+    return this.endpoints.setExtendedHeatingMode(installationId, gatewaySerial, deviceId, circuitNumber, activate, temperature);
   }
 
   // Status and monitoring methods

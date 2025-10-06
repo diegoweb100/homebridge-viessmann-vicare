@@ -17,7 +17,7 @@ This guide will walk you through setting up the Viessmann ViCare plugin v2.0 for
 To obtain API credentials:
 
 1. **Visit the Developer Portal**:
-   - Go to https://developer.viessmann.com/
+   - Go to https://developer.viessmann-climatesolutions.com/
    - Register for a developer account using your email
 
 2. **Create an application**:
@@ -202,7 +202,7 @@ Extended Heating Name: Calefacción Extra
 3. **Look for authentication URL** in the logs:
    ```
    [Viessmann] Please open this URL in your browser to authenticate:
-   [Viessmann] https://iam.viessmann.com/idp/v3/authorize?client_id=...
+   [Viessmann] https://iam.viessmann-climatesolutions.com/idp/v3/authorize?client_id=...
    ```
 
 4. **Complete authentication**:
