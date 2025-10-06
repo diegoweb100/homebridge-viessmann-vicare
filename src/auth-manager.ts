@@ -321,18 +321,35 @@ export class AuthManager {
       // Determine authentication method
       const authMethod = this.config.authMethod || 'auto';
       
+      /**
       if (authMethod === 'manual' || this.shouldUseManualAuth()) {
         await this.handleManualAuth();
       } else {
         await this.performAutoAuth();
       }
+      **/
+		if (authMethod === 'manual') {
+		  await this.handleManualAuth();
+		  return;
+		}
+		
+		// Prova sempre l'auto-auth; se fallisce, fallback a manual
+		try {
+		  await this.performAutoAuth();   // avvia server di callback + openBrowser()
+		} catch (e) {
+		  this.log.warn(
+			'⚠️ Auto auth failed, falling back to manual:',
+			e instanceof Error ? e.message : String(e)
+		  );
+		  await this.handleManualAuth();
+		}      
 
     } catch (error) {
       this.log.error('❌ Authentication failed:', error);
       throw error;
     }
   }
-
+/**
   private shouldUseManualAuth(): boolean {
     if (this.config.authMethod === 'manual') {
       return true;
@@ -358,6 +375,29 @@ export class AuthManager {
 
     return false;
   }
+**/
+private shouldUseManualAuth(): boolean {
+  // Rispetta la scelta esplicita dell’utente
+  if (this.config.authMethod === 'manual') {
+    this.log.debug('🔧 Auth method explicitly set to "manual" in config.');
+    return true;
+  }
+
+  // Diagnostica non-bloccante: non forziamo più il manual in headless/systemd/container
+  const isHeadlessLinux = (process.platform === 'linux' && !process.env.DISPLAY);
+  const isContainer = !!(process.env.DOCKER || process.env.CONTAINER);
+  const isSystemd = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
+
+  if (isHeadlessLinux || isContainer || isSystemd) {
+    this.log.debug(
+      `ℹ️ Environment detected (headlessLinux=${isHeadlessLinux}, container=${isContainer}, systemd=${isSystemd}) — ` +
+      'proceeding with AUTO auth first; will fallback to MANUAL if AUTO fails.'
+    );
+  }
+
+  // Di default tentiamo sempre AUTO
+  return false;
+}
 
   private async performAutoAuth(): Promise<void> {
     try {
