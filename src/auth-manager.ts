@@ -574,7 +574,7 @@ private shouldUseManualAuth(): boolean {
       res.end('Not found');
     });
 
-    this.authServer.listen(this.config.redirectPort || 4200, () => {
+    this.authServer.listen(this.config.redirectPort || 4200, '0.0.0.0', () => {
       this.log.debug(`🌐 Auth server listening on ${this.hostIp}:${this.config.redirectPort || 4200}`);
     });
 
@@ -631,7 +631,7 @@ private shouldUseManualAuth(): boolean {
       this.log.warn('⚠️ Error opening browser:', error);
     }
   }
-**/
+
 private openBrowser(url: string): void {
   const { execFile, exec } = require('child_process');
 
@@ -658,6 +658,7 @@ private openBrowser(url: string): void {
       env.XDG_RUNTIME_DIR = `/run/user/${process.getuid()}`;
     }
   }
+
 
   const tryLinux = async () => {
     // 1) Standard freedesktop
@@ -706,6 +707,209 @@ private openBrowser(url: string): void {
       this.log.info('✅ Tentativo di apertura browser completato');
     } catch (e: any) {
       this.log.warn(`⚠️ Impossibile aprire automaticamente il browser (${e?.message || e}). Apri l’URL manualmente.`);
+    }
+  })();
+}
+**/
+private openBrowser(url: string): void {
+  const { execFile, exec } = require('child_process');
+
+  // Ambiente pulito senza toccare DISPLAY
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  // Helper per eseguire comandi con timeout
+  const execWithTimeout = (command: string, args: string[] = [], timeout = 5000): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const child = args.length > 0 
+        ? execFile(command, args, { env, timeout })
+        : exec(command, { env, timeout });
+
+      child.on('error', reject);
+      child.on('exit', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Exit code ${code}`));
+      });
+    });
+  };
+
+  const detectDesktopEnvironment = (): string => {
+    const xdg = env.XDG_CURRENT_DESKTOP?.toLowerCase() || '';
+    const session = env.DESKTOP_SESSION?.toLowerCase() || '';
+    const gdmsession = env.GDMSESSION?.toLowerCase() || '';
+    
+    // Controlla tutti i possibili indicatori
+    const indicators = [xdg, session, gdmsession].join(':');
+    
+    if (indicators.includes('gnome')) return 'gnome';
+    if (indicators.includes('kde') || indicators.includes('plasma')) return 'kde';
+    if (indicators.includes('xfce')) return 'xfce';
+    if (indicators.includes('lxde') || indicators.includes('lxqt')) return 'lxde';
+    if (indicators.includes('mate')) return 'mate';
+    if (indicators.includes('cinnamon')) return 'cinnamon';
+    if (indicators.includes('labwc') || indicators.includes('wlroots')) return 'wayland';
+    if (indicators.includes('wayfire') || indicators.includes('sway')) return 'wayland';
+    
+    return 'unknown';
+  };
+
+  const tryLinuxMethods = async () => {
+    const desktop = detectDesktopEnvironment();
+    this.log.debug(`🖥️ Desktop environment detected: ${desktop} (XDG_CURRENT_DESKTOP=${env.XDG_CURRENT_DESKTOP})`);
+
+    // 1. Metodo universale - xdg-open (funziona con tutti i DE moderni)
+    try {
+      await execWithTimeout('xdg-open', [url]);
+      this.log.info('✅ Browser aperto con xdg-open');
+      return true;
+    } catch {}
+
+    // 2. Metodi specifici per desktop environment
+    switch (desktop) {
+      case 'gnome':
+        try {
+          await execWithTimeout('gnome-open', [url]);
+          this.log.info('✅ Browser aperto con gnome-open');
+          return true;
+        } catch {}
+        try {
+          await execWithTimeout('gio', ['open', url]);
+          this.log.info('✅ Browser aperto con gio open');
+          return true;
+        } catch {}
+        break;
+
+      case 'kde':
+        try {
+          await execWithTimeout('kde-open5', [url]);
+          this.log.info('✅ Browser aperto con kde-open5');
+          return true;
+        } catch {}
+        try {
+          await execWithTimeout('kde-open', [url]);
+          this.log.info('✅ Browser aperto con kde-open');
+          return true;
+        } catch {}
+        break;
+
+      case 'xfce':
+        try {
+          await execWithTimeout('exo-open', [url]);
+          this.log.info('✅ Browser aperto con exo-open');
+          return true;
+        } catch {}
+        break;
+
+      case 'lxde':
+        try {
+          await execWithTimeout('pcmanfm', [url]);
+          this.log.info('✅ Browser aperto con pcmanfm');
+          return true;
+        } catch {}
+        break;
+
+      case 'mate':
+        try {
+          await execWithTimeout('mate-open', [url]);
+          this.log.info('✅ Browser aperto con mate-open');
+          return true;
+        } catch {}
+        break;
+
+      case 'cinnamon':
+        try {
+          await execWithTimeout('cinnamon-open', [url]);
+          this.log.info('✅ Browser aperto con cinnamon-open');
+          return true;
+        } catch {}
+        break;
+
+      case 'wayland':
+        // Portal DBus (metodo nativo Wayland - funziona con labwc)
+        try {
+          const escapedUrl = url.replace(/"/g, '\\"');
+          await execWithTimeout('gdbus', [
+            'call', '--session',
+            '--dest', 'org.freedesktop.portal.Desktop',
+            '--object-path', '/org/freedesktop/portal/desktop',
+            '--method', 'org.freedesktop.portal.OpenURI.OpenURI',
+            '', escapedUrl, '{}'
+          ]);
+          this.log.info('✅ Browser aperto con xdg-desktop-portal (Wayland)');
+          return true;
+        } catch {}
+        break;
+    }
+
+    // 3. Fallback: Helper generici Debian/Ubuntu/Raspberry Pi OS
+    const helpers = ['sensible-browser', 'x-www-browser', 'www-browser'];
+    for (const helper of helpers) {
+      try {
+        await execWithTimeout(helper, [url]);
+        this.log.info(`✅ Browser aperto con ${helper}`);
+        return true;
+      } catch {}
+    }
+
+    // 4. Ultimo tentativo: Browser diretti
+    const browsers = [
+      'chromium-browser',  // Raspberry Pi OS default
+      'chromium',
+      'firefox',
+      'firefox-esr',       // Debian/Raspberry Pi OS
+      'google-chrome',
+      'microsoft-edge',
+      'brave-browser',
+      'opera'
+    ];
+    
+    for (const browser of browsers) {
+      try {
+        await execWithTimeout(browser, [url]);
+        this.log.info(`✅ Browser aperto con ${browser}`);
+        return true;
+      } catch {}
+    }
+
+    return false;
+  };
+
+  (async () => {
+    try {
+      let success = false;
+
+      switch (process.platform) {
+        case 'darwin':
+          await execWithTimeout('open', [url]);
+          success = true;
+          break;
+          
+        case 'win32':
+          await execWithTimeout(`start "" "${url}"`);
+          success = true;
+          break;
+          
+        default: // Linux
+          success = await tryLinuxMethods();
+      }
+
+      if (success) {
+        this.log.info('🌐 Browser aperto con successo');
+      } else {
+        throw new Error('Tutti i metodi di apertura browser falliti');
+      }
+    } catch (e: any) {
+      this.log.warn('='.repeat(80));
+      this.log.warn('⚠️  IMPOSSIBILE APRIRE IL BROWSER AUTOMATICAMENTE');
+      this.log.warn('='.repeat(80));
+      this.log.warn('📱 Apri manualmente questo URL da QUALSIASI dispositivo nella tua rete:');
+      this.log.warn('');
+      this.log.warn(`   ${url}`);
+      this.log.warn('');
+      this.log.warn('💡 Puoi usare:');
+      this.log.warn('   • Computer/laptop sulla stessa rete');
+      this.log.warn('   • Smartphone/tablet');
+      this.log.warn('   • Qualsiasi browser moderno');
+      this.log.warn('='.repeat(80));
     }
   })();
 }
