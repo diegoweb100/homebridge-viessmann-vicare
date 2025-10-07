@@ -526,8 +526,8 @@ private shouldUseManualAuth(): boolean {
   private startAuthServer(callback: (code?: string, error?: Error) => void): void {
     this.authServer = http.createServer((req, res) => {
       const url = new URL(req.url!, `http://localhost:${this.config.redirectPort || 4200}`);
-        this.log.warn(`🟢 Auth server listening on http://${this.localAddress}:${this.config.redirectPort || 4200}/`);
-  		this.log.warn(`👉 If the browser does not open automatically, open this URL manually from another device:\nhttp://${this.localAddress}:${this.config.redirectPort || 4200}/login`);
+        this.log.warn(`🟢 Auth server listening on http://${this.hostIp}:${this.config.redirectPort || 4200}/`);
+  		this.log.warn(`👉 If the browser does not open automatically, open this URL manually from another device:\nhttp://${this.hostIp}:${this.config.redirectPort || 4200}/login`);
 
       if (url.pathname === '/') {
         const code = url.searchParams.get('code');
