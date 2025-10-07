@@ -526,7 +526,9 @@ private shouldUseManualAuth(): boolean {
   private startAuthServer(callback: (code?: string, error?: Error) => void): void {
     this.authServer = http.createServer((req, res) => {
       const url = new URL(req.url!, `http://localhost:${this.config.redirectPort || 4200}`);
-      
+        this.log.warn(`🟢 Auth server listening on http://${this.localAddress}:${this.config.redirectPort || 4200}/`);
+  		this.log.warn(`👉 If the browser does not open automatically, open this URL manually from another device:\nhttp://${this.localAddress}:${this.config.redirectPort || 4200}/login`);
+
       if (url.pathname === '/') {
         const code = url.searchParams.get('code');
         const error = url.searchParams.get('error');
@@ -545,7 +547,7 @@ private shouldUseManualAuth(): boolean {
             </html>
           `);
           callback(undefined, new Error(`OAuth error: ${errorDescription}`));
-          this.stopAuthServer();
+          //this.stopAuthServer();
           return;
         }
 
@@ -562,7 +564,7 @@ private shouldUseManualAuth(): boolean {
             </html>
           `);
           callback(code);
-          this.stopAuthServer();
+          //this.stopAuthServer();
           return;
         }
       }
