@@ -719,7 +719,7 @@ private tryOpenBrowserDirect(url: string): void {
       command = `xdg-open "${url}" 2>/dev/null || firefox "${url}" 2>/dev/null || chromium-browser "${url}" 2>/dev/null`;
   }
 
-  exec(command, (error) => {
+  exec(command, (error: Error | null) => {
     if (error) {
       this.log.info('📱 Please open the authentication URL manually in your browser');
     } else {
