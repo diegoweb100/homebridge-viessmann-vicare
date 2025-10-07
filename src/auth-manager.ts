@@ -462,53 +462,67 @@ private shouldUseManualAuth(): boolean {
     return Date.now() < (this.tokenExpiresAt - tokenRefreshBuffer);
   }
 
-  private async performFullAuth(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const authUrl = this.buildAuthUrl();
-      
+private async performFullAuth(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const authUrl = this.buildAuthUrl();
+    
+    const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
+    
+    if (isSystemdService) {
+      // Messaggio semplificato per servizi
+      this.log.info('='.repeat(80));
+      this.log.info('🔐 VIESSMANN AUTHENTICATION REQUIRED');
+      this.log.info('='.repeat(80));
+    } else {
+      // Messaggio dettagliato per installazioni desktop
       this.log.info('='.repeat(80));
       this.log.info('🔐 VIESSMANN OAUTH AUTHENTICATION');
       this.log.info('='.repeat(80));
       this.log.info('⚠️ CRITICAL: You have only 20 seconds after browser authorization!');
       this.log.info('');
-      this.log.info('🔗 Please open this URL in your browser to authenticate:');
-      this.log.info('');
-      this.log.info(authUrl);
-      this.log.info('');
-      this.log.info('⏳ Waiting for authentication callback...');
-      const authTimeout = this.config.authTimeout || 300000;
-      this.log.info(`⏰ This process will timeout after ${authTimeout / 1000} seconds.`);
-      this.log.info('='.repeat(80));
+    }
 
-      // Set timeout for authentication process
-      this.authTimeout = setTimeout(() => {
-        this.stopAuthServer();
-        reject(new Error(`Authentication timeout - no response received within ${authTimeout / 1000} seconds`));
-      }, authTimeout);
+    // Set timeout for authentication process
+    const authTimeout = this.config.authTimeout || 300000;
+    this.authTimeout = setTimeout(() => {
+      this.stopAuthServer();
+      reject(new Error(`Authentication timeout - no response received within ${authTimeout / 1000} seconds`));
+    }, authTimeout);
 
-      // Start local server to capture callback
-      this.startAuthServer((code, error) => {
+    // Start local server to capture callback
+    this.startAuthServer((code, error) => {
+      if (error) {
         if (this.authTimeout) {
           clearTimeout(this.authTimeout);
           this.authTimeout = undefined;
         }
+        reject(error);
+        return;
+      }
 
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        if (code) {
-          this.exchangeCodeForTokens(code)
-            .then(() => resolve())
-            .catch(reject);
-        }
-      });
-
-      // Auto-open browser if possible
-      this.openBrowser(authUrl);
+      if (code) {
+        this.exchangeCodeForTokens(code)
+          .then(() => {
+            if (this.authTimeout) {
+              clearTimeout(this.authTimeout);
+              this.authTimeout = undefined;
+            }
+            resolve();
+          })
+          .catch((err) => {
+            if (this.authTimeout) {
+              clearTimeout(this.authTimeout);
+              this.authTimeout = undefined;
+            }
+            reject(err);
+          });
+      }
     });
-  }
+
+    // Try to open browser (will show URL if systemd service)
+    this.openBrowser(authUrl);
+  });
+}
 
   private buildAuthUrl(): string {
     const params = new URLSearchParams({
@@ -523,66 +537,89 @@ private shouldUseManualAuth(): boolean {
     return `${this.authURL}/authorize?${params.toString()}`;
   }
 
-  private startAuthServer(callback: (code?: string, error?: Error) => void): void {
-    this.authServer = http.createServer((req, res) => {
-      const url = new URL(req.url!, `http://localhost:${this.config.redirectPort || 4200}`);
-        this.log.warn(`🟢 Auth server listening on http://${this.hostIp}:${this.config.redirectPort || 4200}/`);
-  		this.log.warn(`👉 If the browser does not open automatically, open this URL manually from another device:\nhttp://${this.hostIp}:${this.config.redirectPort || 4200}/login`);
+private startAuthServer(callback: (code?: string, error?: Error) => void): void {
+  // Verifica se server è già attivo
+  if (this.authServer && this.authServer.listening) {
+    this.log.debug('🟢 Auth server already listening, reusing existing server');
+    return;
+  }
 
-      if (url.pathname === '/') {
-        const code = url.searchParams.get('code');
-        const error = url.searchParams.get('error');
+  this.authServer = http.createServer((req, res) => {
+    const url = new URL(req.url!, `http://localhost:${this.config.redirectPort || 4200}`);
 
-        if (error) {
-          const errorDescription = url.searchParams.get('error_description') || error;
-          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(`
-            <html>
-              <head><title>Authentication Failed</title></head>
-              <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
-                <h1 style="color: #ff4757;">❌ Authentication Failed</h1>
-                <p>${errorDescription}</p>
-                <p>Please close this window and check your Homebridge logs.</p>
-              </body>
-            </html>
-          `);
-          callback(undefined, new Error(`OAuth error: ${errorDescription}`));
-          //this.stopAuthServer();
-          return;
-        }
+    if (url.pathname === '/') {
+      const code = url.searchParams.get('code');
+      const error = url.searchParams.get('error');
 
-        if (code) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(`
-            <html>
-              <head><title>Authentication Successful</title></head>
-              <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
-                <h1 style="color: #2ed573;">✅ Authentication Successful!</h1>
-                <p>You can now close this window.</p>
-                <p>Homebridge will continue setup automatically.</p>
-              </body>
-            </html>
-          `);
-          callback(code);
-          //this.stopAuthServer();
-          return;
-        }
+      if (error) {
+        const errorDescription = url.searchParams.get('error_description') || error;
+        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`
+          <html>
+            <head><title>Authentication Failed</title></head>
+            <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
+              <h1 style="color: #ff4757;">❌ Authentication Failed</h1>
+              <p>${errorDescription}</p>
+              <p>Please close this window and check your Homebridge logs.</p>
+            </body>
+          </html>
+        `);
+        callback(undefined, new Error(`OAuth error: ${errorDescription}`));
+        // 🆕 Chiudi dopo un delay per far vedere la pagina
+        setTimeout(() => this.stopAuthServer(), 3000);
+        return;
       }
 
-      // Handle other requests
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Not found');
-    });
+      if (code) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`
+          <html>
+            <head><title>Authentication Successful</title></head>
+            <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
+              <h1 style="color: #2ed573;">✅ Authentication Successful!</h1>
+              <p>You can now close this window.</p>
+              <p>Homebridge will continue setup automatically.</p>
+            </body>
+          </html>
+        `);
+        callback(code);
+        // 🆕 Chiudi dopo un delay per far vedere la pagina
+        setTimeout(() => this.stopAuthServer(), 3000);
+        return;
+      }
+    }
 
-    this.authServer.listen(this.config.redirectPort || 4200, '0.0.0.0', () => {
-      this.log.debug(`🌐 Auth server listening on ${this.hostIp}:${this.config.redirectPort || 4200}`);
-    });
+    // Handle other requests - root path senza parametri
+    if (url.pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`
+        <html>
+          <head><title>Viessmann Authentication</title></head>
+          <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
+            <h1>🔐 Viessmann Authentication</h1>
+            <p>Waiting for authentication callback...</p>
+            <p>If you see this page, the authentication server is working correctly.</p>
+            <p style="color: #666; font-size: 14px;">Server: ${this.hostIp}:${this.config.redirectPort || 4200}</p>
+          </body>
+        </html>
+      `);
+      return;
+    }
 
-    this.authServer.on('error', (error) => {
-      this.log.error('❌ Auth server error:', error);
-      callback(undefined, error);
-    });
-  }
+    // 404 per altre richieste
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  });
+
+  this.authServer.listen(this.config.redirectPort || 4200, '0.0.0.0', () => {
+    this.log.info(`🟢 Auth server ready at: http://${this.hostIp}:${this.config.redirectPort || 4200}/`);
+  });
+
+  this.authServer.on('error', (error) => {
+    this.log.error('❌ Auth server error:', error);
+    callback(undefined, error);
+  });
+}
 
   private stopAuthServer(): void {
     if (this.authServer) {
@@ -632,286 +669,63 @@ private shouldUseManualAuth(): boolean {
     }
   }
 
-private openBrowser(url: string): void {
-  const { execFile, exec } = require('child_process');
 
-  const tryExecFile = (cmd: string, args: string[], env: NodeJS.ProcessEnv) =>
-    new Promise<void>((resolve, reject) => {
-      execFile(cmd, args, { env }, (err: any) => err ? reject(err) : resolve());
-    });
-
-  const tryExec = (command: string, env: NodeJS.ProcessEnv) =>
-    new Promise<void>((resolve, reject) => {
-      exec(command, { env }, (err: any) => err ? reject(err) : resolve());
-    });
-
-  // Copia pulita dell'ambiente
-  const env: NodeJS.ProcessEnv = { ...process.env };
-
-  // Migliora compatibilità Linux (X/Wayland) senza toccare il servizio
-  if (process.platform === 'linux') {
-    if (!env.DISPLAY) {
-      // fallback tipico X11
-      env.DISPLAY = ':0';
-    }
-    if (!env.XDG_RUNTIME_DIR && typeof process.getuid === 'function') {
-      env.XDG_RUNTIME_DIR = `/run/user/${process.getuid()}`;
-    }
-  }
-
-
-  const tryLinux = async () => {
-    // 1) Standard freedesktop
-    try { await tryExecFile('xdg-open', [url], env); this.log.debug('🌐 xdg-open OK'); return; } catch {}
-
-    // 2) Gio / GVFS
-    try { await tryExec(`gio open "${url}"`, env); this.log.debug('🌐 gio open OK'); return; } catch {}
-
-    // 3) Debian-like helpers
-    try { await tryExecFile('sensible-browser', [url], env); this.log.debug('🌐 sensible-browser OK'); return; } catch {}
-    try { await tryExecFile('x-www-browser', [url], env); this.log.debug('🌐 x-www-browser OK'); return; } catch {}
-
-    // 4) xdg-desktop-portal (DBus OpenURI) — compatibile Wayland/X
-    try {
-      await tryExec(
-        `gdbus call --session ` +
-        `--dest org.freedesktop.portal.Desktop ` +
-        `--object-path /org/freedesktop/portal/desktop ` +
-        `--method org.freedesktop.portal.OpenURI.OpenURI "" "${url}" "{}"`,
-        env
-      );
-      this.log.debug('🌐 xdg-desktop-portal OpenURI OK');
-      return;
-    } catch {}
-
-    // 5) backend specifici (best-effort, non bloccanti)
-    try { await tryExecFile('kde-open5', [url], env); this.log.debug('🌐 kde-open5 OK'); return; } catch {}
-    try { await tryExecFile('gnome-open', [url], env); this.log.debug('🌐 gnome-open OK'); return; } catch {}
-
-    // Nessun metodo disponibile/riuscito
-    throw new Error('No Linux opener succeeded');
-  };
-
-  (async () => {
-    try {
-      switch (process.platform) {
-        case 'darwin':
-          await tryExec(`open "${url}"`, env);
-          break;
-        case 'win32':
-          await tryExec(`start "" "${url}"`, env);
-          break;
-        default:
-          await tryLinux();
-      }
-      this.log.info('✅ Tentativo di apertura browser completato');
-    } catch (e: any) {
-      this.log.warn(`⚠️ Impossibile aprire automaticamente il browser (${e?.message || e}). Apri l’URL manualmente.`);
-    }
-  })();
-}
 **/
 private openBrowser(url: string): void {
-  const { execFile, exec } = require('child_process');
+  // 🆕 Per servizi systemd: NON tentare di aprire automaticamente
+  // L'utente può aprire da qualsiasi dispositivo sulla rete
+  
+  const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
+  const isHomebridge = process.env.USER === 'homebridge';
+  
+  // Se siamo in un servizio systemd o utente homebridge, non aprire automaticamente
+  if (isSystemdService || isHomebridge) {
+    this.log.info('='.repeat(80));
+    this.log.info('🔐 AUTHENTICATION REQUIRED');
+    this.log.info('='.repeat(80));
+    this.log.info('');
+    this.log.info('📱 Open this URL from ANY device on your network:');
+    this.log.info('');
+    this.log.info(`   ${url}`);
+    this.log.info('');
+    this.log.info('✅ You can open it from:');
+    this.log.info('   • Your computer/laptop');
+    this.log.info('   • Your smartphone/tablet');
+    this.log.info('   • This Raspberry Pi (if you have a browser)');
+    this.log.info('');
+    this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
+    this.log.info('⏳ Waiting for authentication...');
+    this.log.info('='.repeat(80));
+    return;
+  }
 
-  // Ambiente pulito senza toccare DISPLAY
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Solo per installazioni non-systemd (es. macOS, sviluppo locale)
+  this.tryOpenBrowserDirect(url);
+}
 
-  // Helper per eseguire comandi con timeout
-  const execWithTimeout = (command: string, args: string[] = [], timeout = 5000): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const child = args.length > 0 
-        ? execFile(command, args, { env, timeout })
-        : exec(command, { env, timeout });
+private tryOpenBrowserDirect(url: string): void {
+  const { exec } = require('child_process');
+  
+  let command: string;
+  
+  switch (process.platform) {
+    case 'darwin':
+      command = `open "${url}"`;
+      break;
+    case 'win32':
+      command = `start "" "${url}"`;
+      break;
+    default: // Linux desktop (non-systemd)
+      command = `xdg-open "${url}" 2>/dev/null || firefox "${url}" 2>/dev/null || chromium-browser "${url}" 2>/dev/null`;
+  }
 
-      child.on('error', reject);
-      child.on('exit', (code: number | null) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Exit code ${code}`));
-      });
-    });
-  };
-
-  const detectDesktopEnvironment = (): string => {
-    const xdg = env.XDG_CURRENT_DESKTOP?.toLowerCase() || '';
-    const session = env.DESKTOP_SESSION?.toLowerCase() || '';
-    const gdmsession = env.GDMSESSION?.toLowerCase() || '';
-    
-    // Controlla tutti i possibili indicatori
-    const indicators = [xdg, session, gdmsession].join(':');
-    
-    if (indicators.includes('gnome')) return 'gnome';
-    if (indicators.includes('kde') || indicators.includes('plasma')) return 'kde';
-    if (indicators.includes('xfce')) return 'xfce';
-    if (indicators.includes('lxde') || indicators.includes('lxqt')) return 'lxde';
-    if (indicators.includes('mate')) return 'mate';
-    if (indicators.includes('cinnamon')) return 'cinnamon';
-    if (indicators.includes('labwc') || indicators.includes('wlroots')) return 'wayland';
-    if (indicators.includes('wayfire') || indicators.includes('sway')) return 'wayland';
-    
-    return 'unknown';
-  };
-
-  const tryLinuxMethods = async () => {
-    const desktop = detectDesktopEnvironment();
-    this.log.debug(`🖥️ Desktop environment detected: ${desktop} (XDG_CURRENT_DESKTOP=${env.XDG_CURRENT_DESKTOP})`);
-
-    // 1. Metodo universale - xdg-open (funziona con tutti i DE moderni)
-    try {
-      await execWithTimeout('xdg-open', [url]);
-      this.log.info('✅ Browser aperto con xdg-open');
-      return true;
-    } catch {}
-
-    // 2. Metodi specifici per desktop environment
-    switch (desktop) {
-      case 'gnome':
-        try {
-          await execWithTimeout('gnome-open', [url]);
-          this.log.info('✅ Browser aperto con gnome-open');
-          return true;
-        } catch {}
-        try {
-          await execWithTimeout('gio', ['open', url]);
-          this.log.info('✅ Browser aperto con gio open');
-          return true;
-        } catch {}
-        break;
-
-      case 'kde':
-        try {
-          await execWithTimeout('kde-open5', [url]);
-          this.log.info('✅ Browser aperto con kde-open5');
-          return true;
-        } catch {}
-        try {
-          await execWithTimeout('kde-open', [url]);
-          this.log.info('✅ Browser aperto con kde-open');
-          return true;
-        } catch {}
-        break;
-
-      case 'xfce':
-        try {
-          await execWithTimeout('exo-open', [url]);
-          this.log.info('✅ Browser aperto con exo-open');
-          return true;
-        } catch {}
-        break;
-
-      case 'lxde':
-        try {
-          await execWithTimeout('pcmanfm', [url]);
-          this.log.info('✅ Browser aperto con pcmanfm');
-          return true;
-        } catch {}
-        break;
-
-      case 'mate':
-        try {
-          await execWithTimeout('mate-open', [url]);
-          this.log.info('✅ Browser aperto con mate-open');
-          return true;
-        } catch {}
-        break;
-
-      case 'cinnamon':
-        try {
-          await execWithTimeout('cinnamon-open', [url]);
-          this.log.info('✅ Browser aperto con cinnamon-open');
-          return true;
-        } catch {}
-        break;
-
-      case 'wayland':
-        // Portal DBus (metodo nativo Wayland - funziona con labwc)
-        try {
-          const escapedUrl = url.replace(/"/g, '\\"');
-          await execWithTimeout('gdbus', [
-            'call', '--session',
-            '--dest', 'org.freedesktop.portal.Desktop',
-            '--object-path', '/org/freedesktop/portal/desktop',
-            '--method', 'org.freedesktop.portal.OpenURI.OpenURI',
-            '', escapedUrl, '{}'
-          ]);
-          this.log.info('✅ Browser aperto con xdg-desktop-portal (Wayland)');
-          return true;
-        } catch {}
-        break;
+  exec(command, (error) => {
+    if (error) {
+      this.log.info('📱 Please open the authentication URL manually in your browser');
+    } else {
+      this.log.info('🌐 Opening browser...');
     }
-
-    // 3. Fallback: Helper generici Debian/Ubuntu/Raspberry Pi OS
-    const helpers = ['sensible-browser', 'x-www-browser', 'www-browser'];
-    for (const helper of helpers) {
-      try {
-        await execWithTimeout(helper, [url]);
-        this.log.info(`✅ Browser aperto con ${helper}`);
-        return true;
-      } catch {}
-    }
-
-    // 4. Ultimo tentativo: Browser diretti
-    const browsers = [
-      'chromium-browser',  // Raspberry Pi OS default
-      'chromium',
-      'firefox',
-      'firefox-esr',       // Debian/Raspberry Pi OS
-      'google-chrome',
-      'microsoft-edge',
-      'brave-browser',
-      'opera'
-    ];
-    
-    for (const browser of browsers) {
-      try {
-        await execWithTimeout(browser, [url]);
-        this.log.info(`✅ Browser aperto con ${browser}`);
-        return true;
-      } catch {}
-    }
-
-    return false;
-  };
-
-  (async () => {
-    try {
-      let success = false;
-
-      switch (process.platform) {
-        case 'darwin':
-          await execWithTimeout('open', [url]);
-          success = true;
-          break;
-          
-        case 'win32':
-          await execWithTimeout(`start "" "${url}"`);
-          success = true;
-          break;
-          
-        default: // Linux
-          success = await tryLinuxMethods();
-      }
-
-      if (success) {
-        this.log.info('🌐 Browser aperto con successo');
-      } else {
-        throw new Error('Tutti i metodi di apertura browser falliti');
-      }
-    } catch (e: any) {
-      this.log.warn('='.repeat(80));
-      this.log.warn('⚠️  IMPOSSIBILE APRIRE IL BROWSER AUTOMATICAMENTE');
-      this.log.warn('='.repeat(80));
-      this.log.warn('📱 Apri manualmente questo URL da QUALSIASI dispositivo nella tua rete:');
-      this.log.warn('');
-      this.log.warn(`   ${url}`);
-      this.log.warn('');
-      this.log.warn('💡 Puoi usare:');
-      this.log.warn('   • Computer/laptop sulla stessa rete');
-      this.log.warn('   • Smartphone/tablet');
-      this.log.warn('   • Qualsiasi browser moderno');
-      this.log.warn('='.repeat(80));
-    }
-  })();
+  });
 }
 
   private async exchangeCodeForTokens(authCode: string): Promise<void> {
