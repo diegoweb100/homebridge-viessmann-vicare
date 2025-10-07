@@ -725,7 +725,7 @@ private openBrowser(url: string): void {
         : exec(command, { env, timeout });
 
       child.on('error', reject);
-      child.on('exit', (code) => {
+      child.on('exit', (code: number | null) => {
         if (code === 0) resolve();
         else reject(new Error(`Exit code ${code}`));
       });
