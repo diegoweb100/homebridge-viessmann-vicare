@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.14';
+export const PLUGIN_VERSION = '2.0.15';
 
 /**
  * Default configuration values
