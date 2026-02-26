@@ -26,7 +26,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
 
   public readonly accessories: PlatformAccessory[] = [];
-  public readonly viessmannAPI: ViessmannAPI;
+  public readonly viessmannAPI!: ViessmannAPI;
+  private configValid = false;
 
   private installations: ViessmannInstallation[] = [];
   private refreshTimer?: NodeJS.Timeout;
@@ -53,7 +54,24 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-    this.viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
+
+    // Validate required configuration before initializing
+    if (!this.validateConfig()) {
+      this.log.error('❌ Plugin disabled due to missing or invalid configuration.');
+      this.log.error('📖 Please configure the plugin via Homebridge UI or config.json.');
+      this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => { /* no-op */ });
+      return;
+    }
+
+    try {
+      (this as any).viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
+      this.configValid = true;
+    } catch (error) {
+      this.log.error('❌ Failed to initialize Viessmann API:', error instanceof Error ? error.message : String(error));
+      this.log.error('📖 Please check your configuration and restart Homebridge.');
+      this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => { /* no-op */ });
+      return;
+    }
 
     // 🆕 NEW: Setup burner update callback
     this.setupBurnerUpdateSystem();
@@ -83,6 +101,40 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       
       this.viessmannAPI.cleanup();
     });
+  }
+
+  private validateConfig(): boolean {
+    const errors: string[] = [];
+
+    if (!this.config.clientId) {
+      errors.push('Missing required field: "clientId"');
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(this.config.clientId)) {
+      errors.push('Invalid "clientId" format - must contain only alphanumeric characters, underscores, and hyphens');
+    }
+
+    if (!this.config.username) {
+      errors.push('Missing required field: "username"');
+    } else if (!this.config.username.includes('@')) {
+      errors.push('Invalid "username" - must be a valid email address');
+    }
+
+    if (!this.config.password) {
+      errors.push('Missing required field: "password"');
+    }
+
+    if (errors.length > 0) {
+      this.log.error('='.repeat(60));
+      this.log.error('❌ VIESSMANN PLUGIN CONFIGURATION ERROR');
+      this.log.error('='.repeat(60));
+      errors.forEach(e => this.log.error(`  • ${e}`));
+      this.log.error('');
+      this.log.error('📖 Configure the plugin at:');
+      this.log.error('   Homebridge UI → Plugins → Viessmann → Settings');
+      this.log.error('='.repeat(60));
+      return false;
+    }
+
+    return true;
   }
 
   // 🆕 NEW: Setup burner update system
@@ -448,6 +500,10 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   }
 
   async discoverDevices() {
+    if (!this.configValid || !this.viessmannAPI) {
+      this.log.warn('⚠️ Skipping device discovery - plugin not configured.');
+      return;
+    }
     try {
       // Check rate limit status before attempting discovery
       const rateLimitStatus = this.viessmannAPI.getRateLimitStatus();
@@ -929,6 +985,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
   // Health Monitoring Methods
   private startHealthMonitoring(): void {
+    if (!this.configValid || !this.viessmannAPI) {
+      return;
+    }
     if (!this.config.enableApiMetrics) {
       return;
     }
