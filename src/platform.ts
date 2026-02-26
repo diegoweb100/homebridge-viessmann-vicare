@@ -10,6 +10,7 @@ import {
   Characteristic,
 } from 'homebridge';
 
+import * as path from 'path';
 import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
 // Export types from viessmann-api-endpoints for accessories
 export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
@@ -52,7 +53,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-    this.viessmannAPI = new ViessmannAPI(this.log, this.config);
+    this.viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
 
     // 🆕 NEW: Setup burner update callback
     this.setupBurnerUpdateSystem();
