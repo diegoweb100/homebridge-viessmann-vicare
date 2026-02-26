@@ -19,6 +19,7 @@ import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDev
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
+import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
 import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
@@ -26,8 +27,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
 
   public readonly accessories: PlatformAccessory[] = [];
-  public readonly viessmannAPI!: ViessmannAPI;
-  private configValid = false;
+  public readonly viessmannAPI: ViessmannAPI;
 
   private installations: ViessmannInstallation[] = [];
   private refreshTimer?: NodeJS.Timeout;
@@ -54,24 +54,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-
-    // Validate required configuration before initializing
-    if (!this.validateConfig()) {
-      this.log.error('❌ Plugin disabled due to missing or invalid configuration.');
-      this.log.error('📖 Please configure the plugin via Homebridge UI or config.json.');
-      this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => { /* no-op */ });
-      return;
-    }
-
-    try {
-      (this as any).viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
-      this.configValid = true;
-    } catch (error) {
-      this.log.error('❌ Failed to initialize Viessmann API:', error instanceof Error ? error.message : String(error));
-      this.log.error('📖 Please check your configuration and restart Homebridge.');
-      this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => { /* no-op */ });
-      return;
-    }
+    this.viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
 
     // 🆕 NEW: Setup burner update callback
     this.setupBurnerUpdateSystem();
@@ -101,40 +84,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       
       this.viessmannAPI.cleanup();
     });
-  }
-
-  private validateConfig(): boolean {
-    const errors: string[] = [];
-
-    if (!this.config.clientId) {
-      errors.push('Missing required field: "clientId"');
-    } else if (!/^[a-zA-Z0-9_-]+$/.test(this.config.clientId)) {
-      errors.push('Invalid "clientId" format - must contain only alphanumeric characters, underscores, and hyphens');
-    }
-
-    if (!this.config.username) {
-      errors.push('Missing required field: "username"');
-    } else if (!this.config.username.includes('@')) {
-      errors.push('Invalid "username" - must be a valid email address');
-    }
-
-    if (!this.config.password) {
-      errors.push('Missing required field: "password"');
-    }
-
-    if (errors.length > 0) {
-      this.log.error('='.repeat(60));
-      this.log.error('❌ VIESSMANN PLUGIN CONFIGURATION ERROR');
-      this.log.error('='.repeat(60));
-      errors.forEach(e => this.log.error(`  • ${e}`));
-      this.log.error('');
-      this.log.error('📖 Configure the plugin at:');
-      this.log.error('   Homebridge UI → Plugins → Viessmann → Settings');
-      this.log.error('='.repeat(60));
-      return false;
-    }
-
-    return true;
   }
 
   // 🆕 NEW: Setup burner update system
@@ -500,10 +449,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   }
 
   async discoverDevices() {
-    if (!this.configValid || !this.viessmannAPI) {
-      this.log.warn('⚠️ Skipping device discovery - plugin not configured.');
-      return;
-    }
     try {
       // Check rate limit status before attempting discovery
       const rateLimitStatus = this.viessmannAPI.getRateLimitStatus();
@@ -675,6 +620,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Heating Circuits accessories
       await this.setupHeatingCircuitAccessories(installation, gateway, device, features);
 
+      // Setup Energy accessory (PV, Battery, Wallbox, Electric DHW)
+      await this.setupEnergyAccessory(installation, gateway, device, features);
+
     } catch (error) {
       this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
     }
@@ -749,6 +697,50 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       accessory.context.gateway = gateway;
 
       new ViessmannDHWAccessory(this, accessory, installation, gateway, device);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
+    }
+  }
+
+  async setupEnergyAccessory(
+    installation: ViessmannInstallation,
+    gateway: ViessmannGateway,
+    device: ViessmannDevice,
+    features: ViessmannFeature[]
+  ) {
+    // Detect energy-related features
+    const energyFeatures = features.filter(f =>
+      f.feature.startsWith('heating.photovoltaic') ||
+      f.feature.startsWith('heating.solar.power') ||
+      f.feature.startsWith('heating.powerStorage') ||
+      f.feature.startsWith('heating.battery') ||
+      f.feature.startsWith('charging.ev') ||
+      f.feature.startsWith('heating.ev') ||
+      f.feature.startsWith('heating.dhw.heating.rod') ||
+      f.feature === 'heating.dhw.operating.modes.electricBoost'
+    );
+
+    if (energyFeatures.length === 0) {
+      return;
+    }
+
+    this.log.info(`⚡ Energy features detected for device ${device.id}: ${energyFeatures.map(f => f.feature).join(', ')}`);
+
+    const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-energy`);
+    const displayName = `${installation.description} Energy`;
+
+    const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+
+    if (existingAccessory) {
+      this.log.info('Restoring existing energy accessory from cache:', existingAccessory.displayName);
+      new ViessmannEnergyAccessory(this, existingAccessory, installation, gateway, device);
+    } else {
+      this.log.info('Adding new energy accessory:', displayName);
+      const accessory = new this.api.platformAccessory(displayName, uuid);
+      accessory.context.device = device;
+      accessory.context.installation = installation;
+      accessory.context.gateway = gateway;
+
+      new ViessmannEnergyAccessory(this, accessory, installation, gateway, device);
       this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
     }
   }
@@ -985,9 +977,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
   // Health Monitoring Methods
   private startHealthMonitoring(): void {
-    if (!this.configValid || !this.viessmannAPI) {
-      return;
-    }
     if (!this.config.enableApiMetrics) {
       return;
     }
