@@ -11,39 +11,37 @@
         "title": "Platform Name",
         "type": "string",
         "default": "Viessmann",
-        "required": true,
         "description": "Name of the platform as it will appear in HomeKit"
       },
       "clientId": {
         "title": "Client ID",
         "type": "string",
-        "required": true,
         "pattern": "^[a-zA-Z0-9_-]+$",
         "description": "Your Viessmann API Client ID from the developer portal. Must contain only alphanumeric characters, underscores, and hyphens. Get it from https://developer.viessmann-climatesolutions.com/"
       },
       "clientSecret": {
         "title": "Client Secret",
         "type": "string",
-        "required": false,
         "description": "Your Viessmann API Client Secret (optional for public clients, recommended for production use)"
       },
       "username": {
         "title": "Username/Email",
         "type": "string",
         "format": "email",
-        "required": true,
         "description": "Your Viessmann ViCare account username/email address"
       },
       "password": {
         "title": "Password",
         "type": "string",
-        "required": true,
         "description": "Your Viessmann ViCare account password"
       },
       "authMethod": {
         "title": "Authentication Method",
         "type": "string",
-        "enum": ["auto", "manual"],
+        "enum": [
+          "auto",
+          "manual"
+        ],
         "default": "auto",
         "description": "Choose authentication method: 'auto' for automatic OAuth flow (recommended), 'manual' for manual token configuration (headless environments)"
       },
@@ -51,7 +49,6 @@
         "title": "Host IP Address",
         "type": "string",
         "format": "ipv4",
-        "required": false,
         "description": "IP address for OAuth redirect (auto-detected if not specified). Use the IP where Homebridge is running."
       },
       "redirectPort": {
@@ -73,13 +70,11 @@
       "accessToken": {
         "title": "Access Token (Manual Auth)",
         "type": "string",
-        "required": false,
         "description": "Manual access token (only required if authMethod is 'manual'). Get this from Viessmann API manually."
       },
       "refreshToken": {
         "title": "Refresh Token (Manual Auth)",
         "type": "string",
-        "required": false,
         "description": "Manual refresh token (only required if authMethod is 'manual'). Used to refresh expired access tokens. Valid for 180 days."
       },
       "tokenRefreshBuffer": {
@@ -99,7 +94,6 @@
       "installationFilter": {
         "title": "Installation Name Filter",
         "type": "string",
-        "required": false,
         "description": "Filter installations by name (case-insensitive substring match). Leave empty to show all installations. Example: 'Main House'"
       },
       "installationIds": {
@@ -109,7 +103,6 @@
           "type": "integer",
           "minimum": 1
         },
-        "required": false,
         "description": "Array of specific installation IDs to include. Takes priority over installationFilter if specified. Find IDs in debug logs."
       },
       "refreshInterval": {
@@ -184,98 +177,84 @@
           "installationPrefix": {
             "title": "Installation Prefix",
             "type": "string",
-            "required": false,
             "placeholder": "My Home",
             "description": "Custom prefix for installation names instead of using the full installation description from ViCare. Example: 'Casa Mia' instead of 'HomeName/ID 12345'"
           },
           "boiler": {
             "title": "Boiler Name",
             "type": "string",
-            "required": false,
             "placeholder": "Caldaia",
             "description": "Custom name for boiler accessories. Default: 'Boiler'. Italian example: 'Caldaia'"
           },
           "dhw": {
             "title": "Hot Water Name",
             "type": "string",
-            "required": false,
             "placeholder": "Acqua Calda",
             "description": "Custom name for domestic hot water (DHW) accessories. Default: 'Hot Water'. Italian example: 'Acqua Calda'"
           },
           "heatingCircuit": {
             "title": "Heating Circuit Name",
             "type": "string",
-            "required": false,
             "placeholder": "Riscaldamento",
             "description": "Custom name for heating circuit accessories. Default: 'Heating Circuit'. Italian example: 'Riscaldamento'"
           },
           "reduced": {
             "title": "Reduced Program Name",
             "type": "string",
-            "required": false,
             "placeholder": "Ridotto",
             "description": "Custom name for reduced temperature program. Default: 'Reduced'. Italian example: 'Ridotto'"
           },
           "normal": {
-            "title": "Normal Program Name", 
+            "title": "Normal Program Name",
             "type": "string",
-            "required": false,
             "placeholder": "Normale",
             "description": "Custom name for normal temperature program. Default: 'Normal'. Italian example: 'Normale'"
           },
           "comfort": {
             "title": "Comfort Program Name",
             "type": "string",
-            "required": false,
             "placeholder": "Comfort",
             "description": "Custom name for comfort temperature program. Default: 'Comfort'. Usually the same in most languages."
           },
           "eco": {
             "title": "Eco Mode Name",
             "type": "string",
-            "required": false,
             "placeholder": "Eco",
             "description": "Custom name for DHW eco mode. Default: 'Eco'. Usually the same in most languages."
           },
           "off": {
             "title": "Off Mode Name",
             "type": "string",
-            "required": false,
             "placeholder": "Spento",
             "description": "Custom name for off mode. Default: 'Off'. Italian example: 'Spento'"
           },
           "burner": {
             "title": "Burner Name",
             "type": "string",
-            "required": false,
             "placeholder": "Bruciatore",
             "description": "Custom name for burner status accessories. Default: 'Burner'. Italian example: 'Bruciatore'"
           },
           "modulation": {
             "title": "Modulation Name",
             "type": "string",
-            "required": false,
             "placeholder": "Modulazione",
             "description": "Custom name for modulation level accessories. Default: 'Modulation'. Italian example: 'Modulazione'"
           },
           "holiday": {
             "title": "Holiday Mode Name",
             "type": "string",
-            "required": false,
             "placeholder": "Vacanza",
             "description": "Custom name for holiday mode (7-day schedule). Default: 'Holiday Mode'. Italian example: 'Vacanza'"
           },
           "holidayAtHome": {
             "title": "Holiday At Home Name",
             "type": "string",
-            "required": false,
             "placeholder": "Vacanza Casa",
             "description": "Custom name for holiday at home mode (today only). Default: 'Holiday At Home'. Italian example: 'Vacanza Casa'"
           },
           "extendedHeating": {
             "title": "Extended Heating Name",
             "type": "string",
-            "required": false,
             "placeholder": "Riscaldamento Extra",
             "description": "Custom name for extended heating mode (comfort boost). Default: 'Extended Heating'. Italian example: 'Riscaldamento Extra'"
           }
@@ -456,13 +435,11 @@
           "dnsResolver": {
             "title": "Custom DNS Resolver",
             "type": "string",
-            "required": false,
             "description": "Custom DNS resolver IP address (e.g., 8.8.8.8). Leave empty to use system default."
           },
           "proxyUrl": {
             "title": "Proxy URL",
             "type": "string",
-            "required": false,
             "description": "HTTP/HTTPS proxy URL if required (format: http://user:pass@host:port)."
           },
           "enableKeepAlive": {
@@ -504,7 +481,7 @@
       "expanded": true,
       "items": [
         "authMethod",
-        "hostIp", 
+        "hostIp",
         "redirectPort",
         "authTimeout"
       ]
@@ -590,7 +567,7 @@
       "items": [
         "cache.enabled",
         "cache.installationsTTL",
-        "cache.featuresTTL", 
+        "cache.featuresTTL",
         "cache.devicesTTL",
         "cache.gatewaysTTL",
         "cache.maxEntries",
