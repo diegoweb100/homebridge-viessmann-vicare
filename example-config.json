@@ -1,0 +1,654 @@
+{
+  "name": "Enhanced Configuration Examples for Viessmann API v2.0",
+  "examples": [
+    {
+      "description": "Basic configuration with default settings (recommended for new users)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇮🇹 Italian localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Casa Mia",
+          "boiler": "Caldaia",
+          "dhw": "Acqua Calda",
+          "heatingCircuit": "Riscaldamento",
+          "reduced": "Ridotto",
+          "normal": "Normale",
+          "comfort": "Comfort",
+          "eco": "Eco",
+          "off": "Spento",
+          "burner": "Bruciatore",
+          "modulation": "Modulazione",
+          "holiday": "Vacanza",
+          "holidayAtHome": "Vacanza Casa",
+          "extendedHeating": "Riscaldamento Extra"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇩🇪 German localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Mein Haus",
+          "boiler": "Kessel",
+          "dhw": "Warmwasser",
+          "heatingCircuit": "Heizkreis",
+          "reduced": "Reduziert",
+          "normal": "Normal",
+          "comfort": "Komfort",
+          "eco": "Eco",
+          "off": "Aus",
+          "burner": "Brenner",
+          "modulation": "Modulation",
+          "holiday": "Urlaub",
+          "holidayAtHome": "Urlaub Zuhause",
+          "extendedHeating": "Zusatzheizung"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇫🇷 French localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Ma Maison",
+          "boiler": "Chaudière",
+          "dhw": "Eau Chaude",
+          "heatingCircuit": "Circuit Chauffage",
+          "reduced": "Réduit",
+          "normal": "Normal",
+          "comfort": "Confort",
+          "eco": "Eco",
+          "off": "Arrêt",
+          "burner": "Brûleur",
+          "modulation": "Modulation",
+          "holiday": "Vacances",
+          "holidayAtHome": "Vacances Maison",
+          "extendedHeating": "Chauffage Prolongé"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "🇪🇸 Spanish localization with custom names",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "customNames": {
+          "installationPrefix": "Mi Casa",
+          "boiler": "Caldera",
+          "dhw": "Agua Caliente",
+          "heatingCircuit": "Circuito Calefacción",
+          "reduced": "Reducido",
+          "normal": "Normal",
+          "comfort": "Confort",
+          "eco": "Eco",
+          "off": "Apagado",
+          "burner": "Quemador",
+          "modulation": "Modulación",
+          "holiday": "Vacaciones",
+          "holidayAtHome": "Vacaciones Casa",
+          "extendedHeating": "Calefacción Extra"
+        },
+        "cache": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "description": "Aggressive caching for high API usage reduction (multiple installations)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 300000,
+        "requestTimeout": 45000,
+        "enableRateLimitProtection": true,
+        "maxRetries": 5,
+        "retryDelay": 60000,
+        "installationFilter": "Main House",
+        "cache": {
+          "enabled": true,
+          "installationsTTL": 172800000,
+          "featuresTTL": 300000,
+          "devicesTTL": 43200000,
+          "gatewaysTTL": 86400000,
+          "maxEntries": 2000,
+          "enableSmartRefresh": true,
+          "enableConditionalRequests": true
+        },
+        "advanced": {
+          "maxConsecutiveErrors": 8,
+          "deviceUpdateDelay": 2000
+        }
+      }
+    },
+    {
+      "description": "Conservative caching for frequent updates (single installation)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com", 
+        "password": "your-password",
+        "refreshInterval": 90000,
+        "enableRateLimitProtection": true,
+        "cache": {
+          "enabled": true,
+          "installationsTTL": 43200000,
+          "featuresTTL": 90000,
+          "devicesTTL": 10800000,
+          "gatewaysTTL": 21600000,
+          "maxEntries": 500
+        },
+        "features": {
+          "enableBoilerAccessories": true,
+          "enableDHWAccessories": true,
+          "enableHeatingCircuitAccessories": true,
+          "enableTemperaturePrograms": true,
+          "enableQuickSelections": true,
+          "enableBurnerStatus": true
+        }
+      }
+    },
+    {
+      "description": "Minimal caching for testing and debugging",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 60000,
+        "requestTimeout": 20000,
+        "debug": true,
+        "cache": {
+          "enabled": true,
+          "installationsTTL": 3600000,
+          "featuresTTL": 30000,
+          "devicesTTL": 1800000,
+          "gatewaysTTL": 3600000,
+          "maxEntries": 100
+        },
+        "advanced": {
+          "baseDelay": 500,
+          "maxDelay": 60000,
+          "deviceUpdateDelay": 500
+        }
+      }
+    },
+    {
+      "description": "Cache disabled for immediate API responses (development/testing)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 90000,
+        "requestTimeout": 15000,
+        "enableRateLimitProtection": false,
+        "debug": true,
+        "cache": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "description": "Multi-installation with aggressive filtering and performance optimization",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 600000,
+        "requestTimeout": 60000,
+        "installationIds": [2045780, 1234567],
+        "enableRateLimitProtection": true,
+        "maxRetries": 3,
+        "retryDelay": 120000,
+        "rateLimitResetBuffer": 120000,
+        "cache": {
+          "enabled": true,
+          "installationsTTL": 259200000,
+          "featuresTTL": 600000,
+          "devicesTTL": 86400000,
+          "gatewaysTTL": 172800000,
+          "maxEntries": 3000,
+          "enableSmartRefresh": true,
+          "enableConditionalRequests": true
+        },
+        "features": {
+          "enableBoilerAccessories": true,
+          "enableDHWAccessories": true,
+          "enableHeatingCircuitAccessories": true,
+          "enableTemperaturePrograms": false,
+          "enableQuickSelections": false,
+          "enableBurnerStatus": false
+        },
+        "advanced": {
+          "maxDelay": 600000,
+          "maxConsecutiveErrors": 3,
+          "deviceUpdateDelay": 3000
+        }
+      }
+    },
+    {
+      "description": "Recovery configuration with extended caching and minimal features",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 900000,
+        "requestTimeout": 45000,
+        "enableRateLimitProtection": true,
+        "maxRetries": 1,
+        "retryDelay": 600000,
+        "rateLimitResetBuffer": 300000,
+        "cache": {
+          "enabled": true,
+          "installationsTTL": 604800000,
+          "featuresTTL": 1800000,
+          "devicesTTL": 259200000,
+          "gatewaysTTL": 432000000,
+          "maxEntries": 1000,
+          "enableSmartRefresh": true
+        },
+        "features": {
+          "enableBoilerAccessories": true,
+          "enableDHWAccessories": true,
+          "enableHeatingCircuitAccessories": true,
+          "enableTemperaturePrograms": false,
+          "enableQuickSelections": false,
+          "enableBurnerStatus": false
+        },
+        "advanced": {
+          "baseDelay": 5000,
+          "maxDelay": 1800000,
+          "maxConsecutiveErrors": 2,
+          "deviceUpdateDelay": 5000
+        },
+        "debug": true
+      }
+    },
+    {
+      "description": "Manual authentication with custom timeouts",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "authMethod": "manual",
+        "accessToken": "your-access-token",
+        "refreshToken": "your-refresh-token",
+        "refreshInterval": 180000,
+        "requestTimeout": 30000,
+        "enableRateLimitProtection": true,
+        "cache": {
+          "enabled": true,
+          "featuresTTL": 180000
+        },
+        "advanced": {
+          "userAgent": "homebridge-viessmann-vicare/2.0.0-custom"
+        }
+      }
+    },
+    {
+      "description": "Minimal accessories configuration (boiler and DHW only)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "features": {
+          "enableBoilerAccessories": true,
+          "enableDHWAccessories": true,
+          "enableHeatingCircuitAccessories": false,
+          "enableTemperaturePrograms": false,
+          "enableQuickSelections": false,
+          "enableBurnerStatus": false
+        },
+        "cache": {
+          "enabled": true,
+          "featuresTTL": 120000
+        }
+      }
+    },
+    {
+      "description": "🔧 Development: Service recreation configuration (for testing name changes)",
+      "config": {
+        "platform": "ViessmannPlatform",
+        "name": "Viessmann",
+        "clientId": "your-client-id",
+        "username": "your-username@example.com",
+        "password": "your-password",
+        "refreshInterval": 120000,
+        "enableRateLimitProtection": true,
+        "forceServiceRecreation": true,
+        "customNames": {
+          "installationPrefix": "Test House",
+          "boiler": "Test Boiler",
+          "dhw": "Test DHW"
+        },
+        "cache": {
+          "enabled": true
+        },
+        "debug": true
+      }
+    }
+  ],
+  "localizationExamples": {
+    "italian": {
+      "description": "🇮🇹 Complete Italian localization example",
+      "customNames": {
+        "installationPrefix": "Casa Mia",
+        "boiler": "Caldaia",
+        "dhw": "Acqua Calda Sanitaria",
+        "heatingCircuit": "Riscaldamento",
+        "reduced": "Ridotta",
+        "normal": "Normale",
+        "comfort": "Comfort",
+        "eco": "Eco",
+        "off": "Spento",
+        "burner": "Bruciatore",
+        "modulation": "Modulazione",
+        "holiday": "Vacanza",
+        "holidayAtHome": "Vacanza a Casa",
+        "extendedHeating": "Riscaldamento Prolungato"
+      },
+      "resultingNames": [
+        "Casa Mia Caldaia",
+        "Casa Mia Caldaia Bruciatore",
+        "Casa Mia Caldaia Modulazione",
+        "Casa Mia Acqua Calda Sanitaria",
+        "Casa Mia Acqua Calda Sanitaria Comfort",
+        "Casa Mia Acqua Calda Sanitaria Eco",
+        "Casa Mia Acqua Calda Sanitaria Spento",
+        "Casa Mia Riscaldamento 1",
+        "Casa Mia Riscaldamento 1 Ridotta 18C",
+        "Casa Mia Riscaldamento 1 Normale 20C",
+        "Casa Mia Riscaldamento 1 Comfort 22C",
+        "Casa Mia Riscaldamento 1 Vacanza",
+        "Casa Mia Riscaldamento 1 Vacanza a Casa",
+        "Casa Mia Riscaldamento 1 Riscaldamento Prolungato"
+      ]
+    },
+    "german": {
+      "description": "🇩🇪 Complete German localization example",
+      "customNames": {
+        "installationPrefix": "Mein Haus",
+        "boiler": "Heizkessel",
+        "dhw": "Warmwasserbereitung",
+        "heatingCircuit": "Heizkreis",
+        "reduced": "Reduziert",
+        "normal": "Normal",
+        "comfort": "Komfort",
+        "eco": "Öko",
+        "off": "Aus",
+        "burner": "Brenner",
+        "modulation": "Modulationsgrad",
+        "holiday": "Urlaubsmodus",
+        "holidayAtHome": "Heimaturlaub",
+        "extendedHeating": "Zusatzheizung"
+      }
+    },
+    "french": {
+      "description": "🇫🇷 Complete French localization example",
+      "customNames": {
+        "installationPrefix": "Ma Maison",
+        "boiler": "Chaudière",
+        "dhw": "Eau Chaude Sanitaire",
+        "heatingCircuit": "Circuit de Chauffage",
+        "reduced": "Réduit",
+        "normal": "Normal",
+        "comfort": "Confort",
+        "eco": "Éco",
+        "off": "Arrêt",
+        "burner": "Brûleur",
+        "modulation": "Modulation",
+        "holiday": "Mode Vacances",
+        "holidayAtHome": "Vacances à Domicile",
+        "extendedHeating": "Chauffage Prolongé"
+      }
+    },
+    "spanish": {
+      "description": "🇪🇸 Complete Spanish localization example",
+      "customNames": {
+        "installationPrefix": "Mi Casa",
+        "boiler": "Caldera",
+        "dhw": "Agua Caliente Sanitaria",
+        "heatingCircuit": "Circuito de Calefacción",
+        "reduced": "Reducido",
+        "normal": "Normal",
+        "comfort": "Confort",
+        "eco": "Eco",
+        "off": "Apagado",
+        "burner": "Quemador",
+        "modulation": "Modulación",
+        "holiday": "Modo Vacaciones",
+        "holidayAtHome": "Vacaciones en Casa",
+        "extendedHeating": "Calefacción Extendida"
+      }
+    }
+  },
+  "configurationGuide": {
+    "customNames": {
+      "type": "object",
+      "description": "Complete customization of accessory names for different languages or personal preferences",
+      "impact": "Names are applied during accessory creation and require Homebridge restart to take effect",
+      "forceServiceRecreation": "Enable temporarily if names don't update, then disable after restart",
+      "recommendations": {
+        "italian_users": "Use the Italian example above for complete localization",
+        "german_users": "Use the German example above for complete localization",
+        "french_users": "Use the French example above for complete localization",
+        "spanish_users": "Use the Spanish example above for complete localization",
+        "custom_naming": "Create your own naming scheme for personal preference",
+        "testing": "Use forceServiceRecreation: true temporarily to test name changes quickly"
+      }
+    },
+    "refreshInterval": {
+      "type": "number",
+      "recommendations": {
+        "single_installation": "60000-120000ms (1-2 minutes)",
+        "multiple_installations": "180000-300000ms (3-5 minutes)",
+        "rate_limited": "600000-900000ms (10-15 minutes)",
+        "testing": "30000-60000ms (30s-1 minute)"
+      },
+      "description": "Lower values = more current data but higher API usage"
+    },
+    "cache": {
+      "enabled": {
+        "description": "Always recommended unless debugging API issues",
+        "default": true
+      },
+      "featuresTTL": {
+        "description": "Most important cache setting - affects data freshness",
+        "recommendations": {
+          "real_time": "30000-60000ms",
+          "normal": "120000-300000ms", 
+          "conservative": "600000-1800000ms"
+        }
+      },
+      "installationsTTL": {
+        "description": "Rarely changes - can be very long",
+        "recommendation": "24-72 hours"
+      }
+    },
+    "rateLimiting": {
+      "enableRateLimitProtection": {
+        "description": "Should always be true unless specifically testing",
+        "recommendation": true
+      },
+      "retryDelay": {
+        "description": "Base delay for exponential backoff",
+        "recommendations": {
+          "aggressive": "30000ms",
+          "conservative": "60000-120000ms"
+        }
+      }
+    }
+  },
+  "performanceProfiles": {
+    "realTime": {
+      "description": "Maximum responsiveness, higher API usage",
+      "refreshInterval": 60000,
+      "cache": {
+        "featuresTTL": 60000,
+        "installationsTTL": 43200000,
+        "devicesTTL": 10800000
+      },
+      "apiCallReduction": "20-40%"
+    },
+    "balanced": {
+      "description": "Good balance between responsiveness and API usage",
+      "refreshInterval": 120000,
+      "cache": {
+        "featuresTTL": 120000,
+        "installationsTTL": 86400000,
+        "devicesTTL": 21600000
+      },
+      "apiCallReduction": "50-70%"
+    },
+    "conservative": {
+      "description": "Minimal API usage, slower updates",
+      "refreshInterval": 300000,
+      "cache": {
+        "featuresTTL": 300000,
+        "installationsTTL": 172800000,
+        "devicesTTL": 43200000
+      },
+      "apiCallReduction": "70-90%"
+    },
+    "rateLimitRecovery": {
+      "description": "Extreme conservation for rate limit recovery", 
+      "refreshInterval": 900000,
+      "cache": {
+        "featuresTTL": 1800000,
+        "installationsTTL": 604800000,
+        "devicesTTL": 259200000
+      },
+      "apiCallReduction": "90-95%"
+    }
+  },
+  "troubleshooting": {
+    "customNames": {
+      "symptoms": ["Names not updating", "Accessories still show English names", "Service names unchanged"],
+      "solutions": [
+        "Restart Homebridge completely after configuration change",
+        "Enable forceServiceRecreation: true temporarily",
+        "Check that customNames is properly configured in config.json",
+        "Verify no typos in custom name fields",
+        "Clear HomeKit cache if names are cached in iOS"
+      ]
+    },
+    "rateLimiting": {
+      "symptoms": ["429 errors", "accessories not updating", "blocked API calls"],
+      "solutions": [
+        "Increase refreshInterval to 300000ms or higher",
+        "Enable rateLimitProtection: true",
+        "Use installationFilter to reduce installations",
+        "Increase cache TTL values",
+        "Close ViCare mobile app temporarily"
+      ]
+    },
+    "authentication": {
+      "symptoms": ["401/403 errors", "login failed", "invalid credentials"],
+      "solutions": [
+        "Verify ViCare username/password",
+        "Check Client ID is correct",
+        "Try manual authentication method",
+        "Ensure devices are registered in ViCare app"
+      ]
+    },
+    "performance": {
+      "symptoms": ["slow responses", "timeouts", "connection errors"],
+      "solutions": [
+        "Increase requestTimeout",
+        "Enable cache with appropriate TTL",
+        "Reduce number of accessories with feature flags",
+        "Use installation filtering"
+      ]
+    }
+  },
+  "bestPractices": {
+    "initial_setup": {
+      "refreshInterval": 180000,
+      "enableRateLimitProtection": true,
+      "cache_enabled": true,
+      "debug": true,
+      "customNames": "Configure if using non-English language"
+    },
+    "production": {
+      "refreshInterval": 120000,
+      "enableRateLimitProtection": true,
+      "cache_enabled": true,
+      "debug": false,
+      "forceServiceRecreation": false
+    },
+    "multiple_installations": {
+      "use_filtering": true,
+      "refreshInterval": 300000,
+      "aggressive_caching": true
+    },
+    "localization": {
+      "configure_custom_names": true,
+      "test_with_force_recreation": true,
+      "restart_homebridge_after_changes": true,
+      "disable_force_recreation_in_production": true
+    }
+  }
+}

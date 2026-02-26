@@ -1,0 +1,657 @@
+{
+  "pluginAlias": "ViessmannPlatform",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "🔥 Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic with persistent token storage. ⚠️ CRITICAL: Authorization codes expire in 20 seconds during OAuth setup!",
+  "footerDisplay": "⚠️ Important: Refresh tokens expire after 180 days. For help and support visit: [📖 Setup Guide](https://github.com/diegoweb100/homebridge-viessmann-vicare/blob/main/SETUP-GUIDE.md) | [🔧 Troubleshooting](https://github.com/diegoweb100/homebridge-viessmann-vicare#-troubleshooting) | [📞 Support](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "default": "Viessmann",
+        "required": true,
+        "description": "Name of the platform as it will appear in HomeKit"
+      },
+      "clientId": {
+        "title": "Client ID",
+        "type": "string",
+        "required": true,
+        "pattern": "^[a-zA-Z0-9_-]+$",
+        "description": "Your Viessmann API Client ID from the developer portal. Must contain only alphanumeric characters, underscores, and hyphens. Get it from https://developer.viessmann-climatesolutions.com/"
+      },
+      "clientSecret": {
+        "title": "Client Secret",
+        "type": "string",
+        "required": false,
+        "description": "Your Viessmann API Client Secret (optional for public clients, recommended for production use)"
+      },
+      "username": {
+        "title": "Username/Email",
+        "type": "string",
+        "format": "email",
+        "required": true,
+        "description": "Your Viessmann ViCare account username/email address"
+      },
+      "password": {
+        "title": "Password",
+        "type": "string",
+        "required": true,
+        "description": "Your Viessmann ViCare account password"
+      },
+      "authMethod": {
+        "title": "Authentication Method",
+        "type": "string",
+        "enum": ["auto", "manual"],
+        "default": "auto",
+        "description": "Choose authentication method: 'auto' for automatic OAuth flow (recommended), 'manual' for manual token configuration (headless environments)"
+      },
+      "hostIp": {
+        "title": "Host IP Address",
+        "type": "string",
+        "format": "ipv4",
+        "required": false,
+        "description": "IP address for OAuth redirect (auto-detected if not specified). Use the IP where Homebridge is running."
+      },
+      "redirectPort": {
+        "title": "OAuth Redirect Port",
+        "type": "integer",
+        "default": 4200,
+        "minimum": 1024,
+        "maximum": 65535,
+        "description": "Port for OAuth callback server. Must be accessible from your browser and not blocked by firewall."
+      },
+      "authTimeout": {
+        "title": "OAuth Authentication Timeout (ms)",
+        "type": "integer",
+        "default": 300000,
+        "minimum": 60000,
+        "maximum": 900000,
+        "description": "Maximum time to wait for OAuth authentication in milliseconds. Default: 300000 (5 minutes)."
+      },
+      "accessToken": {
+        "title": "Access Token (Manual Auth)",
+        "type": "string",
+        "required": false,
+        "description": "Manual access token (only required if authMethod is 'manual'). Get this from Viessmann API manually."
+      },
+      "refreshToken": {
+        "title": "Refresh Token (Manual Auth)",
+        "type": "string",
+        "required": false,
+        "description": "Manual refresh token (only required if authMethod is 'manual'). Used to refresh expired access tokens. Valid for 180 days."
+      },
+      "tokenRefreshBuffer": {
+        "title": "Token Refresh Buffer (ms)",
+        "type": "integer",
+        "default": 300000,
+        "minimum": 60000,
+        "maximum": 1800000,
+        "description": "Buffer time before token expiry to trigger proactive refresh. Default: 300000 (5 minutes)."
+      },
+      "enableTokenPersistence": {
+        "title": "Enable Token Persistence",
+        "type": "boolean",
+        "default": true,
+        "description": "Save tokens to disk for persistence across Homebridge restarts. Highly recommended for production use."
+      },
+      "installationFilter": {
+        "title": "Installation Name Filter",
+        "type": "string",
+        "required": false,
+        "description": "Filter installations by name (case-insensitive substring match). Leave empty to show all installations. Example: 'Main House'"
+      },
+      "installationIds": {
+        "title": "Installation IDs",
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "required": false,
+        "description": "Array of specific installation IDs to include. Takes priority over installationFilter if specified. Find IDs in debug logs."
+      },
+      "refreshInterval": {
+        "title": "Data Refresh Interval (ms)",
+        "type": "integer",
+        "default": 120000,
+        "minimum": 30000,
+        "maximum": 3600000,
+        "description": "How often to update device data in milliseconds. Default: 120000 (2 minutes). Increase to reduce API calls and avoid rate limiting."
+      },
+      "requestTimeout": {
+        "title": "API Request Timeout (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 5000,
+        "maximum": 120000,
+        "description": "Timeout for individual API requests in milliseconds. Default: 30000 (30 seconds)."
+      },
+      "enableRateLimitProtection": {
+        "title": "Enable Rate Limit Protection",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable automatic rate limit protection with exponential backoff. Highly recommended to prevent API blocking."
+      },
+      "maxRetries": {
+        "title": "Maximum Retries",
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 10,
+        "description": "Maximum number of retry attempts for failed API calls before giving up."
+      },
+      "retryDelay": {
+        "title": "Base Retry Delay (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 5000,
+        "maximum": 300000,
+        "description": "Base delay between retry attempts in milliseconds. Will be multiplied by exponential backoff factor."
+      },
+      "rateLimitResetBuffer": {
+        "title": "Rate Limit Reset Buffer (ms)",
+        "type": "integer",
+        "default": 60000,
+        "minimum": 10000,
+        "maximum": 300000,
+        "description": "Additional buffer time after rate limit expires before resuming requests."
+      },
+      "enableApiMetrics": {
+        "title": "Enable API Metrics",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable comprehensive API performance monitoring and health scoring."
+      },
+      "debug": {
+        "title": "Enable Debug Logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable verbose debug logging for troubleshooting. Warning: May expose sensitive information in logs."
+      },
+      "forceServiceRecreation": {
+        "title": "Force Service Recreation",
+        "type": "boolean",
+        "default": false,
+        "description": "🔧 DEVELOPMENT: Force recreation of HomeKit services with new subtypes to refresh names immediately. Enable temporarily if custom names don't appear, then disable after restart."
+      },
+      "customNames": {
+        "title": "🎯 Custom Names & Localization",
+        "type": "object",
+        "description": "Customize accessory names for localization or personal preference. Perfect for non-English users or custom naming schemes.",
+        "properties": {
+          "installationPrefix": {
+            "title": "Installation Prefix",
+            "type": "string",
+            "required": false,
+            "placeholder": "My Home",
+            "description": "Custom prefix for installation names instead of using the full installation description from ViCare. Example: 'Casa Mia' instead of 'HomeName/ID 12345'"
+          },
+          "boiler": {
+            "title": "Boiler Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Caldaia",
+            "description": "Custom name for boiler accessories. Default: 'Boiler'. Italian example: 'Caldaia'"
+          },
+          "dhw": {
+            "title": "Hot Water Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Acqua Calda",
+            "description": "Custom name for domestic hot water (DHW) accessories. Default: 'Hot Water'. Italian example: 'Acqua Calda'"
+          },
+          "heatingCircuit": {
+            "title": "Heating Circuit Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Riscaldamento",
+            "description": "Custom name for heating circuit accessories. Default: 'Heating Circuit'. Italian example: 'Riscaldamento'"
+          },
+          "reduced": {
+            "title": "Reduced Program Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Ridotto",
+            "description": "Custom name for reduced temperature program. Default: 'Reduced'. Italian example: 'Ridotto'"
+          },
+          "normal": {
+            "title": "Normal Program Name", 
+            "type": "string",
+            "required": false,
+            "placeholder": "Normale",
+            "description": "Custom name for normal temperature program. Default: 'Normal'. Italian example: 'Normale'"
+          },
+          "comfort": {
+            "title": "Comfort Program Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Comfort",
+            "description": "Custom name for comfort temperature program. Default: 'Comfort'. Usually the same in most languages."
+          },
+          "eco": {
+            "title": "Eco Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Eco",
+            "description": "Custom name for DHW eco mode. Default: 'Eco'. Usually the same in most languages."
+          },
+          "off": {
+            "title": "Off Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Spento",
+            "description": "Custom name for off mode. Default: 'Off'. Italian example: 'Spento'"
+          },
+          "burner": {
+            "title": "Burner Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Bruciatore",
+            "description": "Custom name for burner status accessories. Default: 'Burner'. Italian example: 'Bruciatore'"
+          },
+          "modulation": {
+            "title": "Modulation Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Modulazione",
+            "description": "Custom name for modulation level accessories. Default: 'Modulation'. Italian example: 'Modulazione'"
+          },
+          "holiday": {
+            "title": "Holiday Mode Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Vacanza",
+            "description": "Custom name for holiday mode (7-day schedule). Default: 'Holiday Mode'. Italian example: 'Vacanza'"
+          },
+          "holidayAtHome": {
+            "title": "Holiday At Home Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Vacanza Casa",
+            "description": "Custom name for holiday at home mode (today only). Default: 'Holiday At Home'. Italian example: 'Vacanza Casa'"
+          },
+          "extendedHeating": {
+            "title": "Extended Heating Name",
+            "type": "string",
+            "required": false,
+            "placeholder": "Riscaldamento Extra",
+            "description": "Custom name for extended heating mode (comfort boost). Default: 'Extended Heating'. Italian example: 'Riscaldamento Extra'"
+          }
+        }
+      },
+      "cache": {
+        "title": "🗄️ Enhanced API Cache Configuration",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "title": "Enable API Caching",
+            "type": "boolean",
+            "default": true,
+            "description": "Enable intelligent API response caching to reduce API calls by up to 90% and improve performance."
+          },
+          "installationsTTL": {
+            "title": "Installations Cache TTL (ms)",
+            "type": "integer",
+            "default": 86400000,
+            "minimum": 60000,
+            "maximum": 604800000,
+            "description": "How long to cache installations data in milliseconds. Default: 86400000 (24 hours). Rarely changes."
+          },
+          "featuresTTL": {
+            "title": "Features Cache TTL (ms)",
+            "type": "integer",
+            "default": 120000,
+            "minimum": 30000,
+            "maximum": 1800000,
+            "description": "How long to cache device features in milliseconds. Default: 120000 (2 minutes). Lower values = more current data but higher API usage."
+          },
+          "devicesTTL": {
+            "title": "Devices Cache TTL (ms)",
+            "type": "integer",
+            "default": 21600000,
+            "minimum": 300000,
+            "maximum": 259200000,
+            "description": "How long to cache device information in milliseconds. Default: 21600000 (6 hours). Changes infrequently."
+          },
+          "gatewaysTTL": {
+            "title": "Gateways Cache TTL (ms)",
+            "type": "integer",
+            "default": 43200000,
+            "minimum": 300000,
+            "maximum": 259200000,
+            "description": "How long to cache gateway information in milliseconds. Default: 43200000 (12 hours). Very stable data."
+          },
+          "maxEntries": {
+            "title": "Maximum Cache Entries",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Maximum number of entries in cache before cleanup using intelligent LRU strategy."
+          },
+          "enableSmartRefresh": {
+            "title": "Enable Smart Cache Refresh",
+            "type": "boolean",
+            "default": false,
+            "description": "Automatically refresh cache entries before they expire (background warming) for seamless performance."
+          },
+          "enableConditionalRequests": {
+            "title": "Enable Conditional Requests",
+            "type": "boolean",
+            "default": false,
+            "description": "Use ETags and conditional requests for better cache efficiency (if supported by API)."
+          },
+          "enableIntelligentPrefetch": {
+            "title": "Enable Intelligent Prefetch",
+            "type": "boolean",
+            "default": false,
+            "description": "Predictively fetch likely-needed data based on access patterns to minimize cache misses."
+          },
+          "compressionEnabled": {
+            "title": "Enable Data Compression",
+            "type": "boolean",
+            "default": false,
+            "description": "Compress cached data to reduce memory usage (uses gzip for entries >1KB with >20% compression ratio)."
+          }
+        }
+      },
+      "advanced": {
+        "title": "🔧 Advanced Settings",
+        "type": "object",
+        "properties": {
+          "baseDelay": {
+            "title": "Base Exponential Backoff Delay (ms)",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Base delay for exponential backoff algorithm in milliseconds."
+          },
+          "maxDelay": {
+            "title": "Maximum Backoff Delay (ms)",
+            "type": "integer",
+            "default": 300000,
+            "minimum": 10000,
+            "maximum": 3600000,
+            "description": "Maximum delay for exponential backoff in milliseconds (5 minutes default)."
+          },
+          "maxConsecutiveErrors": {
+            "title": "Maximum Consecutive Errors",
+            "type": "integer",
+            "default": 5,
+            "minimum": 3,
+            "maximum": 20,
+            "description": "Maximum consecutive errors before platform stops attempting discovery."
+          },
+          "deviceUpdateDelay": {
+            "title": "Device Update Delay (ms)",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Delay between individual device updates to be gentle on the API and prevent overwhelming the system."
+          },
+          "userAgent": {
+            "title": "Custom User Agent",
+            "type": "string",
+            "default": "homebridge-viessmann-vicare/2.0.0",
+            "description": "Custom User-Agent string for API requests. Format: 'application/version'."
+          }
+        }
+      },
+      "features": {
+        "title": "🎛️ Feature Control",
+        "type": "object",
+        "properties": {
+          "enableBoilerAccessories": {
+            "title": "Enable Boiler Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for boiler control (temperature, burner status, modulation level)."
+          },
+          "enableDHWAccessories": {
+            "title": "Enable DHW (Hot Water) Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for domestic hot water control (temperature and operating modes)."
+          },
+          "enableHeatingCircuitAccessories": {
+            "title": "Enable Heating Circuit Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create accessories for heating circuit control with comprehensive temperature programs."
+          },
+          "enableTemperaturePrograms": {
+            "title": "Enable Temperature Programs",
+            "type": "boolean",
+            "default": true,
+            "description": "Create individual switches for Reduced/Normal/Comfort temperature programs with custom temperatures."
+          },
+          "enableQuickSelections": {
+            "title": "Enable Quick Selections",
+            "type": "boolean",
+            "default": true,
+            "description": "Create switches for holiday modes (Holiday, Holiday at Home) and extended heating programs."
+          },
+          "enableBurnerStatus": {
+            "title": "Enable Burner Status Accessories",
+            "type": "boolean",
+            "default": true,
+            "description": "Create separate accessories showing burner status, modulation level, and statistics."
+          }
+        }
+      },
+      "network": {
+        "title": "🌐 Network Settings",
+        "type": "object",
+        "properties": {
+          "enableIPv6": {
+            "title": "Enable IPv6",
+            "type": "boolean",
+            "default": false,
+            "description": "Enable IPv6 support for API connections (experimental)."
+          },
+          "dnsResolver": {
+            "title": "Custom DNS Resolver",
+            "type": "string",
+            "required": false,
+            "description": "Custom DNS resolver IP address (e.g., 8.8.8.8). Leave empty to use system default."
+          },
+          "proxyUrl": {
+            "title": "Proxy URL",
+            "type": "string",
+            "required": false,
+            "description": "HTTP/HTTPS proxy URL if required (format: http://user:pass@host:port)."
+          },
+          "enableKeepAlive": {
+            "title": "Enable HTTP Keep-Alive",
+            "type": "boolean",
+            "default": true,
+            "description": "Use persistent HTTP connections to improve performance and reduce latency."
+          }
+        }
+      }
+    },
+    "required": [
+      "name",
+      "clientId",
+      "username",
+      "password"
+    ]
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "🔐 Basic Configuration",
+      "description": "Essential settings to connect to your Viessmann system. ⚠️ Remember: Authorization codes expire in 20 seconds!",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        "name",
+        "clientId",
+        "clientSecret",
+        "username",
+        "password"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🔑 Authentication Method",
+      "description": "Choose how to authenticate with Viessmann API. Automatic OAuth is recommended for desktop environments, manual for headless/Docker setups.",
+      "expandable": true,
+      "expanded": true,
+      "items": [
+        "authMethod",
+        "hostIp", 
+        "redirectPort",
+        "authTimeout"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "⚙️ Manual Authentication (Advanced)",
+      "description": "Only required if authMethod is 'manual'. For headless/server environments where browser OAuth isn't possible.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "accessToken",
+        "refreshToken"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🔒 Token Management",
+      "description": "Configure token refresh and persistence. Refresh tokens are valid for 180 days.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "tokenRefreshBuffer",
+        "enableTokenPersistence"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🎯 Installation Filtering",
+      "description": "Filter which installations to show in HomeKit to reduce API calls and improve performance. Can reduce API usage by up to 50%.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "installationFilter",
+        "installationIds"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🎯 Custom Names & Localization",
+      "description": "🌍 Customize accessory names for different languages or personal preferences. Perfect for Italian, German, French, Spanish users or custom naming schemes. Changes require Homebridge restart.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "customNames.installationPrefix",
+        "customNames.boiler",
+        "customNames.dhw",
+        "customNames.heatingCircuit",
+        "customNames.reduced",
+        "customNames.normal",
+        "customNames.comfort",
+        "customNames.eco",
+        "customNames.off",
+        "customNames.burner",
+        "customNames.modulation",
+        "customNames.holiday",
+        "customNames.holidayAtHome",
+        "customNames.extendedHeating",
+        "forceServiceRecreation"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "⚡ Performance & Rate Limiting",
+      "description": "Configure timing and rate limiting protection to prevent API blocking. Essential for maintaining reliable operation.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "refreshInterval",
+        "requestTimeout",
+        "enableRateLimitProtection",
+        "maxRetries",
+        "retryDelay",
+        "rateLimitResetBuffer"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "💾 Enhanced API Caching",
+      "description": "Configure intelligent API response caching to reduce API calls by 70-90% and improve responsiveness. Includes compression and smart prefetch.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "cache.enabled",
+        "cache.installationsTTL",
+        "cache.featuresTTL", 
+        "cache.devicesTTL",
+        "cache.gatewaysTTL",
+        "cache.maxEntries",
+        "cache.enableSmartRefresh",
+        "cache.enableConditionalRequests",
+        "cache.enableIntelligentPrefetch",
+        "cache.compressionEnabled"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🎛️ Feature Control",
+      "description": "Enable or disable specific accessory types to customize your HomeKit experience and reduce API overhead.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "features.enableBoilerAccessories",
+        "features.enableDHWAccessories",
+        "features.enableHeatingCircuitAccessories",
+        "features.enableTemperaturePrograms",
+        "features.enableQuickSelections",
+        "features.enableBurnerStatus"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🔧 Advanced Settings",
+      "description": "Advanced configuration options for fine-tuning performance, behavior, and compatibility.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "advanced.baseDelay",
+        "advanced.maxDelay",
+        "advanced.maxConsecutiveErrors",
+        "advanced.deviceUpdateDelay",
+        "advanced.userAgent"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "🌐 Network Settings",
+      "description": "Configure network-specific options for special environments or connectivity requirements.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "network.enableIPv6",
+        "network.dnsResolver",
+        "network.proxyUrl",
+        "network.enableKeepAlive"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "📊 Monitoring & Debug",
+      "description": "Enable monitoring and debugging features. Disable debug logging for production use to improve performance.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "enableApiMetrics",
+        "debug"
+      ]
+    }
+  ]
+}
