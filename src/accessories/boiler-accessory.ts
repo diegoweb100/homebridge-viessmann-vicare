@@ -713,6 +713,9 @@ export class ViessmannBoilerAccessory {
 
       if (success) {
         this.platform.log.info(`Boiler target temperature set to: ${temperature}°C`);
+
+        // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
+        this.scheduleStateRefresh(1000);
       } else {
         this.platform.log.error(`Failed to set boiler target temperature to: ${temperature}°C`);
         throw new Error('Failed to set boiler target temperature');
@@ -721,6 +724,24 @@ export class ViessmannBoilerAccessory {
       this.platform.log.error('Error setting boiler target temperature:', error);
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+  }
+
+  // 🆕 NEW: Schedule a state refresh from API ~N ms after a command completes.
+  private scheduleStateRefresh(delayMs = 1000): void {
+    setTimeout(async () => {
+      try {
+        this.platform.log.debug(`🔄 Boiler post-command state refresh for device ${this.device.id}...`);
+        const features = await this.platform.viessmannAPI.getDeviceFeatures(
+          this.installation.id,
+          this.gateway.serial,
+          this.device.id
+        );
+        await this.updateFromFeatures(features);
+        this.platform.log.debug(`✅ Boiler post-command state refresh completed`);
+      } catch (error) {
+        this.platform.log.warn(`⚠️ Boiler post-command state refresh failed:`, error instanceof Error ? error.message : error);
+      }
+    }, delayMs);
   }
 
   private async handleUpdate(features: any[]) {

@@ -5,6 +5,8 @@
 [![npm downloads](https://img.shields.io/npm/dt/homebridge-viessmann-vicare.svg)](https://www.npmjs.com/package/homebridge-viessmann-vicare)
 [![GitHub stars](https://img.shields.io/github/stars/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)
+[![PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/diegoweb100)
+[![verified-by-homebridge](https://img.shields.io/badge/_-verified-blueviolet?color=%23491F59&style=flat&logoColor=%23FFFFFF&logo=homebridge)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
 
 A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection, intelligent cache management, automatic retry logic, and **complete localization support**.
 
@@ -841,7 +843,14 @@ For issues and questions:
 
 ## 📈 Changelog
 
-### [2.0.8] - 2026-02-26
+### [2.0.16] - 2026-03-02
+**Added**
+- ✨ Post-command state refresh: all accessories now automatically re-fetch device features from the API ~1 second after every command (mode change, temperature set). This confirms the command was accepted by the Viessmann backend and syncs HomeKit state immediately, without waiting for the next scheduled update cycle.
+  - `dhw-accessory.ts`: refresh triggered after DHW mode change and DHW target temperature change.
+  - `heating-circuit-accessory.ts`: refresh triggered after temperature program change, operating mode change, and threshold temperature change.
+  - `boiler-accessory.ts`: refresh triggered after boiler target temperature change.
+
+### [2.0.15] - 2026-02-28
 **Fixed**
 - 🐛 Token storage now uses `api.user.storagePath()` (Homebridge storage directory) instead of `process.cwd()`, as required by Homebridge plugin verification guidelines.
 - 🐛 Early config validation in `ViessmannPlatform` constructor: plugin exits cleanly if `clientId` or `username` are missing, instead of crashing on first API call.
@@ -901,5 +910,13 @@ For issues and questions:
 - 🏠 **HomeKit Integration**: Full compatibility with Apple Home app
 
 ---
+---
 
+## Support
+
+If you find this plugin useful, consider buying me a coffee ☕
+
+[![PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/diegoweb100)
+
+---
 **Note**: This plugin is not officially affiliated with Viessmann. It's a community open-source project.

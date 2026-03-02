@@ -483,8 +483,11 @@ async setActive(value: CharacteristicValue) {
             BURNER_UPDATE_CONFIG.delays.dhwModeChange
           );
         }
+
+        // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
+        this.scheduleStateRefresh(1000);
         
-        // Update all characteristics
+        // Update all characteristics (optimistic, confirmed by scheduleStateRefresh above)
         this.updateAllCharacteristics();
       } else {
         this.platform.log.error(`Failed to set DHW mode to: ${mode}`);
@@ -595,6 +598,9 @@ async setActive(value: CharacteristicValue) {
             BURNER_UPDATE_CONFIG.delays.dhwTemperatureChange
           );
         }
+
+        // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
+        this.scheduleStateRefresh(1000);
         
       } else {
         this.platform.log.error(`Failed to set DHW target temperature to: ${temperature}°C`);
@@ -604,6 +610,26 @@ async setActive(value: CharacteristicValue) {
       this.platform.log.error('Error setting DHW target temperature:', error);
       throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
     }
+  }
+
+  // 🆕 NEW: Schedule a state refresh from API ~N ms after a command completes.
+  // This confirms the command was accepted and syncs state without waiting for the
+  // next regular update cycle (which could be up to 15 minutes away).
+  private scheduleStateRefresh(delayMs = 1000): void {
+    setTimeout(async () => {
+      try {
+        this.platform.log.debug(`🔄 DHW post-command state refresh for device ${this.device.id}...`);
+        const features = await this.platform.viessmannAPI.getDeviceFeatures(
+          this.installation.id,
+          this.gateway.serial,
+          this.device.id
+        );
+        await this.updateFromFeatures(features);
+        this.platform.log.debug(`✅ DHW post-command state refresh completed`);
+      } catch (error) {
+        this.platform.log.warn(`⚠️ DHW post-command state refresh failed:`, error instanceof Error ? error.message : error);
+      }
+    }, delayMs);
   }
 
   private async handleUpdate(features: any[]) {
