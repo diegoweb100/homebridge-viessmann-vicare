@@ -26,6 +26,17 @@ export class ViessmannHeatingCircuitAccessory {
   private currentMode = 'standby';
   private currentProgram = 'normal'; // Track which temperature program is active
 
+  // 🆕 Command confirmation state
+  private pendingModeUntil = 0;
+  private pendingProgramUntil = 0;
+  private pendingTempUntil = 0;
+  private pendingExpectedMode: string | undefined = undefined;
+  private pendingPreviousMode: string | undefined = undefined;
+  private pendingExpectedProgram: string | undefined = undefined;
+  private pendingPreviousProgram: string | undefined = undefined;
+  private pendingExpectedTemp: number | undefined = undefined;
+  private pendingPreviousTemp: number | undefined = undefined;
+
   private states = {
     CurrentTemperature: 20,
     HeatingThresholdTemperature: 20,
@@ -655,6 +666,15 @@ private setupTemperatureProgramServices() {
         this.currentProgram = newProgram;
         this.states.HeatingThresholdTemperature = targetTemperature;
         
+        // 🛡️ Guard: block regular update cycle from overwriting program/temp until API confirms
+        const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+        this.pendingProgramUntil = Date.now() + guardMs;
+        this.pendingTempUntil    = Date.now() + guardMs;
+        this.pendingExpectedProgram = newProgram;
+        this.pendingPreviousProgram = this.currentProgram;
+        this.pendingExpectedTemp = targetTemperature;
+        this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
+
         // Update HeaterCooler temperature display
         this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemperature);
         
@@ -664,7 +684,7 @@ private setupTemperatureProgramServices() {
         this.updateTemperatureProgramSwitches();
 
         // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleStateRefresh(1000);
+        this.scheduleCommandConfirmation(undefined, targetTemperature);
       } else {
         this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} to ${newProgram} program`);
         throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
@@ -1292,11 +1312,17 @@ private setupTemperatureProgramServices() {
         this.currentMode = mode;
         this.platform.log.info(`Heating circuit ${this.circuitNumber} mode changed: ${oldMode.toUpperCase()} → ${mode.toUpperCase()}`);
         
+        // 🛡️ Guard: block regular update cycle from overwriting mode until API confirms
+        const guardMsMode = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+        this.pendingModeUntil = Date.now() + guardMsMode;
+        this.pendingExpectedMode = mode;
+        this.pendingPreviousMode = oldMode;
+
         // Update all characteristics
         this.updateAllCharacteristics();
 
         // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleStateRefresh(1000);
+        this.scheduleCommandConfirmation(mode);
       } else {
         this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} mode to: ${mode}`);
         // Restore the previous state
@@ -1365,12 +1391,18 @@ private setupTemperatureProgramServices() {
           this.programTemperatures[programToUse as ProgramType] = temperature;
           
           this.platform.log.info(`Heating circuit ${this.circuitNumber} temperature set to: ${temperature}°C (program: ${programToUse})`);
+
+          // 🛡️ Guard: block regular update cycle from overwriting temp until API confirms
+          const guardMsTemp = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+          this.pendingTempUntil = Date.now() + guardMsTemp;
+          this.pendingExpectedTemp = temperature;
+          this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
           
           // Update service names to reflect new temperatures
           this.updateServiceNames();
 
           // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-          this.scheduleStateRefresh(1000);
+          this.scheduleCommandConfirmation(undefined, temperature);
         } else {
           throw new Error(`Failed to set temperature for program ${programToUse}`);
         }
@@ -1415,20 +1447,94 @@ private setupTemperatureProgramServices() {
     return this.states.CurrentRelativeHumidity;
   }
 
-  // 🆕 NEW: Schedule a state refresh from API ~N ms after a command completes.
-  private scheduleStateRefresh(delayMs = 1000): void {
+  // 🆕 Progressive command confirmation with retry.
+  private scheduleCommandConfirmation(
+    expectedMode?: string,
+    expectedTemp?: number,
+    attemptIndex = 0
+  ): void {
+    const delays = this.platform.config.postCommandRetry?.delays ?? [5000, 15000, 30000, 60000];
+    if (attemptIndex >= delays.length) {
+      this.platform.log.warn(`⚠️ HC${this.circuitNumber} command confirmation exhausted after ${delays.length} attempts — regular cycle will take over`);
+      return;
+    }
+
+    const delayMs = delays[attemptIndex];
+    const circuitPrefix = `heating.circuits.${this.circuitNumber}`;
+
     setTimeout(async () => {
       try {
-        this.platform.log.debug(`🔄 HC${this.circuitNumber} post-command state refresh for device ${this.device.id}...`);
+        this.platform.log.debug(`🔄 HC${this.circuitNumber} confirmation attempt ${attemptIndex + 1}/${delays.length} (after ${delayMs}ms)...`);
         const features = await this.platform.viessmannAPI.getDeviceFeatures(
           this.installation.id,
           this.gateway.serial,
           this.device.id
         );
-        await this.updateFromFeatures(features);
-        this.platform.log.debug(`✅ HC${this.circuitNumber} post-command state refresh completed`);
+
+        // --- Mode confirmation ---
+        if (expectedMode !== undefined) {
+          const modeFeature = features.find((f: any) => f.feature === `${circuitPrefix}.operating.modes.active`);
+          const apiMode = modeFeature?.properties?.value?.value;
+          if (apiMode === expectedMode) {
+            this.platform.log.debug(`✅ HC${this.circuitNumber} mode confirmed by API: "${apiMode}"`);
+            this.pendingModeUntil = 0;
+            this.pendingExpectedMode = undefined;
+            this.pendingPreviousMode = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else if (apiMode !== undefined && apiMode !== this.pendingPreviousMode) {
+            this.platform.log.info(`🔀 HC${this.circuitNumber} external mode change: API="${apiMode}" (expected "${expectedMode}") — applying`);
+            this.pendingModeUntil = 0;
+            this.pendingExpectedMode = undefined;
+            this.pendingPreviousMode = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else {
+            const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+            this.pendingModeUntil = Date.now() + guardMs;
+            this.platform.log.debug(`⏳ HC${this.circuitNumber} mode not yet propagated (API="${apiMode}", expected "${expectedMode}") — retry ${attemptIndex + 2}/${delays.length}`);
+            this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
+            return;
+          }
+        }
+
+        // --- Temp confirmation ---
+        if (expectedTemp !== undefined) {
+          const programFeature = features.find((f: any) =>
+            f.feature === `${circuitPrefix}.operating.programs.${this.currentProgram}`
+          );
+          const apiTemp = programFeature?.properties?.temperature?.value;
+          if (apiTemp === expectedTemp) {
+            this.platform.log.debug(`✅ HC${this.circuitNumber} temp confirmed by API: ${apiTemp}°C`);
+            this.pendingTempUntil = 0;
+            this.pendingProgramUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            this.pendingExpectedProgram = undefined;
+            this.pendingPreviousProgram = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else if (apiTemp !== undefined && apiTemp !== this.pendingPreviousTemp) {
+            this.platform.log.info(`🔀 HC${this.circuitNumber} external temp change: API=${apiTemp}°C (expected ${expectedTemp}°C) — applying`);
+            this.pendingTempUntil = 0;
+            this.pendingProgramUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else {
+            const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+            this.pendingTempUntil = Date.now() + guardMs;
+            this.pendingProgramUntil = Date.now() + guardMs;
+            this.platform.log.debug(`⏳ HC${this.circuitNumber} temp not yet propagated (API=${apiTemp}°C, expected ${expectedTemp}°C) — retry ${attemptIndex + 2}/${delays.length}`);
+            this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
+            return;
+          }
+        }
+
       } catch (error) {
-        this.platform.log.warn(`⚠️ HC${this.circuitNumber} post-command state refresh failed:`, error instanceof Error ? error.message : error);
+        this.platform.log.warn(`⚠️ HC${this.circuitNumber} confirmation attempt ${attemptIndex + 1} failed:`, error instanceof Error ? error.message : error);
+        this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
       }
     }, delayMs);
   }
@@ -1495,7 +1601,18 @@ private setupTemperatureProgramServices() {
     }
 
     // Update current program if it changed
-    if (activeProgram !== this.currentProgram) {
+    if (Date.now() < this.pendingProgramUntil) {
+      if (activeProgram !== this.pendingPreviousProgram && activeProgram !== this.pendingExpectedProgram) {
+        this.platform.log.info(`🔀 HC${this.circuitNumber} external program change while guard active: API="${activeProgram}" — applying and resetting guard`);
+        this.pendingProgramUntil = 0;
+        this.pendingExpectedProgram = undefined;
+        this.pendingPreviousProgram = undefined;
+        this.currentProgram = activeProgram;
+        this.updateTemperatureProgramSwitches();
+      } else {
+        this.platform.log.debug(`🌡️ HC${this.circuitNumber} program: API returned ${activeProgram.toUpperCase()} but command guard active — keeping ${this.currentProgram.toUpperCase()}`);
+      }
+    } else if (activeProgram !== this.currentProgram) {
       this.currentProgram = activeProgram;
       this.platform.log.debug(`Active temperature program changed to: ${activeProgram.toUpperCase()}`);
       this.updateTemperatureProgramSwitches();
@@ -1508,7 +1625,18 @@ private setupTemperatureProgramServices() {
 
     // Update HeatingThresholdTemperature to match the active program
     const activeTemp = this.programTemperatures[activeProgram as ProgramType];
-    if (activeTemp !== this.states.HeatingThresholdTemperature) {
+    if (Date.now() < this.pendingTempUntil) {
+      if (activeTemp !== this.pendingPreviousTemp && activeTemp !== this.pendingExpectedTemp) {
+        this.platform.log.info(`🔀 HC${this.circuitNumber} external temp change while guard active: API=${activeTemp}°C — applying and resetting guard`);
+        this.pendingTempUntil = 0;
+        this.pendingExpectedTemp = undefined;
+        this.pendingPreviousTemp = undefined;
+        this.states.HeatingThresholdTemperature = activeTemp;
+        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, activeTemp);
+      } else {
+        this.platform.log.debug(`🌡️ HC${this.circuitNumber} temp: API returned ${activeTemp}°C but command guard active — keeping ${this.states.HeatingThresholdTemperature}°C`);
+      }
+    } else if (activeTemp !== this.states.HeatingThresholdTemperature) {
       this.states.HeatingThresholdTemperature = activeTemp;
       this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, activeTemp);
     }
@@ -1571,7 +1699,19 @@ private setupTemperatureProgramServices() {
     const operatingModeFeature = features.find(f => f.feature === `${circuitPrefix}.operating.modes.active`);
     if (operatingModeFeature?.properties?.value?.value !== undefined) {
       const newMode = operatingModeFeature.properties.value.value;
-      if (newMode !== this.currentMode) {
+      if (Date.now() < this.pendingModeUntil) {
+        if (newMode !== this.pendingPreviousMode && newMode !== this.pendingExpectedMode) {
+          this.platform.log.info(`🔀 HC${this.circuitNumber} external mode change while guard active: API="${newMode}" — applying and resetting guard`);
+          this.pendingModeUntil = 0;
+          this.pendingExpectedMode = undefined;
+          this.pendingPreviousMode = undefined;
+          this.currentMode = newMode;
+          this.updateAllCharacteristics();
+          anyProgramStateChanged = true;
+        } else {
+          this.platform.log.debug(`🌡️ HC${this.circuitNumber} mode: API returned ${newMode.toUpperCase()} but command guard active — keeping ${this.currentMode.toUpperCase()}`);
+        }
+      } else if (newMode !== this.currentMode) {
         this.platform.log.info(`🌡️ Riscaldamento ${this.circuitNumber} mode changed: ${this.currentMode.toUpperCase()} → ${newMode.toUpperCase()}`);
         this.currentMode = newMode;
         this.updateAllCharacteristics();

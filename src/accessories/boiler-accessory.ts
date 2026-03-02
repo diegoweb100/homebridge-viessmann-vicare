@@ -21,6 +21,11 @@ export class ViessmannBoilerAccessory {
   private currentBurnerState = false;
   private currentModulation = 0;
 
+  // 🆕 Command confirmation state
+  private pendingTempUntil = 0;
+  private pendingExpectedTemp: number | undefined = undefined;
+  private pendingPreviousTemp: number | undefined = undefined;
+
   private states = {
     CurrentTemperature: 20,
     HeatingThresholdTemperature: 20,
@@ -714,8 +719,14 @@ export class ViessmannBoilerAccessory {
       if (success) {
         this.platform.log.info(`Boiler target temperature set to: ${temperature}°C`);
 
+        // 🛡️ Guard: block regular update cycle from overwriting temp until API confirms
+        const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+        this.pendingTempUntil = Date.now() + guardMs;
+        this.pendingExpectedTemp = temperature;
+        this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
+
         // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleStateRefresh(1000);
+        this.scheduleCommandConfirmation(temperature);
       } else {
         this.platform.log.error(`Failed to set boiler target temperature to: ${temperature}°C`);
         throw new Error('Failed to set boiler target temperature');
@@ -726,20 +737,51 @@ export class ViessmannBoilerAccessory {
     }
   }
 
-  // 🆕 NEW: Schedule a state refresh from API ~N ms after a command completes.
-  private scheduleStateRefresh(delayMs = 1000): void {
+  // 🆕 Progressive command confirmation with retry.
+  private scheduleCommandConfirmation(expectedTemp?: number, attemptIndex = 0): void {
+    const delays = this.platform.config.postCommandRetry?.delays ?? [5000, 15000, 30000, 60000];
+    if (attemptIndex >= delays.length) {
+      this.platform.log.warn(`⚠️ Boiler command confirmation exhausted after ${delays.length} attempts — regular cycle will take over`);
+      return;
+    }
+
+    const delayMs = delays[attemptIndex];
     setTimeout(async () => {
       try {
-        this.platform.log.debug(`🔄 Boiler post-command state refresh for device ${this.device.id}...`);
+        this.platform.log.debug(`🔄 Boiler confirmation attempt ${attemptIndex + 1}/${delays.length} (after ${delayMs}ms)...`);
         const features = await this.platform.viessmannAPI.getDeviceFeatures(
           this.installation.id,
           this.gateway.serial,
           this.device.id
         );
-        await this.updateFromFeatures(features);
-        this.platform.log.debug(`✅ Boiler post-command state refresh completed`);
+
+        if (expectedTemp !== undefined) {
+          const targetFeature = features.find((f: any) => f.feature === 'heating.boiler.temperature');
+          const apiTemp = targetFeature?.properties?.value?.value;
+          if (apiTemp === expectedTemp) {
+            this.platform.log.debug(`✅ Boiler temp confirmed by API: ${apiTemp}°C`);
+            this.pendingTempUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else if (apiTemp !== undefined && apiTemp !== this.pendingPreviousTemp) {
+            this.platform.log.info(`🔀 Boiler external temp change detected: API=${apiTemp}°C (expected ${expectedTemp}°C) — applying external change`);
+            this.pendingTempUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else {
+            const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+            this.pendingTempUntil = Date.now() + guardMs;
+            this.platform.log.debug(`⏳ Boiler temp not yet propagated (API=${apiTemp}°C, expected ${expectedTemp}°C) — retry ${attemptIndex + 2}/${delays.length}`);
+            this.scheduleCommandConfirmation(expectedTemp, attemptIndex + 1);
+          }
+        }
       } catch (error) {
-        this.platform.log.warn(`⚠️ Boiler post-command state refresh failed:`, error instanceof Error ? error.message : error);
+        this.platform.log.warn(`⚠️ Boiler confirmation attempt ${attemptIndex + 1} failed:`, error instanceof Error ? error.message : error);
+        this.scheduleCommandConfirmation(expectedTemp, attemptIndex + 1);
       }
     }, delayMs);
   }
@@ -768,7 +810,18 @@ export class ViessmannBoilerAccessory {
     const boilerTargetTempFeature = features.find(f => f.feature === 'heating.boiler.temperature');
     if (boilerTargetTempFeature?.properties?.value?.value !== undefined && this.supportsTemperatureControl) {
       const targetTemp = boilerTargetTempFeature.properties.value.value;
-      if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
+      if (Date.now() < this.pendingTempUntil) {
+        if (targetTemp !== this.pendingPreviousTemp && targetTemp !== this.pendingExpectedTemp) {
+          this.platform.log.info(`🔀 Boiler external temp change while guard active: API=${targetTemp}°C — applying and resetting guard`);
+          this.pendingTempUntil = 0;
+          this.pendingExpectedTemp = undefined;
+          this.pendingPreviousTemp = undefined;
+          this.states.HeatingThresholdTemperature = targetTemp;
+          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemp);
+        } else {
+          this.platform.log.debug(`🔥 Caldaia temp: API returned ${targetTemp}°C but command guard active — keeping ${this.states.HeatingThresholdTemperature}°C`);
+        }
+      } else if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
         this.states.HeatingThresholdTemperature = targetTemp;
         this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemp);
       }

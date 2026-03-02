@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.16';
+export const PLUGIN_VERSION = '2.0.18';
 
 /**
  * Default configuration values
@@ -26,6 +26,11 @@ export const DEFAULT_CONFIG = {
   rateLimitResetBuffer: 60000, // 1 minute
   tokenRefreshBuffer: 300000, // 5 minutes
   authTimeout: 300000, // 5 minutes
+  // 🆕 Progressive retry after commands: confirms API propagation without blocking external changes
+  postCommandRetry: {
+    delays: [5000, 15000, 30000, 60000], // ms between each confirmation attempt
+    guardDuration: 120000,               // ms to block regular cycle from overwriting local state
+  },
   enableRateLimitProtection: true,
   enableApiMetrics: true,
   enableTokenPersistence: true,

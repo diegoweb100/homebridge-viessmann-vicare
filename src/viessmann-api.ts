@@ -46,6 +46,12 @@ export interface ViessmannPlatformConfig extends AuthConfig {
   enableImmediateBurnerUpdates?: boolean;
   burnerUpdateDelay?: number;
   burnerUpdateDebounce?: number;
+
+  // 🆕 Progressive post-command confirmation retry
+  postCommandRetry?: {
+    delays?: number[];      // ms between each confirmation attempt (default: [5000,15000,30000,60000])
+    guardDuration?: number; // ms to block regular cycle from overwriting (default: 120000)
+  };
   
   // Installation filtering
   installationFilter?: string;

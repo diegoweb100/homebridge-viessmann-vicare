@@ -14,6 +14,16 @@ export class ViessmannDHWAccessory {
   private temperatureConstraints = { min: 30, max: 60 }; // Default DHW temperature range
   private currentMode = 'off';
 
+  // 🆕 Command confirmation state — tracks pending commands and blocks the regular
+  // update cycle from overwriting local state until the API confirms propagation
+  // or an external change is detected (e.g. user changed mode from ViCare app).
+  private pendingModeUntil = 0;
+  private pendingTempUntil = 0;
+  private pendingExpectedMode: string | undefined = undefined;
+  private pendingPreviousMode: string | undefined = undefined;
+  private pendingExpectedTemp: number | undefined = undefined;
+  private pendingPreviousTemp: number | undefined = undefined;
+
   private states = {
     CurrentTemperature: 40,
     HeatingThresholdTemperature: 50,
@@ -473,6 +483,12 @@ async setActive(value: CharacteristicValue) {
         this.currentMode = mode;
         this.platform.log.info(`DHW mode changed: ${oldMode.toUpperCase()} → ${mode.toUpperCase()}`);
         
+        // 🛡️ Guard: block regular update cycle from overwriting mode until API confirms
+        const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+        this.pendingModeUntil = Date.now() + guardMs;
+        this.pendingExpectedMode = mode;
+        this.pendingPreviousMode = oldMode;
+
         // 🆕 NEW: Request immediate burner update after mode change
         if (this.platform.config.enableImmediateBurnerUpdates !== false) {
           this.platform.requestImmediateBurnerUpdate(
@@ -485,9 +501,9 @@ async setActive(value: CharacteristicValue) {
         }
 
         // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleStateRefresh(1000);
+        this.scheduleCommandConfirmation(mode);
         
-        // Update all characteristics (optimistic, confirmed by scheduleStateRefresh above)
+        // Update all characteristics optimistically — scheduleCommandConfirmation will verify
         this.updateAllCharacteristics();
       } else {
         this.platform.log.error(`Failed to set DHW mode to: ${mode}`);
@@ -588,6 +604,12 @@ async setActive(value: CharacteristicValue) {
       if (success) {
         this.platform.log.info(`DHW target temperature: ${temperature}°C (Mode: ${this.currentMode.toUpperCase()})`);
         
+        // 🛡️ Guard: block regular update cycle from overwriting temp until API confirms
+        const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+        this.pendingTempUntil = Date.now() + guardMs;
+        this.pendingExpectedTemp = temperature;
+        this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
+
         // 🆕 NEW: Request immediate burner update after temperature change
         if (this.platform.config.enableImmediateBurnerUpdates !== false) {
           this.platform.requestImmediateBurnerUpdate(
@@ -600,7 +622,7 @@ async setActive(value: CharacteristicValue) {
         }
 
         // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleStateRefresh(1000);
+        this.scheduleCommandConfirmation(undefined, temperature);
         
       } else {
         this.platform.log.error(`Failed to set DHW target temperature to: ${temperature}°C`);
@@ -612,22 +634,94 @@ async setActive(value: CharacteristicValue) {
     }
   }
 
-  // 🆕 NEW: Schedule a state refresh from API ~N ms after a command completes.
-  // This confirms the command was accepted and syncs state without waiting for the
-  // next regular update cycle (which could be up to 15 minutes away).
-  private scheduleStateRefresh(delayMs = 1000): void {
+  // 🆕 Progressive command confirmation with retry.
+  // After each delay, fetches features from the API and checks:
+  //   - API confirmed expected value → resets pending guard, applies update, stops retrying
+  //   - API returned a third value (external change from ViCare app) → resets guard, applies update
+  //   - API still returns old pre-command value → extends guard, schedules next retry
+  // If all retries are exhausted, the guard expires naturally and the regular cycle takes over.
+  private scheduleCommandConfirmation(
+    expectedMode?: string,
+    expectedTemp?: number,
+    attemptIndex = 0
+  ): void {
+    const delays = this.platform.config.postCommandRetry?.delays ?? [5000, 15000, 30000, 60000];
+    if (attemptIndex >= delays.length) {
+      this.platform.log.warn(`⚠️ DHW command confirmation exhausted after ${delays.length} attempts — regular cycle will take over`);
+      return;
+    }
+
+    const delayMs = delays[attemptIndex];
     setTimeout(async () => {
       try {
-        this.platform.log.debug(`🔄 DHW post-command state refresh for device ${this.device.id}...`);
+        this.platform.log.debug(`🔄 DHW confirmation attempt ${attemptIndex + 1}/${delays.length} for device ${this.device.id} (after ${delayMs}ms)...`);
         const features = await this.platform.viessmannAPI.getDeviceFeatures(
           this.installation.id,
           this.gateway.serial,
           this.device.id
         );
-        await this.updateFromFeatures(features);
-        this.platform.log.debug(`✅ DHW post-command state refresh completed`);
+
+        // --- Mode confirmation ---
+        if (expectedMode !== undefined) {
+          const modeFeature = features.find((f: any) => f.feature === 'heating.dhw.operating.modes.active');
+          const apiMode = modeFeature?.properties?.value?.value;
+          if (apiMode === expectedMode) {
+            // ✅ API confirmed — reset guard and apply
+            this.platform.log.debug(`✅ DHW mode confirmed by API: "${apiMode}"`);
+            this.pendingModeUntil = 0;
+            this.pendingExpectedMode = undefined;
+            this.pendingPreviousMode = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else if (apiMode !== undefined && apiMode !== this.pendingPreviousMode) {
+            // 🔀 External change detected (ViCare app or physical control)
+            this.platform.log.info(`🔀 DHW external mode change detected: API="${apiMode}" (expected "${expectedMode}") — applying external change`);
+            this.pendingModeUntil = 0;
+            this.pendingExpectedMode = undefined;
+            this.pendingPreviousMode = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else {
+            // ⏳ API still returning pre-command value — extend guard and retry
+            const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+            this.pendingModeUntil = Date.now() + guardMs;
+            this.platform.log.debug(`⏳ DHW mode not yet propagated (API="${apiMode}", expected "${expectedMode}") — retry ${attemptIndex + 2}/${delays.length}`);
+            this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
+            return;
+          }
+        }
+
+        // --- Temp confirmation ---
+        if (expectedTemp !== undefined) {
+          const tempFeature = features.find((f: any) => f.feature === 'heating.dhw.temperature.main');
+          const apiTemp = tempFeature?.properties?.value?.value;
+          if (apiTemp === expectedTemp) {
+            this.platform.log.debug(`✅ DHW temp confirmed by API: ${apiTemp}°C`);
+            this.pendingTempUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else if (apiTemp !== undefined && apiTemp !== this.pendingPreviousTemp) {
+            this.platform.log.info(`🔀 DHW external temp change detected: API=${apiTemp}°C (expected ${expectedTemp}°C) — applying external change`);
+            this.pendingTempUntil = 0;
+            this.pendingExpectedTemp = undefined;
+            this.pendingPreviousTemp = undefined;
+            await this.updateFromFeatures(features);
+            return;
+          } else {
+            const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
+            this.pendingTempUntil = Date.now() + guardMs;
+            this.platform.log.debug(`⏳ DHW temp not yet propagated (API=${apiTemp}°C, expected ${expectedTemp}°C) — retry ${attemptIndex + 2}/${delays.length}`);
+            this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
+            return;
+          }
+        }
+
       } catch (error) {
-        this.platform.log.warn(`⚠️ DHW post-command state refresh failed:`, error instanceof Error ? error.message : error);
+        this.platform.log.warn(`⚠️ DHW confirmation attempt ${attemptIndex + 1} failed:`, error instanceof Error ? error.message : error);
+        // On error, still retry if attempts remain
+        this.scheduleCommandConfirmation(expectedMode, expectedTemp, attemptIndex + 1);
       }
     }, delayMs);
   }
@@ -671,7 +765,20 @@ async setActive(value: CharacteristicValue) {
     const dhwTargetTempFeature = features.find(f => f.feature === 'heating.dhw.temperature.main');
     if (dhwTargetTempFeature?.properties?.value?.value !== undefined && this.supportsTemperatureControl) {
       const targetTemp = dhwTargetTempFeature.properties.value.value;
-      if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
+      if (Date.now() < this.pendingTempUntil) {
+        if (targetTemp !== this.pendingPreviousTemp && targetTemp !== this.pendingExpectedTemp) {
+          // 🔀 External change while guard active — honour it immediately
+          this.platform.log.info(`🔀 ACS external temp change while guard active: API=${targetTemp}°C — applying and resetting guard`);
+          this.pendingTempUntil = 0;
+          this.pendingExpectedTemp = undefined;
+          this.pendingPreviousTemp = undefined;
+          this.states.HeatingThresholdTemperature = targetTemp;
+          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemp);
+          changed = true;
+        } else {
+          this.platform.log.debug(`🎯 ACS target temp: API returned ${targetTemp}°C but command guard active — keeping ${this.states.HeatingThresholdTemperature}°C`);
+        }
+      } else if (targetTemp >= this.temperatureConstraints.min && targetTemp <= this.temperatureConstraints.max) {
         if (targetTemp !== this.states.HeatingThresholdTemperature) {
           this.platform.log.debug(`🎯 ACS target temp: ${this.states.HeatingThresholdTemperature}°C → ${targetTemp}°C`);
           this.states.HeatingThresholdTemperature = targetTemp;
@@ -687,7 +794,20 @@ async setActive(value: CharacteristicValue) {
     const dhwOperatingModeFeature = features.find(f => f.feature === 'heating.dhw.operating.modes.active');
     if (dhwOperatingModeFeature?.properties?.value?.value !== undefined) {
       const newMode = dhwOperatingModeFeature.properties.value.value;
-      if (newMode !== this.currentMode) {
+      if (Date.now() < this.pendingModeUntil) {
+        if (newMode !== this.pendingPreviousMode && newMode !== this.pendingExpectedMode) {
+          // 🔀 External change while guard active — honour it immediately
+          this.platform.log.info(`🔀 ACS external mode change while guard active: API="${newMode}" — applying and resetting guard`);
+          this.pendingModeUntil = 0;
+          this.pendingExpectedMode = undefined;
+          this.pendingPreviousMode = undefined;
+          this.currentMode = newMode;
+          this.updateAllCharacteristics();
+          changed = true;
+        } else {
+          this.platform.log.debug(`🚿 ACS mode: API returned ${newMode.toUpperCase()} but command guard active — keeping ${this.currentMode.toUpperCase()}`);
+        }
+      } else if (newMode !== this.currentMode) {
         this.platform.log.info(`🚿 ACS mode changed: ${this.currentMode.toUpperCase()} → ${newMode.toUpperCase()}`);
         this.currentMode = newMode;
         this.updateAllCharacteristics();

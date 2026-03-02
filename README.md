@@ -6,7 +6,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/diegoweb100/homebridge-viessmann-vicare.svg)](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)
 [![PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/diegoweb100)
-[![verified-by-homebridge](https://img.shields.io/badge/_-verified-blueviolet?color=%23491F59&style=flat&logoColor=%23FFFFFF&logo=homebridge)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
 
 A comprehensive Homebridge plugin for Viessmann heating systems with **full control capabilities** including boilers, domestic hot water (DHW), and heating circuits through Apple HomeKit. Features advanced rate limiting protection, intelligent cache management, automatic retry logic, and **complete localization support**.
 
@@ -842,6 +841,33 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.19] - 2026-03-02
+**Fixed**
+- 🐛 **Progressive command confirmation replaces single-shot refresh**: after every command all accessories now retry API confirmation up to 4 times (at 5s, 15s, 30s, 60s) instead of a single check. Each retry extends the pending guard, preventing the regular update cycle from overwriting the local state while the Viessmann backend propagates.
+- 🐛 **External change detection during guard window**: if the API returns a value that is neither the pre-command value nor the expected post-command value (i.e. someone changed the setting from the ViCare app), the guard is immediately reset and the external change is applied. This ensures the app and HomeKit stay in sync even when commands arrive from multiple sources.
+- 🐛 **Guard duration now covers the full retry window**: `pendingXxxUntil` is set to `guardDuration` (default 120s) instead of the previous hardcoded 10s, preventing the regular 15-minute cycle from overwriting state before confirmation retries complete.
+
+**Changed**
+- 🔧 `postCommandRefreshDelay` config parameter removed and replaced by `postCommandRetry.delays` (array of ms, default `[5000, 15000, 30000, 60000]`) and `postCommandRetry.guardDuration` (ms, default `120000`).
+- 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
+- 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
+
+### [2.0.18] - 2026-03-02
+**Fixed**
+- 🐛 **Double `handleManualAuth()` call eliminated**: when auto-auth failed, `handleManualAuth()` was being called twice — once inside `performAutoAuth()` and again in the outer `catch` of `authenticate()`. This caused the `MANUAL AUTHENTICATION REQUIRED` block to appear twice in logs and could produce confusing error chains. `performAutoAuth()` now simply rethrows, leaving `authenticate()` as the single point of fallback control.
+
+**Changed**
+- 🔧 Removed all commented-out dead code from `auth-manager.ts` (old `shouldUseManualAuth()`, old `openBrowser()`, old `if (authMethod === 'manual' || this.shouldUseManualAuth())` block). No functional change, cleaner codebase.
+
+### [2.0.17] - 2026-03-02
+**Fixed**
+- 🐛 Post-command state refresh delay is now configurable via `postCommandRefreshDelay` (default **5000ms**). The previous hardcoded 1 second was too short for the Viessmann backend to propagate commands, causing the refresh to fetch the old state and overwrite the correct local state in HomeKit.
+- 🐛 Added anti-overwrite guard to all post-command refreshes: if the API still returns the pre-command value when the refresh fires (backend not yet propagated), the update is skipped and a warning is logged — protecting the optimistic local state from being silently reverted.
+
+**Changed**
+- 🔧 `DEFAULT_CONFIG.postCommandRefreshDelay` added to `settings.ts` (5000ms).
+- 🔧 `postCommandRefreshDelay` exposed in `ViessmannPlatformConfig` interface.
 
 ### [2.0.16] - 2026-03-02
 **Added**

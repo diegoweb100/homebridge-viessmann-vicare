@@ -332,14 +332,7 @@ export class AuthManager {
 
       // Determine authentication method
       const authMethod = this.config.authMethod || 'auto';
-      
-      /**
-      if (authMethod === 'manual' || this.shouldUseManualAuth()) {
-        await this.handleManualAuth();
-      } else {
-        await this.performAutoAuth();
-      }
-      **/
+
 		if (authMethod === 'manual') {
 		  await this.handleManualAuth();
 		  return;
@@ -361,33 +354,6 @@ export class AuthManager {
       throw error;
     }
   }
-/**
-  private shouldUseManualAuth(): boolean {
-    if (this.config.authMethod === 'manual') {
-      return true;
-    }
-
-    // Check if we're in a headless environment
-    if (!process.env.DISPLAY && process.platform === 'linux') {
-      this.log.debug('🖥️ Detected headless Linux environment, using manual auth');
-      return true;
-    }
-
-    // Check if we're in Docker
-    if (process.env.DOCKER || process.env.CONTAINER) {
-      this.log.debug('🐳 Detected container environment, using manual auth');
-      return true;
-    }
-
-    // Check if we're running as a service (systemd)
-    if (process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID) {
-      this.log.debug('⚙️ Detected systemd service environment, using manual auth');
-      return true;
-    }
-
-    return false;
-  }
-**/
 private shouldUseManualAuth(): boolean {
   // Rispetta la scelta esplicita dell’utente
   if (this.config.authMethod === 'manual') {
@@ -412,14 +378,8 @@ private shouldUseManualAuth(): boolean {
 }
 
   private async performAutoAuth(): Promise<void> {
-    try {
-      this.log.info('🚀 Starting automatic OAuth authentication...');
-      await this.performFullAuth();
-    } catch (error) {
-      this.log.warn('⚠️ Automatic OAuth failed, falling back to manual authentication');
-      this.log.warn('Error:', error instanceof Error ? error.message : String(error));
-      await this.handleManualAuth();
-    }
+    this.log.info('🚀 Starting automatic OAuth authentication...');
+    await this.performFullAuth();
   }
 
   private async handleManualAuth(): Promise<void> {
@@ -646,42 +606,6 @@ private startAuthServer(callback: (code?: string, error?: Error) => void): void 
     }
   }
 
- /** private openBrowser(url: string): void {
-    const { exec } = require('child_process');
-    
-    try {
-      let command: string;
-      
-      switch (process.platform) {
-        case 'darwin': // macOS
-          command = `open "${url}"`;
-          break;
-        case 'win32': // Windows
-          command = `start "" "${url}"`;
-          break;
-        case 'linux': // Linux
-          command = `xdg-open "${url}" || firefox "${url}" || google-chrome "${url}" || chromium "${url}"`;
-          break;
-        default:
-          this.log.warn('⚠️ Cannot auto-open browser on this platform. Please open the URL manually.');
-          return;
-      }
-
-      exec(command, (error: any) => {
-        if (error) {
-          this.log.warn('⚠️ Could not auto-open browser:', error.message);
-          this.log.info('📝 Please open the authentication URL manually in your browser.');
-        } else {
-          this.log.info('🌐 Opening browser for authentication...');
-        }
-      });
-    } catch (error) {
-      this.log.warn('⚠️ Error opening browser:', error);
-    }
-  }
-
-
-**/
 private openBrowser(url: string): void {
   // 🆕 Per servizi systemd: NON tentare di aprire automaticamente
   // L'utente può aprire da qualsiasi dispositivo sulla rete
