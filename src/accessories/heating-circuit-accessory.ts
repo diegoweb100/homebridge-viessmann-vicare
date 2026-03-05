@@ -546,6 +546,19 @@ private setupTemperatureProgramServices() {
         .onSet(this.setExtendedHeatingMode.bind(this));
     }
 
+    // 🛠️ Push initial state to HomeKit — onGet alone is not enough because HAP uses
+    // the cached accessory value until an explicit updateCharacteristic is called.
+    if (this.holidayService) {
+      this.holidayService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayActive);
+    }
+    if (this.holidayAtHomeService) {
+      this.holidayAtHomeService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayAtHomeActive);
+    }
+    if (this.extendedHeatingService) {
+      this.extendedHeatingService.updateCharacteristic(this.platform.Characteristic.On, this.states.ExtendedHeatingActive);
+      this.platform.log.info(`ExtendedHeating initial state: ${this.states.ExtendedHeatingActive ? 'ON' : 'OFF'}`);
+    }
+
     this.platform.log.info(`✅ HC${this.circuitNumber} quick selection services setup completed for selections: [${this.availableQuickSelections.join(', ')}] with subtype version: ${subtypeVersion}`);
   }
 

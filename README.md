@@ -853,6 +853,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.22] - 2026-03-05
+**Fixed**
+- 🐛 **ExtendedHeating/Holiday/HolidayAtHome show wrong state on boot**: `onGet` alone is not sufficient — HAP uses the cached accessory value until `updateCharacteristic` is called explicitly. Added `updateCharacteristic` push for all three quick selection services immediately after creation, so the correct state is visible in HomeKit right after Homebridge restarts. Also logs `ExtendedHeating initial state: ON/OFF` for easier debugging.
+
 ### [2.0.21] - 2026-03-05
 **Fixed**
 - 🐛 **ExtendedHeating wrong initial state on boot**: at startup the plugin was reading `comfortProgram.properties?.active?.value` to determine if Extended Heating was active, but on this device the alternative method `forcedLastFromSchedule` is used. The initial state now checks both `comfortProgram.active` and `forcedLastFromSchedule.active`, so `Risc Extra` shows the correct ON/OFF state immediately after Homebridge restart.
