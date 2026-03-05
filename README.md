@@ -853,6 +853,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.19] - 2026-03-05
+**Fixed**
+- 🐛 **HomeKit HAP feedback loop on DHW mode switches**: when `updateAllCharacteristics()` pushed new switch states to HomeKit (e.g. Eco=false, Off=true after an ECO→OFF command), HAP was calling back `setEcoMode(false)` / `setOffMode(false)` synchronously, triggering redundant API commands and repeated `Cannot deactivate Off mode` warnings in the log. Fixed by adding a `_updatingCharacteristics` guard flag: all `setComfortMode`/`setEcoMode`/`setOffMode` calls are ignored while the programmatic update is in progress. The flag is cleared via `setImmediate()` after HAP has processed all synchronous callbacks.
+
 ### [2.0.18] - 2026-03-02
 **Fixed**
 - 🐛 **Double `handleManualAuth()` call eliminated**: when auto-auth failed, `handleManualAuth()` was being called twice — once inside `performAutoAuth()` and again in the outer `catch` of `authenticate()`. This caused the `MANUAL AUTHENTICATION REQUIRED` block to appear twice in logs and could produce confusing error chains. `performAutoAuth()` now simply rethrows, leaving `authenticate()` as the single point of fallback control.

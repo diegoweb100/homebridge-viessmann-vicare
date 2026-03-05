@@ -14,9 +14,12 @@ export class ViessmannDHWAccessory {
   private temperatureConstraints = { min: 30, max: 60 }; // Default DHW temperature range
   private currentMode = 'off';
 
-  // 🆕 Command confirmation state — tracks pending commands and blocks the regular
-  // update cycle from overwriting local state until the API confirms propagation
-  // or an external change is detected (e.g. user changed mode from ViCare app).
+  // 🛡️ Guard: prevents HomeKit HAP feedback loop.
+  // When updateAllCharacteristics() pushes new values to HomeKit, HAP calls back
+  // the onSet handlers for the switches that changed state. Without this flag,
+  // those callbacks would trigger redundant API commands or "Cannot deactivate"
+  // warnings. While this flag is true, all setXxxMode() calls are ignored.
+  private _updatingCharacteristics = false;
   private pendingModeUntil = 0;
   private pendingTempUntil = 0;
   private pendingExpectedMode: string | undefined = undefined;
@@ -403,6 +406,7 @@ async setActive(value: CharacteristicValue) {
   }
 
   async setComfortMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on) {
@@ -425,6 +429,7 @@ async setActive(value: CharacteristicValue) {
   }
 
   async setEcoMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on) {
@@ -447,6 +452,7 @@ async setActive(value: CharacteristicValue) {
   }
 
   async setOffMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on) {
@@ -520,33 +526,40 @@ async setActive(value: CharacteristicValue) {
   }
 
   private updateAllCharacteristics() {
-    // Update HeaterCooler characteristics
-    const isActive = this.currentMode !== 'off';
-    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
-      isActive ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
-    
-    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState,
-      isActive ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
-                 this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE);
+    this._updatingCharacteristics = true;
+    try {
+      // Update HeaterCooler characteristics
+      const isActive = this.currentMode !== 'off';
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
+        isActive ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
+      
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState,
+        isActive ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
+                   this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE);
 
-    // Update switch states (ensure mutual exclusion)
-    const isComfort = this.currentMode === 'comfort';
-    const isEco = this.currentMode === 'eco';
-    const isOff = this.currentMode === 'off';
-    
-    if (this.comfortService) {
-      this.comfortService.updateCharacteristic(this.platform.Characteristic.On, isComfort);
+      // Update switch states (ensure mutual exclusion)
+      const isComfort = this.currentMode === 'comfort';
+      const isEco = this.currentMode === 'eco';
+      const isOff = this.currentMode === 'off';
+      
+      if (this.comfortService) {
+        this.comfortService.updateCharacteristic(this.platform.Characteristic.On, isComfort);
+      }
+      
+      if (this.ecoService) {
+        this.ecoService.updateCharacteristic(this.platform.Characteristic.On, isEco);
+      }
+      
+      if (this.offService) {
+        this.offService.updateCharacteristic(this.platform.Characteristic.On, isOff);
+      }
+      
+      this.platform.log.debug(`DHW States - Mode: ${this.currentMode.toUpperCase()}, Active: ${isActive}, Comfort: ${isComfort}, Eco: ${isEco}, Off: ${isOff}`);
+    } finally {
+      // Use setImmediate so the flag is cleared after HAP has processed
+      // all the synchronous updateCharacteristic callbacks in this tick
+      setImmediate(() => { this._updatingCharacteristics = false; });
     }
-    
-    if (this.ecoService) {
-      this.ecoService.updateCharacteristic(this.platform.Characteristic.On, isEco);
-    }
-    
-    if (this.offService) {
-      this.offService.updateCharacteristic(this.platform.Characteristic.On, isOff);
-    }
-    
-    this.platform.log.debug(`DHW States - Mode: ${this.currentMode.toUpperCase()}, Active: ${isActive}, Comfort: ${isComfort}, Eco: ${isEco}, Off: ${isOff}`);
   }
 
   private async executeDHWCommand(mode: string): Promise<boolean> {
