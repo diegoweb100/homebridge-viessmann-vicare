@@ -668,6 +668,7 @@ async setActive(value: CharacteristicValue) {
     setTimeout(async () => {
       try {
         this.platform.log.debug(`🔄 DHW confirmation attempt ${attemptIndex + 1}/${delays.length} for device ${this.device.id} (after ${delayMs}ms)...`);
+        this.platform.viessmannAPI.clearCache(`/features/installations/${this.installation.id}`);
         const features = await this.platform.viessmannAPI.getDeviceFeatures(
           this.installation.id,
           this.gateway.serial,

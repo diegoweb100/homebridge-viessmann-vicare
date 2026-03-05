@@ -37,6 +37,9 @@ export class ViessmannHeatingCircuitAccessory {
   private pendingExpectedTemp: number | undefined = undefined;
   private pendingPreviousTemp: number | undefined = undefined;
 
+  // 🛡️ HAP feedback loop guard — see DHW accessory for explanation
+  private _updatingCharacteristics = false;
+
   private states = {
     CurrentTemperature: 20,
     HeatingThresholdTemperature: 20,
@@ -598,6 +601,7 @@ private setupTemperatureProgramServices() {
 
   // Temperature Program Handlers
   private async setReducedProgram(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on && this.currentProgram !== 'reduced') {
@@ -613,6 +617,7 @@ private setupTemperatureProgramServices() {
   }
 
   private async setNormalProgram(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on && this.currentProgram !== 'normal') {
@@ -628,6 +633,7 @@ private setupTemperatureProgramServices() {
   }
 
   private async setComfortProgram(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     if (on && this.currentProgram !== 'comfort') {
@@ -698,24 +704,28 @@ private setupTemperatureProgramServices() {
   }
 
   private updateTemperatureProgramSwitches() {
-    // Update temperature program switches (ensure mutual exclusion)
-    const isReduced = this.currentProgram === 'reduced';
-    const isNormal = this.currentProgram === 'normal';
-    const isComfort = this.currentProgram === 'comfort';
-    
-    if (this.ridottaService) {
-      this.ridottaService.updateCharacteristic(this.platform.Characteristic.On, isReduced);
+    this._updatingCharacteristics = true;
+    try {
+      const isReduced = this.currentProgram === 'reduced';
+      const isNormal = this.currentProgram === 'normal';
+      const isComfort = this.currentProgram === 'comfort';
+      
+      if (this.ridottaService) {
+        this.ridottaService.updateCharacteristic(this.platform.Characteristic.On, isReduced);
+      }
+      
+      if (this.normaleService) {
+        this.normaleService.updateCharacteristic(this.platform.Characteristic.On, isNormal);
+      }
+      
+      if (this.comfortService) {
+        this.comfortService.updateCharacteristic(this.platform.Characteristic.On, isComfort);
+      }
+      
+      this.platform.log.debug(`Circuit ${this.circuitNumber} temperature program: ${this.currentProgram.toUpperCase()} (${this.states.HeatingThresholdTemperature}°C)`);
+    } finally {
+      setImmediate(() => { this._updatingCharacteristics = false; });
     }
-    
-    if (this.normaleService) {
-      this.normaleService.updateCharacteristic(this.platform.Characteristic.On, isNormal);
-    }
-    
-    if (this.comfortService) {
-      this.comfortService.updateCharacteristic(this.platform.Characteristic.On, isComfort);
-    }
-    
-    this.platform.log.debug(`Circuit ${this.circuitNumber} temperature program: ${this.currentProgram.toUpperCase()} (${this.states.HeatingThresholdTemperature}°C)`);
   }
 
   async setActive(value: CharacteristicValue) {
@@ -748,6 +758,7 @@ private setupTemperatureProgramServices() {
   }
 
   private async setHolidayMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     try {
@@ -811,6 +822,7 @@ private setupTemperatureProgramServices() {
   }
 
   private async setHolidayAtHomeMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     try {
@@ -871,6 +883,7 @@ private setupTemperatureProgramServices() {
   }
 
   private async setExtendedHeatingMode(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
     const on = value as boolean;
     
     try {
@@ -1267,28 +1280,25 @@ private setupTemperatureProgramServices() {
    * Update all switch characteristics to reflect mutual exclusion
    */
   private updateMutuallyExclusiveSwitches() {
-    // Update Extended Heating switch
-    if (this.extendedHeatingService) {
-      this.extendedHeatingService.updateCharacteristic(this.platform.Characteristic.On, this.states.ExtendedHeatingActive);
+    this._updatingCharacteristics = true;
+    try {
+      if (this.extendedHeatingService) {
+        this.extendedHeatingService.updateCharacteristic(this.platform.Characteristic.On, this.states.ExtendedHeatingActive);
+      }
+      if (this.holidayService) {
+        this.holidayService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayActive);
+      }
+      if (this.holidayAtHomeService) {
+        this.holidayAtHomeService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayAtHomeActive);
+      }
+      const activePrograms = [];
+      if (this.states.ExtendedHeatingActive) activePrograms.push('Extended Heating');
+      if (this.states.HolidayActive) activePrograms.push('Holiday');
+      if (this.states.HolidayAtHomeActive) activePrograms.push('Holiday At Home');
+      this.platform.log.debug(`Circuit ${this.circuitNumber} active programs: ${activePrograms.length > 0 ? activePrograms.join(', ') : 'None'}`);
+    } finally {
+      setImmediate(() => { this._updatingCharacteristics = false; });
     }
-    
-    // Update Holiday switch
-    if (this.holidayService) {
-      this.holidayService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayActive);
-    }
-    
-    // Update Holiday At Home switch
-    if (this.holidayAtHomeService) {
-      this.holidayAtHomeService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayAtHomeActive);
-    }
-    
-    // Log current state for debugging
-    const activePrograms = [];
-    if (this.states.ExtendedHeatingActive) activePrograms.push('Extended Heating');
-    if (this.states.HolidayActive) activePrograms.push('Holiday');
-    if (this.states.HolidayAtHomeActive) activePrograms.push('Holiday At Home');
-    
-    this.platform.log.debug(`Circuit ${this.circuitNumber} active programs: ${activePrograms.length > 0 ? activePrograms.join(', ') : 'None'}`);
   }
 
   private async setMode(mode: string) {
@@ -1465,6 +1475,7 @@ private setupTemperatureProgramServices() {
     setTimeout(async () => {
       try {
         this.platform.log.debug(`🔄 HC${this.circuitNumber} confirmation attempt ${attemptIndex + 1}/${delays.length} (after ${delayMs}ms)...`);
+        this.platform.viessmannAPI.clearCache(`/features/installations/${this.installation.id}`);
         const features = await this.platform.viessmannAPI.getDeviceFeatures(
           this.installation.id,
           this.gateway.serial,
