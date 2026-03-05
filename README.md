@@ -853,9 +853,11 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
-### [2.0.19] - 2026-03-05
+### [2.0.20] - 2026-03-05
 **Fixed**
-- 🐛 **HomeKit HAP feedback loop on DHW mode switches**: when `updateAllCharacteristics()` pushed new switch states to HomeKit (e.g. Eco=false, Off=true after an ECO→OFF command), HAP was calling back `setEcoMode(false)` / `setOffMode(false)` synchronously, triggering redundant API commands and repeated `Cannot deactivate Off mode` warnings in the log. Fixed by adding a `_updatingCharacteristics` guard flag: all `setComfortMode`/`setEcoMode`/`setOffMode` calls are ignored while the programmatic update is in progress. The flag is cleared via `setImmediate()` after HAP has processed all synchronous callbacks.
+- 🐛 **Stale cache read in command confirmation retry**: `scheduleCommandConfirmation` was calling `getDeviceFeatures()` without invalidating the cache first. When a second command was issued shortly after a first, the retry for the first command could read the old cached value, incorrectly treating it as a confirmed state or an external change — triggering spurious commands. Fixed by adding `clearCache()` before each `getDeviceFeatures()` call in the retry loop, on all three accessories (DHW, HC, Boiler).
+
+### [2.0.19] - 2026-03-05 when `updateAllCharacteristics()` pushed new switch states to HomeKit (e.g. Eco=false, Off=true after an ECO→OFF command), HAP was calling back `setEcoMode(false)` / `setOffMode(false)` synchronously, triggering redundant API commands and repeated `Cannot deactivate Off mode` warnings in the log. Fixed by adding a `_updatingCharacteristics` guard flag: all `setComfortMode`/`setEcoMode`/`setOffMode` calls are ignored while the programmatic update is in progress. The flag is cleared via `setImmediate()` after HAP has processed all synchronous callbacks.
 
 ### [2.0.18] - 2026-03-02
 **Fixed**
