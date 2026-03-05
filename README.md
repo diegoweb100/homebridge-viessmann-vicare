@@ -853,6 +853,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.21] - 2026-03-05
+**Fixed**
+- 🐛 **ExtendedHeating wrong initial state on boot**: at startup the plugin was reading `comfortProgram.properties?.active?.value` to determine if Extended Heating was active, but on this device the alternative method `forcedLastFromSchedule` is used. The initial state now checks both `comfortProgram.active` and `forcedLastFromSchedule.active`, so `Risc Extra` shows the correct ON/OFF state immediately after Homebridge restart.
+
 ### [2.0.20] - 2026-03-05
 **Fixed**
 - 🐛 **Stale cache read in command confirmation retry**: `scheduleCommandConfirmation` was calling `getDeviceFeatures()` without invalidating the cache first. When a second command was issued shortly after a first, the retry for the first command could read the old cached value, incorrectly treating it as a confirmed state or an external change — triggering spurious commands. Fixed by adding `clearCache()` before each `getDeviceFeatures()` call in the retry loop, on all three accessories (DHW, HC, Boiler).

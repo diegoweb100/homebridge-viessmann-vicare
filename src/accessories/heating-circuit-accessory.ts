@@ -243,7 +243,10 @@ export class ViessmannHeatingCircuitAccessory {
       
       if (hasAnyMethod) {
         this.availableQuickSelections.push('extendedHeating');
-        this.states.ExtendedHeatingActive = comfortProgram.properties?.active?.value || false;
+        // Check both methods: native comfort activate OR forcedLastFromSchedule
+        const comfortActive = comfortProgram.properties?.active?.value || false;
+        const forcedActive = forcedProgram?.properties?.active?.value || false;
+        this.states.ExtendedHeatingActive = comfortActive || forcedActive;
         
         const activateExecutable = hasActivate?.isExecutable || false;
         const deactivateExecutable = hasDeactivate?.isExecutable || false;
