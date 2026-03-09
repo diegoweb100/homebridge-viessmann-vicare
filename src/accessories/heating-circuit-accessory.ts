@@ -247,6 +247,7 @@ export class ViessmannHeatingCircuitAccessory {
         const comfortActive = comfortProgram.properties?.active?.value || false;
         const forcedActive = forcedProgram?.properties?.active?.value || false;
         this.states.ExtendedHeatingActive = comfortActive || forcedActive;
+        this.platform.log.info(`U0001F50D ExtendedHeating debug — comfortActive: ${comfortActive}, forcedActive: ${forcedActive}, forcedProps: ${JSON.stringify(forcedProgram?.properties)}, comfortProps: ${JSON.stringify(comfortProgram?.properties)}`);
         
         const activateExecutable = hasActivate?.isExecutable || false;
         const deactivateExecutable = hasDeactivate?.isExecutable || false;
@@ -1602,30 +1603,32 @@ private setupTemperatureProgramServices() {
       }
     }
 
-    // Update temperature programs and detect which one is currently active
+    // Update temperature programs
     const programTypes = ['comfort', 'normal', 'reduced'];
-    let activeProgram = 'normal'; // Default fallback
 
     for (const programType of programTypes) {
       const programFeature = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${programType}`);
       if (programFeature?.properties?.temperature?.value !== undefined) {
         const newTemp = programFeature.properties.temperature.value;
         const oldTemp = this.programTemperatures[programType as ProgramType];
-        
-        // Update stored temperature for this program
+
         if (newTemp !== oldTemp) {
           this.programTemperatures[programType as ProgramType] = newTemp;
           anyTemperatureChanged = true;
           this.platform.log.debug(`Program ${programType} temperature updated: ${oldTemp}°C → ${newTemp}°C`);
         }
-        
-        // Determine which program is currently active based on the HeatingThresholdTemperature
-        // The active program is likely the one whose temperature matches the current target
-        if (Math.abs(newTemp - this.states.HeatingThresholdTemperature) < 0.5) {
-          activeProgram = programType;
-        }
       }
     }
+
+    // Read active program directly from API (operating.programs.active) — authoritative source
+    const activeProgramFeature = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
+    let activeProgram = activeProgramFeature?.properties?.value?.value as string || this.currentProgram;
+    // Normalize: API can return 'forcedLastFromSchedule' or other values not in our set
+    if (!['comfort', 'normal', 'reduced'].includes(activeProgram)) {
+      this.platform.log.debug(`HC${this.circuitNumber} active program "${activeProgram}" not in known set — keeping ${this.currentProgram}`);
+      activeProgram = this.currentProgram;
+    }
+    this.platform.log.debug(`HC${this.circuitNumber} active program from API: ${activeProgram.toUpperCase()}`);
 
     // Update current program if it changed
     if (Date.now() < this.pendingProgramUntil) {

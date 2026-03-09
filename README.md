@@ -853,7 +853,11 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
-### [2.0.22] - 2026-03-05
+### [2.0.23] - 2026-03-09
+**Fixed**
+- 🐛 **Wrong active temperature program shown in HomeKit**: the plugin was guessing the active program by comparing temperatures instead of reading `heating.circuits.0.operating.programs.active` from the API. This caused HomeKit to show "Ridotto" as active even when the API reported "normal". Fixed by reading the authoritative `operating.programs.active.value` directly and only falling back to the previous value if the API returns an unknown program name.
+
+### [2.0.22]
 **Fixed**
 - 🐛 **ExtendedHeating/Holiday/HolidayAtHome show wrong state on boot**: `onGet` alone is not sufficient — HAP uses the cached accessory value until `updateCharacteristic` is called explicitly. Added `updateCharacteristic` push for all three quick selection services immediately after creation, so the correct state is visible in HomeKit right after Homebridge restarts. Also logs `ExtendedHeating initial state: ON/OFF` for easier debugging.
 
