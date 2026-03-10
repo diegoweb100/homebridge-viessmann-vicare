@@ -189,6 +189,87 @@ All Viessmann heating systems compatible with ViCare API:
 npm install -g homebridge-viessmann-vicare
 ```
 
+## 📊 History & Graphs
+
+Starting from v2.0.25 the plugin automatically records historical data at every refresh cycle (~15 min).
+
+### What is recorded
+| Data | Source | Available in |
+|---|---|---|
+| Burner state + modulation % | Boiler | Eve app, CSV, PDF |
+| Room temperature + setpoint | HC0 | Eve app, CSV, PDF |
+| DHW temperature + setpoint | ACS | Eve app, CSV, PDF |
+| Active program (normal/reduced/comfort) | HC0 | CSV, PDF |
+| Burner starts + hours (lifetime) | Boiler | CSV, PDF |
+
+---
+
+### 📱 Eve app graphs (FakeGato)
+
+Graphs are visible in the **Eve** app (free, App Store / Google Play).
+
+**Step 1 — Install fakegato-history** (one time, via SSH):
+```bash
+sudo npm install -g fakegato-history
+```
+
+**Step 2 — Restart Homebridge** from the UI.
+
+**Step 3 — Verify** in Homebridge logs:
+```
+📊 Boiler: FakeGato history enabled (type: energy)
+📊 ACS: FakeGato history enabled (type: thermo)
+📊 HC0: FakeGato history enabled (type: thermo)
+```
+
+**Step 4 — Open Eve app** → tap the accessory → tap the graph icon.
+Data accumulates over time — after a few hours you will see the first trends.
+
+> **Note**: `fakegato-history` is an `optionalDependency`. If not installed, the plugin works normally — you simply won't have Eve graphs. When you install or update the plugin via npm, `fakegato-history` is installed automatically.
+
+---
+
+### 📁 CSV file
+
+Every refresh appends a row to:
+```
+/var/lib/homebridge/viessmann-history.csv
+```
+
+Columns: `timestamp, accessory, burner_active, modulation, room_temp, target_temp, outside_temp, dhw_temp, dhw_target, program, mode, burner_starts, burner_hours`
+
+Open directly in **Excel** or **Google Sheets** for custom analysis.
+
+---
+
+### 📄 PDF report
+
+**Step 1 — Install pdfkit** (one time, via SSH):
+```bash
+sudo npm install -g pdfkit
+```
+
+**Step 2 — Generate report**:
+```bash
+# Last 7 days (default)
+node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js
+
+# Last 30 days
+node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js --days 30
+
+# Custom output path
+node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.pdf
+```
+
+The PDF includes:
+- Burner efficiency (starts/hour + Good/Poor rating)
+- Modulation sparkline chart
+- Room temperature trend
+- DHW temperature trend
+- Active program distribution (normal/reduced/comfort %)
+
+---
+
 ## 🔧 Configuration
 
 ### Prerequisites
@@ -852,6 +933,12 @@ For issues and questions:
 - 🔧 `postCommandRefreshDelay` config parameter removed and replaced by `postCommandRetry.delays` (array of ms, default `[5000, 15000, 30000, 60000]`) and `postCommandRetry.guardDuration` (ms, default `120000`).
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
+
+### [2.0.25] - 2026-03-10
+**Added**
+- 📊 **Eve history graphs (FakeGato)**: optional integration with `fakegato-history` for historical graphs in the Eve app. HC0 and ACS log temperature + setpoint (`thermo`), Boiler logs modulation (`energy`). See [📊 History & Graphs](#-history--graphs) section for setup.
+- 📁 **CSV history logging**: every refresh cycle appends a row to `/var/lib/homebridge/viessmann-history.csv` — compatible with Excel and Google Sheets.
+- 📄 **PDF report generator** (`viessmann-report.js`): standalone script that generates a PDF with sparkline charts, burner efficiency, cycling rate, and program distribution. See [📊 History & Graphs](#-history--graphs) section for usage.
 
 ### [2.0.24] - 2026-03-10
 **Added**

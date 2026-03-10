@@ -1,6 +1,6 @@
 {
   "name": "homebridge-viessmann-vicare",
-  "version": "2.0.24",
+  "version": "2.0.25",
   "description": "Complete Homebridge plugin for Viessmann ViCare heating systems with full control capabilities, advanced rate limiting protection, and intelligent cache management",
   "main": "dist/index.js",
   "scripts": {
@@ -49,10 +49,14 @@
     "dist",
     "config.schema.json",
     "README.md",
-    "SETUP-GUIDE.md"
+    "SETUP-GUIDE.md",
+    "viessmann-report.js"
   ],
   "funding": {
     "type": "individual",
     "url": "https://github.com/sponsors/diegoweb100"
+  },
+  "optionalDependencies": {
+    "fakegato-history": "^0.6.7"
   }
 }

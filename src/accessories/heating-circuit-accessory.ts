@@ -1,4 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+import { ViessmannHistoryLogger } from './history-logger';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 type ProgramType = 'reduced' | 'normal' | 'comfort';
@@ -62,6 +63,8 @@ export class ViessmannHeatingCircuitAccessory {
     comfort: 19,
   };
 
+  private historyLogger?: ViessmannHistoryLogger;
+
   // 🗓️ Schedule-aware refresh
   private heatingSchedule: Record<string, Array<{mode: string; start: string; end: string}>> = {};
   private scheduleRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,6 +93,9 @@ export class ViessmannHeatingCircuitAccessory {
 
     // Set update handler for platform to call
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
+
+    // Initialize history logger (FakeGato + CSV)
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `HC${circuitNumber}`);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -1841,5 +1847,21 @@ private setupTemperatureProgramServices() {
       this.heatingSchedule = scheduleFeatureData.properties.entries.value;
     }
     this.scheduleNextProgramBoundary();
+
+    // 📊 History logging — FakeGato thermo + CSV
+    if (this.historyLogger) {
+      this.historyLogger.addThermoEntry({
+        currentTemp: this.states.CurrentTemperature,
+        setTemp: this.states.HeatingThresholdTemperature,
+      });
+      this.historyLogger.appendCsvRow({
+        timestamp: new Date().toISOString(),
+        accessory: `hc${this.circuitNumber}`,
+        room_temp: this.states.CurrentTemperature,
+        target_temp: this.states.HeatingThresholdTemperature,
+        program: this.currentProgram,
+        mode: this.currentMode,
+      });
+    }
   }
 }

@@ -1,4 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+import { ViessmannHistoryLogger } from './history-logger';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 import { BURNER_UPDATE_CONFIG } from '../settings';
 
@@ -20,6 +21,7 @@ export class ViessmannDHWAccessory {
   // those callbacks would trigger redundant API commands or "Cannot deactivate"
   // warnings. While this flag is true, all setXxxMode() calls are ignored.
   private _updatingCharacteristics = false;
+  private historyLogger?: ViessmannHistoryLogger;
   private pendingModeUntil = 0;
   private pendingTempUntil = 0;
   private pendingExpectedMode: string | undefined = undefined;
@@ -59,6 +61,9 @@ export class ViessmannDHWAccessory {
 
     // Set update handler for platform to call
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
+
+    // Initialize history logger (FakeGato + CSV)
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', 'ACS');
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -839,6 +844,21 @@ async setActive(value: CharacteristicValue) {
       this.platform.log.info(`🚿 ACS state updated: ${summary}`);
     } else {
       this.platform.log.debug(`🚿 ACS state unchanged: ${summary}`);
+    }
+
+    // 📊 History logging — FakeGato thermo + CSV
+    if (this.historyLogger) {
+      this.historyLogger.addThermoEntry({
+        currentTemp: this.states.CurrentTemperature,
+        setTemp: this.states.HeatingThresholdTemperature,
+      });
+      this.historyLogger.appendCsvRow({
+        timestamp: new Date().toISOString(),
+        accessory: 'dhw',
+        dhw_temp: this.states.CurrentTemperature,
+        dhw_target: this.states.HeatingThresholdTemperature,
+        mode: this.currentMode,
+      });
     }
   }
   

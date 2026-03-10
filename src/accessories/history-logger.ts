@@ -1,0 +1,144 @@
+/**
+ * ViessmannHistoryLogger
+ * Handles dual logging: FakeGato (Eve app graphs) + CSV file (export/analysis)
+ *
+ * FakeGato types used:
+ *   - 'thermo'  → currentTemp + setTemp  (HC, DHW)
+ *   - 'energy'  → power (0-100%)          (Boiler modulation)
+ *
+ * CSV file: /var/lib/homebridge/viessmann-history.csv
+ * One row per accessory per refresh cycle (~15min).
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+export type HistoryType = 'thermo' | 'energy';
+
+export interface ThermoEntry {
+  currentTemp: number;
+  setTemp: number;
+  valvePosition?: number; // 0-100, optional
+}
+
+export interface EnergyEntry {
+  power: number; // 0-100
+}
+
+export interface CsvRow {
+  timestamp: string;
+  accessory: string;
+  burner_active?: boolean;
+  modulation?: number;
+  room_temp?: number;
+  target_temp?: number;
+  outside_temp?: number;
+  dhw_temp?: number;
+  dhw_target?: number;
+  program?: string;
+  mode?: string;
+  burner_starts?: number;
+  burner_hours?: number;
+}
+
+const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours\n';
+
+export class ViessmannHistoryLogger {
+  private fakeGatoService: any = null;
+  private fakeGatoAvailable = false;
+  private csvPath: string;
+  private logName: string;
+
+  constructor(
+    private readonly platform: any,
+    private readonly accessory: any,
+    private readonly historyType: HistoryType,
+    logName: string,
+  ) {
+    this.logName = logName;
+    this.csvPath = path.join(
+      platform.api?.user?.storagePath?.() || '/var/lib/homebridge',
+      'viessmann-history.csv',
+    );
+    this.initFakeGato();
+  }
+
+  private initFakeGato() {
+    try {
+      const FakeGatoHistoryService = require('fakegato-history')(this.platform.api);
+      this.fakeGatoService = new FakeGatoHistoryService(
+        this.historyType,
+        this.accessory,
+        { storage: 'fs', path: this.platform.api?.user?.storagePath?.() || '/var/lib/homebridge' },
+      );
+      this.fakeGatoAvailable = true;
+      this.platform.log.info(`📊 ${this.logName}: FakeGato history enabled (type: ${this.historyType})`);
+    } catch {
+      this.platform.log.debug(`📊 ${this.logName}: FakeGato not available — install fakegato-history for Eve graphs`);
+      this.fakeGatoAvailable = false;
+    }
+  }
+
+  /**
+   * Log a thermo entry (HC or DHW)
+   */
+  public addThermoEntry(entry: ThermoEntry) {
+    const time = Math.round(Date.now() / 1000);
+    if (this.fakeGatoAvailable && this.fakeGatoService) {
+      try {
+        this.fakeGatoService.addEntry({
+          time,
+          currentTemp: entry.currentTemp,
+          setTemp: entry.setTemp,
+          valvePosition: entry.valvePosition ?? 0,
+        });
+      } catch (e) {
+        this.platform.log.debug(`📊 ${this.logName}: FakeGato addEntry failed: ${e}`);
+      }
+    }
+  }
+
+  /**
+   * Log an energy entry (Boiler modulation)
+   */
+  public addEnergyEntry(entry: EnergyEntry) {
+    const time = Math.round(Date.now() / 1000);
+    if (this.fakeGatoAvailable && this.fakeGatoService) {
+      try {
+        this.fakeGatoService.addEntry({ time, power: entry.power });
+      } catch (e) {
+        this.platform.log.debug(`📊 ${this.logName}: FakeGato addEntry failed: ${e}`);
+      }
+    }
+  }
+
+  /**
+   * Append a row to the shared CSV file
+   */
+  public appendCsvRow(row: CsvRow) {
+    try {
+      const exists = fs.existsSync(this.csvPath);
+      if (!exists) {
+        fs.writeFileSync(this.csvPath, CSV_HEADER, 'utf8');
+      }
+      const line = [
+        row.timestamp,
+        row.accessory,
+        row.burner_active ?? '',
+        row.modulation ?? '',
+        row.room_temp ?? '',
+        row.target_temp ?? '',
+        row.outside_temp ?? '',
+        row.dhw_temp ?? '',
+        row.dhw_target ?? '',
+        row.program ?? '',
+        row.mode ?? '',
+        row.burner_starts ?? '',
+        row.burner_hours ?? '',
+      ].join(',') + '\n';
+      fs.appendFileSync(this.csvPath, line, 'utf8');
+    } catch (e) {
+      this.platform.log.debug(`📊 ${this.logName}: CSV append failed: ${e}`);
+    }
+  }
+}

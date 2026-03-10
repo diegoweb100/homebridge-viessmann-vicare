@@ -1,4 +1,5 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+import { ViessmannHistoryLogger } from './history-logger';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 export class ViessmannBoilerAccessory {
@@ -17,6 +18,7 @@ export class ViessmannBoilerAccessory {
   private waterPressureService?: Service;
   
   private supportsTemperatureControl = false;
+  private historyLogger?: ViessmannHistoryLogger;
   private temperatureConstraints = { min: 10, max: 80 };
   private currentBurnerState = false;
   private currentModulation = 0;
@@ -71,6 +73,9 @@ export class ViessmannBoilerAccessory {
 
     // Set update handler for platform to call
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
+
+    // Initialize history logger (FakeGato + CSV)
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Boiler');
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -1114,6 +1119,20 @@ export class ViessmannBoilerAccessory {
       this.platform.log.info(statusLine);
     } else {
       this.platform.log.debug(statusLine);
+    }
+
+    // 📊 History logging — FakeGato energy + CSV
+    if (this.historyLogger) {
+      this.historyLogger.addEnergyEntry({ power: this.states.Modulation });
+      this.historyLogger.appendCsvRow({
+        timestamp: new Date().toISOString(),
+        accessory: 'boiler',
+        burner_active: this.states.BurnerActive,
+        modulation: this.states.Modulation,
+        outside_temp: this.states.OutsideTemperature || undefined,
+        burner_starts: this.states.BurnerStarts,
+        burner_hours: this.states.BurnerHours,
+      });
     }
   }
 
