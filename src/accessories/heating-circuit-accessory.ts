@@ -62,6 +62,10 @@ export class ViessmannHeatingCircuitAccessory {
     comfort: 19,
   };
 
+  // 🗓️ Schedule-aware refresh
+  private heatingSchedule: Record<string, Array<{mode: string; start: string; end: string}>> = {};
+  private scheduleRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(
     private readonly platform: ViessmannPlatform,
     private readonly accessory: PlatformAccessory,
@@ -1567,6 +1571,69 @@ private setupTemperatureProgramServices() {
     }, delayMs);
   }
 
+  // 🗓️ Schedule-aware refresh — fires a proactive update at each program boundary
+  private scheduleNextProgramBoundary() {
+    // Clear any existing timer
+    if (this.scheduleRefreshTimer !== null) {
+      clearTimeout(this.scheduleRefreshTimer);
+      this.scheduleRefreshTimer = null;
+    }
+
+    const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const now = new Date();
+    const todayKey = days[now.getDay()];
+    const tomorrowKey = days[(now.getDay() + 1) % 7];
+
+    // Collect all boundary times for today and tomorrow
+    const boundaries: Date[] = [];
+
+    for (const [dayKey, offset] of [[todayKey, 0], [tomorrowKey, 1]] as [string, number][]) {
+      const entries = this.heatingSchedule[dayKey] || [];
+      for (const entry of entries) {
+        for (const timeStr of [entry.start, entry.end]) {
+          const [h, m] = timeStr.split(':').map(Number);
+          const boundary = new Date(now);
+          boundary.setDate(boundary.getDate() + offset);
+          boundary.setHours(h, m, 5, 0); // +5s margin so schedule is already active
+          if (boundary > now) {
+            boundaries.push(boundary);
+          }
+        }
+      }
+    }
+
+    if (boundaries.length === 0) {
+      this.platform.log.debug(`HC${this.circuitNumber} schedule-aware refresh: no upcoming boundaries found`);
+      return;
+    }
+
+    // Find the nearest boundary
+    boundaries.sort((a, b) => a.getTime() - b.getTime());
+    const next = boundaries[0];
+    const msUntil = next.getTime() - now.getTime();
+    const label = next.toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit'});
+
+    this.platform.log.debug(`HC${this.circuitNumber} schedule-aware refresh: next boundary at ${label} (in ${Math.round(msUntil/1000)}s)`);
+
+    this.scheduleRefreshTimer = setTimeout(async () => {
+      this.scheduleRefreshTimer = null;
+      this.platform.log.info(`🗓️ HC${this.circuitNumber} proactive refresh at schedule boundary (${label})`);
+      try {
+        const features = await this.platform.viessmannAPI.getDeviceFeatures(
+          this.installation.id,
+          this.gateway.serial,
+          this.device.id
+        );
+        await this.updateFromFeatures(features);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.platform.log.warn(`HC${this.circuitNumber} proactive refresh failed: ${msg}`);
+      }
+      // Schedule the next boundary after this one
+      this.scheduleNextProgramBoundary();
+    }, msUntil);
+  }
+
   private async handleUpdate(features: any[]) {
     const t0 = Date.now();
     try {
@@ -1766,5 +1833,13 @@ private setupTemperatureProgramServices() {
     } else {
       this.platform.log.debug(summaryLine);
     }
+
+    // 🗓️ Update heating schedule and reschedule boundary timer
+    const circuitPrefixForSchedule = `heating.circuits.${this.circuitNumber}`;
+    const scheduleFeatureData = features.find(f => f.feature === `${circuitPrefixForSchedule}.heating.schedule`);
+    if (scheduleFeatureData?.properties?.entries?.value) {
+      this.heatingSchedule = scheduleFeatureData.properties.entries.value;
+    }
+    this.scheduleNextProgramBoundary();
   }
 }

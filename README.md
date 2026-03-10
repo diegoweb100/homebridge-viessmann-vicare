@@ -853,6 +853,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.24] - 2026-03-10
+**Added**
+- 🗓️ **Schedule-aware proactive refresh**: the plugin now reads the heating schedule from the API and automatically triggers a proactive update at each program boundary (e.g. 06:00, 07:30, 17:00, 23:00). This ensures HomeKit reflects the correct active program (normal/reduced/comfort) immediately when the schedule switches, without waiting for the next 15-minute refresh cycle. The timer resets after each boundary and logs `🗓️ HC0 proactive refresh at schedule boundary`.
+
 ### [2.0.23] - 2026-03-09
 **Fixed**
 - 🐛 **Wrong active temperature program shown in HomeKit**: the plugin was guessing the active program by comparing temperatures instead of reading `heating.circuits.0.operating.programs.active` from the API. This caused HomeKit to show "Ridotto" as active even when the API reported "normal". Fixed by reading the authoritative `operating.programs.active.value` directly and only falling back to the previous value if the API returns an unknown program name.
