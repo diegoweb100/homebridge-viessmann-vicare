@@ -39,6 +39,7 @@ export class ViessmannBoilerAccessory {
     
     // 🆕 NEW: Diagnostic states
     OutsideTemperature: 0,
+    OutsideHumidity: undefined as number | undefined,
     GasConsumptionToday: 0,
     GasConsumptionThisMonth: 0,
     GasConsumptionThisYear: 0,
@@ -915,6 +916,13 @@ export class ViessmannBoilerAccessory {
       }
     }
 
+    // Update outside humidity (optional — not all installations have this sensor)
+    const outsideHumidityFeature = features.find(f => f.feature === 'heating.sensors.humidity.outside');
+    if (outsideHumidityFeature?.properties?.value?.value !== undefined) {
+      this.states.OutsideHumidity = outsideHumidityFeature.properties.value.value;
+      this.platform.log.debug(`Outside humidity: ${this.states.OutsideHumidity}%`);
+    }
+
     // Update gas consumption
     const gasConsumptionFeature = features.find(f => f.feature === 'heating.gas.consumption.summary.heating');
     let gasDataUpdated = false;
@@ -1130,6 +1138,7 @@ export class ViessmannBoilerAccessory {
         burner_active: this.states.BurnerActive,
         modulation: this.states.Modulation,
         outside_temp: this.states.OutsideTemperature || undefined,
+        outside_humidity: this.states.OutsideHumidity,
         burner_starts: this.states.BurnerStarts,
         burner_hours: this.states.BurnerHours,
       });

@@ -196,11 +196,13 @@ Starting from v2.0.25 the plugin automatically records historical data at every 
 ### What is recorded
 | Data | Source | Available in |
 |---|---|---|
-| Burner state + modulation % | Boiler | Eve app, CSV, PDF |
-| Room temperature + setpoint | HC0 | Eve app, CSV, PDF |
-| DHW temperature + setpoint | ACS | Eve app, CSV, PDF |
-| Active program (normal/reduced/comfort) | HC0 | CSV, PDF |
-| Burner starts + hours (lifetime) | Boiler | CSV, PDF |
+| Burner state + modulation % | Boiler | Eve app, CSV, HTML report |
+| Room temperature + setpoint | HC0 | Eve app, CSV, HTML report |
+| DHW temperature + setpoint | ACS | Eve app, CSV, HTML report |
+| Active program (normal/reduced/comfort) | HC0 | CSV, HTML report |
+| Burner starts + hours (lifetime) | Boiler | CSV, HTML report |
+| Outside temperature | Boiler | CSV, HTML report |
+| Outside humidity (if sensor present) | Boiler | CSV, HTML report |
 
 ---
 
@@ -210,7 +212,7 @@ Graphs are visible in the **Eve** app (free, App Store / Google Play).
 
 **Step 1 — Install fakegato-history** (one time, via SSH):
 ```bash
-sudo npm install -g fakegato-history
+sudo npm install --prefix /usr/local fakegato-history
 ```
 
 **Step 2 — Restart Homebridge** from the UI.
@@ -242,31 +244,33 @@ Open directly in **Excel** or **Google Sheets** for custom analysis.
 
 ---
 
-### 📄 PDF report
+### 🌐 Interactive HTML report (Chart.js)
 
-**Step 1 — Install pdfkit** (one time, via SSH):
-```bash
-sudo npm install -g pdfkit
-```
+No extra dependencies — Chart.js is loaded from CDN. Open the generated file in any browser.
 
-**Step 2 — Generate report**:
+**Generate report**:
 ```bash
 # Last 7 days (default)
-node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
 
 # Last 30 days
-node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js --days 30
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30
 
 # Custom output path
-node $(npm root -g)/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.pdf
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.html
 ```
 
-The PDF includes:
-- Burner efficiency (starts/hour + Good/Poor rating)
-- Modulation sparkline chart
-- Room temperature trend
-- DHW temperature trend
-- Active program distribution (normal/reduced/comfort %)
+**Copy to your Mac and open in browser**:
+```bash
+scp user@raspberry:/var/lib/homebridge/viessmann-report-$(date +%Y-%m-%d).html ~/Desktop/
+```
+
+The report includes:
+- **Overview chart**: all series on a unified timeline with dual Y axis — room temp, setpoint, DHW temp, outside temp, modulation (%), burner ON/OFF, and outside humidity (if sensor is present). All temperature series are linearly interpolated for continuous lines even when accessory refresh cycles are offset.
+- **Stat cards**: burner efficiency (starts/hour + Good/Poor rating), modulation %, temperatures
+- **Detail charts**: modulation over time, burner ON/OFF stepped, room temp vs setpoint, DHW temp vs setpoint
+- **Program distribution** bars (normal/reduced/comfort %)
+- Works offline once downloaded
 
 ---
 
@@ -934,11 +938,17 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.26] - 2026-03-10
+**Added**
+- 🌐 **HTML report — Overview chart**: new all-in-one chart at the top of the report with dual Y axis combining room temperature, HC0 setpoint, DHW temperature, outside temperature, modulation (%), burner ON/OFF, and outside humidity (when sensor is present). Series from different accessories are aligned on a unified timeline using linear interpolation for continuous, gap-free lines.
+- 🌡️ **Outside humidity logging**: `boiler-accessory` now reads `heating.sensors.humidity.outside` (optional — not all installations have this sensor) and logs it to the CSV as `outside_humidity`. The field is silently omitted if the sensor is absent.
+- 📊 **CSV column added**: `outside_humidity` inserted between `outside_temp` and `dhw_temp`. Existing CSV files remain compatible — the new column is simply absent in older rows.
+
 ### [2.0.25] - 2026-03-10
 **Added**
 - 📊 **Eve history graphs (FakeGato)**: optional integration with `fakegato-history` for historical graphs in the Eve app. HC0 and ACS log temperature + setpoint (`thermo`), Boiler logs modulation (`energy`). See [📊 History & Graphs](#-history--graphs) section for setup.
 - 📁 **CSV history logging**: every refresh cycle appends a row to `/var/lib/homebridge/viessmann-history.csv` — compatible with Excel and Google Sheets.
-- 📄 **PDF report generator** (`viessmann-report.js`): standalone script that generates a PDF with sparkline charts, burner efficiency, cycling rate, and program distribution. See [📊 History & Graphs](#-history--graphs) section for usage.
+- 🌐 **Interactive HTML report** (`viessmann-report.js`): standalone script that generates an HTML report with interactive Chart.js graphs — no extra dependencies. Includes modulation trend, burner ON/OFF timeline, room temperature vs setpoint, DHW temperature vs setpoint, program distribution, and efficiency stats. See [📊 History & Graphs](#-history--graphs) section for usage. *(Overview chart with unified timeline added in v2.0.26)*
 
 ### [2.0.24] - 2026-03-10
 **Added**

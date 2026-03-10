@@ -2,6 +2,12 @@
  * ViessmannHistoryLogger
  * Handles dual logging: FakeGato (Eve app graphs) + CSV file (export/analysis)
  *
+ * Setup (one time, via SSH on Raspberry Pi / Homebridge system):
+ *   sudo npm install --prefix /usr/local fakegato-history
+ *
+ * Note: use --prefix /usr/local (not -g). On these systems -g installs to
+ * /usr/lib/node_modules which is NOT on Node's require path.
+ *
  * FakeGato types used:
  *   - 'thermo'  → currentTemp + setTemp  (HC, DHW)
  *   - 'energy'  → power (0-100%)          (Boiler modulation)
@@ -33,6 +39,7 @@ export interface CsvRow {
   room_temp?: number;
   target_temp?: number;
   outside_temp?: number;
+  outside_humidity?: number;
   dhw_temp?: number;
   dhw_target?: number;
   program?: string;
@@ -41,7 +48,7 @@ export interface CsvRow {
   burner_hours?: number;
 }
 
-const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours\n';
+const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours\n';
 
 export class ViessmannHistoryLogger {
   private fakeGatoService: any = null;
@@ -129,6 +136,7 @@ export class ViessmannHistoryLogger {
         row.room_temp ?? '',
         row.target_temp ?? '',
         row.outside_temp ?? '',
+        row.outside_humidity ?? '',
         row.dhw_temp ?? '',
         row.dhw_target ?? '',
         row.program ?? '',

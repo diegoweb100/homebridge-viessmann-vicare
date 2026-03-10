@@ -1,221 +1,308 @@
 #!/usr/bin/env node
 /**
  * Viessmann History Report Generator
- * Reads viessmann-history.csv and generates a PDF report with charts.
+ * Reads viessmann-history.csv and generates an interactive HTML report
+ * with Chart.js graphs (no extra dependencies — Chart.js loaded via CDN).
  *
  * Usage:
- *   node /var/lib/homebridge/viessmann-report.js
- *   node /var/lib/homebridge/viessmann-report.js --days 7
- *   node /var/lib/homebridge/viessmann-report.js --days 30 --out /tmp/report.pdf
+ *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
+ *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7
+ *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30 --out /tmp/report.html
  *
- * Dependencies (install once):
- *   sudo npm install -g pdfkit
+ * No extra dependencies needed — open the generated HTML in any browser.
+ * CSV file: /var/lib/homebridge/viessmann-history.csv
  */
 
 'use strict';
-
 const fs = require('fs');
 const path = require('path');
 
-// --- Parse CLI args ---
 const args = process.argv.slice(2);
-const getArg = (flag, def) => {
-  const i = args.indexOf(flag);
-  return i !== -1 && args[i + 1] ? args[i + 1] : def;
-};
+const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i+1] ? args[i+1] : def; };
 const DAYS = parseInt(getArg('--days', '7'), 10);
 const HB_PATH = getArg('--path', '/var/lib/homebridge');
 const CSV_FILE = path.join(HB_PATH, 'viessmann-history.csv');
 const today = new Date().toISOString().slice(0, 10);
-const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report-${today}.pdf`));
+const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report-${today}.html`));
 
-// --- Check dependencies ---
-let PDFDocument;
-try {
-  PDFDocument = require('pdfkit');
-} catch {
-  console.error('\n❌ pdfkit not installed. Run:\n   sudo npm install -g pdfkit\n');
-  process.exit(1);
-}
-
-// --- Read and parse CSV ---
 if (!fs.existsSync(CSV_FILE)) {
-  console.error(`❌ CSV not found: ${CSV_FILE}`);
-  console.error('   Start Homebridge with the plugin to begin collecting data.');
+  console.error(`ERROR: CSV not found: ${CSV_FILE}\nStart Homebridge with the plugin to begin collecting data.`);
   process.exit(1);
 }
 
 const lines = fs.readFileSync(CSV_FILE, 'utf8').trim().split('\n');
-const headers = lines[0].split(',');
+const headers = lines[0].split(',').map(h => h.trim());
 const rows = lines.slice(1).map(line => {
   const vals = line.split(',');
   const obj = {};
-  headers.forEach((h, i) => { obj[h.trim()] = vals[i]?.trim() || ''; });
+  headers.forEach((h, i) => { obj[h] = vals[i]?.trim() || ''; });
   return obj;
 });
 
-// Filter to requested days
-const cutoff = new Date();
-cutoff.setDate(cutoff.getDate() - DAYS);
+const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - DAYS);
 const filtered = rows.filter(r => r.timestamp && new Date(r.timestamp) >= cutoff);
+if (!filtered.length) { console.error(`ERROR: No data in the last ${DAYS} days.`); process.exit(1); }
 
-if (filtered.length === 0) {
-  console.error(`❌ No data in the last ${DAYS} days.`);
-  process.exit(1);
-}
+console.log(`Generating HTML report for last ${DAYS} days (${filtered.length} data points)...`);
 
-console.log(`📊 Generating report for last ${DAYS} days (${filtered.length} data points)...`);
+const toNum = v => parseFloat(v) || 0;
+const avg = (arr, key) => { const v = arr.map(r => toNum(r[key])).filter(x => x > 0); return v.length ? (v.reduce((a,b)=>a+b,0)/v.length).toFixed(1) : null; };
+const maxVal = (arr, key) => { const v = arr.map(r => toNum(r[key])).filter(x => x > 0); return v.length ? Math.max(...v).toFixed(1) : null; };
 
-// --- Aggregate data ---
 const boilerRows = filtered.filter(r => r.accessory === 'boiler');
-const hcRows = filtered.filter(r => r.accessory === 'hc0');
-const dhwRows = filtered.filter(r => r.accessory === 'dhw');
+const hcRows     = filtered.filter(r => r.accessory === 'hc0');
+const dhwRows    = filtered.filter(r => r.accessory === 'dhw');
 
-function toNum(v) { return parseFloat(v) || 0; }
-function avg(arr, key) {
-  const vals = arr.map(r => toNum(r[key])).filter(v => v > 0);
-  return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1) : 'N/A';
-}
-function max(arr, key) {
-  const vals = arr.map(r => toNum(r[key])).filter(v => v > 0);
-  return vals.length ? Math.max(...vals).toFixed(1) : 'N/A';
-}
-function pct(arr, key, condition) {
-  if (!arr.length) return 'N/A';
-  const count = arr.filter(r => condition(r[key])).length;
-  return ((count / arr.length) * 100).toFixed(0) + '%';
-}
+const burnerOnPct   = boilerRows.length ? ((boilerRows.filter(r => r.burner_active==='true').length/boilerRows.length)*100).toFixed(0) : null;
+const avgMod        = avg(boilerRows, 'modulation');
+const maxMod        = maxVal(boilerRows, 'modulation');
+const avgRoom       = avg(hcRows, 'room_temp');
+const avgTarget     = avg(hcRows, 'target_temp');
+const avgDhw        = avg(dhwRows, 'dhw_temp');
+const avgDhwTarget  = avg(dhwRows, 'dhw_target');
 
-// Burner on/off cycles
-const burnerOnPct = pct(boilerRows, 'burner_active', v => v === 'true');
-const avgModulation = avg(boilerRows, 'modulation');
-const maxModulation = max(boilerRows, 'modulation');
-const avgRoomTemp = avg(hcRows, 'room_temp');
-const avgTargetTemp = avg(hcRows, 'target_temp');
-const avgDhwTemp = avg(dhwRows, 'dhw_temp');
-const avgDhwTarget = avg(dhwRows, 'dhw_target');
+const lb = boilerRows[boilerRows.length-1] || {};
+const burnerStarts  = lb.burner_starts || null;
+const burnerHours   = lb.burner_hours  || null;
+const sph = (burnerStarts && burnerHours && parseFloat(burnerHours) > 0) ? (parseFloat(burnerStarts)/parseFloat(burnerHours)).toFixed(2) : null;
+const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : 'warn') : 'neutral';
+const effLabel = sph ? (parseFloat(sph) < 2 ? 'Buona' : 'Alta ciclatura') : 'N/A';
 
-// Burner starts from latest row
-const latestBoiler = boilerRows[boilerRows.length - 1] || {};
-const burnerStarts = latestBoiler.burner_starts || 'N/A';
-const burnerHours = latestBoiler.burner_hours || 'N/A';
-const startsPerHour = (burnerStarts !== 'N/A' && burnerHours !== 'N/A' && parseFloat(burnerHours) > 0)
-  ? (parseFloat(burnerStarts) / parseFloat(burnerHours)).toFixed(2)
-  : 'N/A';
-const efficiency = startsPerHour !== 'N/A'
-  ? (parseFloat(startsPerHour) < 2 ? '✅ Buona' : '⚠️ Alta ciclatura')
-  : 'N/A';
-
-// Program distribution
 const programs = {};
-hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program] || 0) + 1; });
+hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program]||0)+1; });
+const totalProg = Object.values(programs).reduce((a,b)=>a+b,0);
+const progDist = Object.entries(programs).map(([k,v]) => ({ label: k.charAt(0).toUpperCase()+k.slice(1), pct: ((v/totalProg)*100).toFixed(0) }));
 
-// --- Draw simple ASCII chart for PDF ---
-function sparkline(arr, key, width = 60) {
-  const vals = arr.map(r => toNum(r[key]));
-  if (!vals.length) return '(no data)';
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const range = max - min || 1;
-  const steps = '▁▂▃▄▅▆▇█';
-  return vals
-    .filter((_, i) => i % Math.ceil(vals.length / width) === 0)
-    .map(v => steps[Math.round(((v - min) / range) * (steps.length - 1))])
-    .join('');
+function subsample(arr, max=200) {
+  if (arr.length <= max) return arr;
+  const step = Math.ceil(arr.length/max);
+  return arr.filter((_,i) => i%step===0);
+}
+function chartData(arr, key) {
+  const s = subsample(arr);
+  return {
+    labels: s.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; }),
+    values: s.map(r => toNum(r[key])||null)
+  };
 }
 
-// --- Generate PDF ---
-const doc = new PDFDocument({ margin: 40, size: 'A4' });
-const stream = fs.createWriteStream(OUT_FILE);
-doc.pipe(stream);
+const modChart    = chartData(boilerRows, 'modulation');
+const roomChart   = chartData(hcRows, 'room_temp');
+const targetChart = chartData(hcRows, 'target_temp');
+const dhwChart    = chartData(dhwRows, 'dhw_temp');
+const dhwTgtChart = chartData(dhwRows, 'dhw_target');
+const outsideChart = chartData(hcRows, 'outside_temp');
+const sBurner     = subsample(boilerRows);
+const burnerChart = {
+  labels: sBurner.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; }),
+  values: sBurner.map(r => r.burner_active==='true' ? 1 : 0)
+};
 
-const W = 515; // page width minus margins
-
-// Header
-doc.fontSize(20).font('Helvetica-Bold')
-  .text('Viessmann ViCare — Report Storico', { align: 'center' });
-doc.fontSize(11).font('Helvetica')
-  .text(`Periodo: ultimi ${DAYS} giorni  |  Generato: ${new Date().toLocaleString('it-IT')}`, { align: 'center' });
-doc.moveDown();
-
-// Divider
-doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor('#cccccc').stroke();
-doc.moveDown(0.5);
-
-// Section helper
-function section(title) {
-  doc.moveDown(0.5);
-  doc.fontSize(13).font('Helvetica-Bold').fillColor('#1a1a2e').text(title);
-  doc.fontSize(10).font('Helvetica').fillColor('#333333');
-  doc.moveDown(0.3);
+// --- Overview chart: merge all rows on a unified timeline ---
+// Build a time-indexed map for each series, then interpolate to a shared timeline
+const allTimes = [...new Set(filtered.map(r => r.timestamp))].sort();
+const overviewTimes = subsample(allTimes, 200);
+// Linear interpolation on a sorted array of rows
+function interpolate(arr, ts, key) {
+  const t = new Date(ts).getTime();
+  const valid = arr.filter(r => r[key] !== '' && r[key] !== undefined && !isNaN(toNum(r[key])));
+  if (!valid.length) return null;
+  // exact match
+  const exact = valid.find(r => new Date(r.timestamp).getTime() === t);
+  if (exact) return toNum(exact[key]);
+  // find prev and next
+  let prev = null, next = null;
+  for (const r of valid) {
+    const rt = new Date(r.timestamp).getTime();
+    if (rt <= t) prev = r;
+    else if (rt > t && !next) next = r;
+  }
+  if (prev && next) {
+    const t0 = new Date(prev.timestamp).getTime();
+    const t1 = new Date(next.timestamp).getTime();
+    const ratio = (t - t0) / (t1 - t0);
+    return +(toNum(prev[key]) + ratio * (toNum(next[key]) - toNum(prev[key]))).toFixed(2);
+  }
+  // extrapolate up to 1 hour at edges
+  if (prev && (t - new Date(prev.timestamp).getTime()) < 60*60*1000) return toNum(prev[key]);
+  if (next && (new Date(next.timestamp).getTime() - t) < 60*60*1000) return toNum(next[key]);
+  return null;
+}
+// Burner is stepped (boolean) — use nearest within 20 min, no interpolation
+function lookupBurner(arr, ts) {
+  const t = new Date(ts).getTime();
+  let best = null, bestDiff = Infinity;
+  for (const r of arr) {
+    const diff = Math.abs(new Date(r.timestamp).getTime() - t);
+    if (diff < bestDiff) { bestDiff = diff; best = r; }
+  }
+  return (best && bestDiff < 20*60*1000) ? (best.burner_active==='true' ? 100 : 0) : null;
 }
 
-// Stat row helper
-function stat(label, value, note = '') {
-  doc.font('Helvetica-Bold').text(`${label}: `, { continued: true })
-    .font('Helvetica').text(`${value}${note ? '  ' + note : ''}`);
+const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; });
+const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp'));
+const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
+const ovDhw      = overviewTimes.map(ts => interpolate(dhwRows,   ts, 'dhw_temp'));
+const ovOutside  = overviewTimes.map(ts => interpolate(hcRows,    ts, 'outside_temp'));
+const ovOutsideHum = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_humidity'));
+const ovMod      = overviewTimes.map(ts => interpolate(boilerRows,ts, 'modulation'));
+const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
+
+const sc = (l,v,u='',badge='') => `<div class="sc"><div class="sl">${l}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
+const badge = (cls,txt) => `<span class="badge badge-${cls}">${txt}</span>`;
+const genAt = new Date().toLocaleString('it-IT');
+const periodStart = cutoff.toLocaleDateString('it-IT');
+const periodEnd = new Date().toLocaleDateString('it-IT');
+
+const html = `<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Viessmann Report ${today}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#2d2d2d}
+header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:26px 32px}
+header h1{font-size:20px;font-weight:700}
+header p{font-size:12px;opacity:.65;margin-top:5px}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 16px}
+.box{background:#fff;border-radius:12px;padding:22px 24px;margin-bottom:22px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+.box h2{font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #f0f0f0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px}
+.sc{background:#f8f9fc;border-radius:8px;padding:13px 15px}
+.sl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:5px}
+.sv{font-size:19px;font-weight:700;color:#1a1a2e}
+.na{font-size:13px;color:#bbb;font-weight:400}
+.badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;vertical-align:middle}
+.badge-good{background:#e6f4ea;color:#2d7a3a}
+.badge-warn{background:#fff3e0;color:#e65100}
+.badge-neutral{background:#eee;color:#777}
+.ch{position:relative;height:210px;margin-top:6px}
+.ch-tall{position:relative;height:250px;margin-top:6px}
+.ch-overview{position:relative;height:320px;margin-top:6px}
+.note{font-size:11px;color:#aaa;margin-top:8px;font-style:italic}
+.pbars{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.pb{flex:1;min-width:90px}
+.pbl{font-size:10px;color:#999;margin-bottom:4px}
+.pbt{background:#f0f0f0;border-radius:3px;height:7px}
+.pbf{height:7px;border-radius:3px}
+.fill-normal{background:#4e9af1}
+.fill-reduced{background:#f1c94e}
+.fill-comfort{background:#f17c4e}
+.pbp{font-size:11px;font-weight:600;margin-top:3px}
+footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
+@media(max-width:500px){.grid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Viessmann ViCare — Report Storico</h1>
+  <p>Periodo: ${periodStart} — ${periodEnd} &nbsp;(ultimi ${DAYS} giorni) &nbsp;|&nbsp; Generato: ${genAt} &nbsp;|&nbsp; ${filtered.length} campioni</p>
+</header>
+<div class="wrap">
+
+<div class="box">
+  <h2>Panoramica generale</h2>
+  <div class="ch-overview"><canvas id="cOverview"></canvas></div>
+  <p class="note">Asse sinistro: temperature (°C) — Asse destro: modulazione, bruciatore e umidità esterna (% / 0-100)</p>
+</div>
+
+<div class="box">
+  <h2>Caldaia — Bruciatore</h2>
+  <div class="grid">
+    ${sc('Accensioni lifetime', burnerStarts)}
+    ${sc('Ore funzionamento', burnerHours, 'h')}
+    ${sc('Accensioni/ora', sph, '', badge(effCls, effLabel))}
+    ${sc('Bruciatore attivo', burnerOnPct, '% campioni')}
+    ${sc('Modulazione media', avgMod, '%')}
+    ${sc('Modulazione massima', maxMod, '%')}
+  </div>
+  ${boilerRows.length < 5 ? `<p class="note">Solo ${boilerRows.length} campioni — i dati cresceranno nel tempo (1 ogni ~15 min).</p>` : ''}
+  ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>` : ''}
+</div>
+
+<div class="box">
+  <h2>Circuito Riscaldamento (HC0)</h2>
+  <div class="grid">
+    ${sc('Temp. ambiente media', avgRoom, '°C')}
+    ${sc('Setpoint medio', avgTarget, '°C')}
+  </div>
+  ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Distribuzione programmi</div>
+  <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
+  ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
+</div>
+
+<div class="box">
+  <h2>Acqua Calda Sanitaria (ACS)</h2>
+  <div class="grid">
+    ${sc('Temp. media', avgDhw, '°C')}
+    ${sc('Setpoint medio', avgDhwTarget, '°C')}
+  </div>
+  ${dhwRows.length >= 2 ? `<div class="ch-tall"><canvas id="cDhw"></canvas></div>` : ''}
+</div>
+
+</div>
+<footer>homebridge-viessmann-vicare &nbsp;|&nbsp; ${CSV_FILE}</footer>
+
+<script>
+Chart.defaults.font.family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
+Chart.defaults.font.size=11;Chart.defaults.color='#888';
+
+function mk(id,labels,datasets,yLbl){
+  const c=document.getElementById(id); if(!c)return;
+  new Chart(c,{type:'line',data:{labels,datasets},options:{
+    responsive:true,maintainAspectRatio:false,
+    interaction:{mode:'index',intersect:false},
+    plugins:{legend:{position:'top',labels:{boxWidth:11,padding:14}}},
+    scales:{
+      x:{ticks:{maxTicksLimit:8,maxRotation:30},grid:{color:'#f5f5f5'}},
+      y:{title:{display:!!yLbl,text:yLbl},grid:{color:'#f5f5f5'}}
+    }
+  }});
 }
 
-// ── SEZIONE 1: CALDAIA ──
-section('🔥 Caldaia — Bruciatore');
-stat('Accensioni totali (lifetime)', burnerStarts);
-stat('Ore funzionamento (lifetime)', burnerHours);
-stat('Accensioni/ora', startsPerHour, `→ Efficienza: ${efficiency}`);
-stat('Bruciatore attivo (nel periodo)', burnerOnPct + ' dei campioni');
-stat('Modulazione media', avgModulation + '%');
-stat('Modulazione massima', maxModulation + '%');
+// Overview chart — dual Y axis
+(function(){
+  const c=document.getElementById('cOverview'); if(!c)return;
+  new Chart(c,{type:'line',data:{
+    labels:${JSON.stringify(ovLabels)},
+    datasets:[
+      {label:'Temp. ambiente (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
+      {label:'Setpoint HC0 (°C)',   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
+      {label:'Temp. ACS (°C)',      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
+      {label:'Temp. esterna (°C)',  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
+      {label:'Modulazione (%)',     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
+      {label:'Bruciatore (0/100)',  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
+      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:'Umidità esterna (%)', yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
+    ]
+  },options:{
+    responsive:true,maintainAspectRatio:false,
+    interaction:{mode:'index',intersect:false},
+    plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12,usePointStyle:true}}},
+    scales:{
+      x:{ticks:{maxTicksLimit:10,maxRotation:30},grid:{color:'#f5f5f5'}},
+      yTemp:{type:'linear',position:'left', title:{display:true,text:'°C'},grid:{color:'#f5f5f5'},ticks:{color:'#4e9af1'}},
+      yRight:{type:'linear',position:'right',title:{display:true,text:'% / ON-OFF'},grid:{drawOnChartArea:false},min:0,max:110,ticks:{color:'#e65100'}}
+    }
+  }});
+})();
+${boilerRows.length>=2?`
+mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulazione (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
+mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:'Bruciatore (1=ON 0=OFF)',data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
+${hcRows.length>=2?`
+mk('cRoom',${JSON.stringify(roomChart.labels)},[
+  {label:'Temp. ambiente (°C)',data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:'Setpoint (°C)',data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+],'°C');`:''}
+${dhwRows.length>=2?`
+mk('cDhw',${JSON.stringify(dhwChart.labels)},[
+  {label:'Temp. ACS (°C)',data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:'Setpoint ACS (°C)',data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+],'°C');`:''}
+<\/script>
+</body></html>`;
 
-if (boilerRows.length > 5) {
-  doc.moveDown(0.3);
-  doc.font('Helvetica-Bold').text('Modulazione nel tempo:');
-  doc.font('Courier').fontSize(8).text(sparkline(boilerRows, 'modulation'));
-  doc.fontSize(10).font('Helvetica');
-}
-
-// ── SEZIONE 2: RISCALDAMENTO ──
-section('🌡️ Circuito Riscaldamento (HC0)');
-stat('Temperatura ambiente media', avgRoomTemp + '°C');
-stat('Setpoint medio', avgTargetTemp + '°C');
-
-if (Object.keys(programs).length) {
-  const total = Object.values(programs).reduce((a, b) => a + b, 0);
-  const dist = Object.entries(programs)
-    .map(([p, c]) => `${p}: ${((c / total) * 100).toFixed(0)}%`)
-    .join('  |  ');
-  stat('Distribuzione programmi', dist);
-}
-
-if (hcRows.length > 5) {
-  doc.moveDown(0.3);
-  doc.font('Helvetica-Bold').text('Temperatura ambiente nel tempo:');
-  doc.font('Courier').fontSize(8).text(sparkline(hcRows, 'room_temp'));
-  doc.fontSize(10).font('Helvetica');
-}
-
-// ── SEZIONE 3: ACS ──
-section('🚿 Acqua Calda Sanitaria (ACS)');
-stat('Temperatura media', avgDhwTemp + '°C');
-stat('Setpoint medio', avgDhwTarget + '°C');
-
-if (dhwRows.length > 5) {
-  doc.moveDown(0.3);
-  doc.font('Helvetica-Bold').text('Temperatura ACS nel tempo:');
-  doc.font('Courier').fontSize(8).text(sparkline(dhwRows, 'dhw_temp'));
-  doc.fontSize(10).font('Helvetica');
-}
-
-// ── NOTE ──
-doc.moveDown();
-doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor('#cccccc').stroke();
-doc.moveDown(0.5);
-doc.fontSize(9).fillColor('#888888')
-  .text(`Dati da: ${CSV_FILE}  |  Campioni totali nel periodo: ${filtered.length}  |  homebridge-viessmann-vicare`);
-
-doc.end();
-
-stream.on('finish', () => {
-  console.log(`✅ Report generato: ${OUT_FILE}`);
-});
-stream.on('error', err => {
-  console.error(`❌ Errore scrittura PDF: ${err.message}`);
-});
+fs.writeFileSync(OUT_FILE, html, 'utf8');
+console.log(`Report generato: ${OUT_FILE}`);
+console.log(`Apri nel browser: file://${OUT_FILE}`);
