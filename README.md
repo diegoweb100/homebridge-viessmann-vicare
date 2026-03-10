@@ -1008,6 +1008,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.30] - 2026-03-10
+#### Fixed
+- **Daily gas chart not rendering**: the Chart.js initializer for `cGas` was nested inside the `cycleCount>=3` conditional block — if fewer than 3 burner cycles were present in the selected period the gas chart canvas was drawn but never initialized. Extracted as independent block, now renders whenever gas data is available (`hasGasChart=true`).
+
 ### [2.0.29] - 2026-03-10
 #### Fixed
 - **Outdoor temperature chart** — `outside_temp` is written by boiler accessory but was incorrectly read from `hcRows` in the report; fixed to read from `boilerRows`. Outdoor temp now appears correctly in overview chart and dedicated series.

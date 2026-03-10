@@ -417,6 +417,7 @@ mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:'Flow temp (°C)',data:${
 `:''}
 ${cycleCount>=3?`
 (function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:'Cycles',data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:'# cycles'},ticks:{stepSize:1}}}}});})();
+`:''}
 ${hasGasChart?`
 (function(){
   const c=document.getElementById('cGas'); if(!c)return;
@@ -425,9 +426,9 @@ ${hasGasChart?`
     data:{
       labels:${JSON.stringify(gasBarLabels)},
       datasets:[
-        {type:'bar', label:'Heating (m³)', data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'bar', label:'DHW (m³)',     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'line',label:'Total (m³)',   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
+        {type:'bar', label:'Heating (m\u00b3)', data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'bar', label:'DHW (m\u00b3)',     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'line',label:'Total (m\u00b3)',   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
       ]
     },
     options:{
@@ -436,12 +437,11 @@ ${hasGasChart?`
       plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
       scales:{
         x:{grid:{color:'#f5f5f5'},stacked:true},
-        y:{title:{display:true,text:'m³'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
+        y:{title:{display:true,text:'m\u00b3'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
       }
     }
   });
 })();
-`:''}
 `:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[
