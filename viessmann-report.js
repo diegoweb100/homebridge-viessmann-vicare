@@ -52,6 +52,7 @@ const maxVal = (arr, key) => { const v = arr.map(r => toNum(r[key])).filter(x =>
 const boilerRows = filtered.filter(r => r.accessory === 'boiler');
 const hcRows     = filtered.filter(r => r.accessory === 'hc0');
 const dhwRows    = filtered.filter(r => r.accessory === 'dhw');
+const energyRows = filtered.filter(r => r.accessory === 'energy');
 
 const burnerOnPct   = boilerRows.length ? ((boilerRows.filter(r => r.burner_active==='true').length/boilerRows.length)*100).toFixed(0) : null;
 const avgMod        = avg(boilerRows, 'modulation');
@@ -61,12 +62,23 @@ const avgTarget     = avg(hcRows, 'target_temp');
 const avgDhw        = avg(dhwRows, 'dhw_temp');
 const avgDhwTarget  = avg(dhwRows, 'dhw_target');
 
+// Energy stats
+const hasPV      = energyRows.some(r => r.pv_production_w !== '');
+const hasBattery = energyRows.some(r => r.battery_level !== '');
+const hasWallbox = energyRows.some(r => r.wallbox_charging !== '');
+const avgPV      = avg(energyRows, 'pv_production_w');
+const maxPV      = maxVal(energyRows, 'pv_production_w');
+const latestEnergy = energyRows[energyRows.length-1] || {};
+const lastPvDaily   = latestEnergy.pv_daily_kwh   || null;
+const lastBattLevel = latestEnergy.battery_level  || null;
+const avgWallboxPwr = avg(energyRows.filter(r => r.wallbox_charging==='true'), 'wallbox_power_w');
+
 const lb = boilerRows[boilerRows.length-1] || {};
 const burnerStarts  = lb.burner_starts || null;
 const burnerHours   = lb.burner_hours  || null;
 const sph = (burnerStarts && burnerHours && parseFloat(burnerHours) > 0) ? (parseFloat(burnerStarts)/parseFloat(burnerHours)).toFixed(2) : null;
 const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : 'warn') : 'neutral';
-const effLabel = sph ? (parseFloat(sph) < 2 ? 'Buona' : 'Alta ciclatura') : 'N/A';
+const effLabel = sph ? (parseFloat(sph) < 2 ? 'Good' : 'High cycling') : 'N/A';
 
 const programs = {};
 hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program]||0)+1; });
@@ -81,7 +93,7 @@ function subsample(arr, max=200) {
 function chartData(arr, key) {
   const s = subsample(arr);
   return {
-    labels: s.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; }),
+    labels: s.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; }),
     values: s.map(r => toNum(r[key])||null)
   };
 }
@@ -92,9 +104,15 @@ const targetChart = chartData(hcRows, 'target_temp');
 const dhwChart    = chartData(dhwRows, 'dhw_temp');
 const dhwTgtChart = chartData(dhwRows, 'dhw_target');
 const outsideChart = chartData(hcRows, 'outside_temp');
+// Energy charts
+const pvChart      = chartData(energyRows, 'pv_production_w');
+const battChart    = chartData(energyRows, 'battery_level');
+const battChrChart = chartData(energyRows, 'battery_charging_w');
+const battDisChart = chartData(energyRows, 'battery_discharging_w');
+const wallboxChart = chartData(energyRows, 'wallbox_power_w');
 const sBurner     = subsample(boilerRows);
 const burnerChart = {
-  labels: sBurner.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; }),
+  labels: sBurner.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; }),
   values: sBurner.map(r => r.burner_active==='true' ? 1 : 0)
 };
 
@@ -139,7 +157,7 @@ function lookupBurner(arr, ts) {
   return (best && bestDiff < 20*60*1000) ? (best.burner_active==='true' ? 100 : 0) : null;
 }
 
-const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`; });
+const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; });
 const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp'));
 const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
 const ovDhw      = overviewTimes.map(ts => interpolate(dhwRows,   ts, 'dhw_temp'));
@@ -150,12 +168,12 @@ const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
 
 const sc = (l,v,u='',badge='') => `<div class="sc"><div class="sl">${l}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
 const badge = (cls,txt) => `<span class="badge badge-${cls}">${txt}</span>`;
-const genAt = new Date().toLocaleString('it-IT');
-const periodStart = cutoff.toLocaleDateString('it-IT');
-const periodEnd = new Date().toLocaleDateString('it-IT');
+const genAt = new Date().toLocaleString('en-GB');
+const periodStart = cutoff.toLocaleDateString('en-GB');
+const periodEnd = new Date().toLocaleDateString('en-GB');
 
 const html = `<!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Viessmann Report ${today}</title>
@@ -197,50 +215,66 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </head>
 <body>
 <header>
-  <h1>Viessmann ViCare — Report Storico</h1>
-  <p>Periodo: ${periodStart} — ${periodEnd} &nbsp;(ultimi ${DAYS} giorni) &nbsp;|&nbsp; Generato: ${genAt} &nbsp;|&nbsp; ${filtered.length} campioni</p>
+  <h1>Viessmann ViCare — History Report</h1>
+  <p>Period: ${periodStart} — ${periodEnd} &nbsp;(last ${DAYS} days) &nbsp;|&nbsp; Generated: ${genAt} &nbsp;|&nbsp; ${filtered.length} samples</p>
 </header>
 <div class="wrap">
 
 <div class="box">
-  <h2>Panoramica generale</h2>
+  <h2>Overview</h2>
   <div class="ch-overview"><canvas id="cOverview"></canvas></div>
-  <p class="note">Asse sinistro: temperature (°C) — Asse destro: modulazione, bruciatore e umidità esterna (% / 0-100)</p>
+  <p class="note">Left axis: temperatures (°C) — Right axis: modulation, burner & outdoor humidity (% / 0–100)</p>
 </div>
 
 <div class="box">
-  <h2>Caldaia — Bruciatore</h2>
+  <h2>Boiler — Burner</h2>
   <div class="grid">
-    ${sc('Accensioni lifetime', burnerStarts)}
-    ${sc('Ore funzionamento', burnerHours, 'h')}
-    ${sc('Accensioni/ora', sph, '', badge(effCls, effLabel))}
-    ${sc('Bruciatore attivo', burnerOnPct, '% campioni')}
-    ${sc('Modulazione media', avgMod, '%')}
-    ${sc('Modulazione massima', maxMod, '%')}
+    ${sc('Lifetime starts', burnerStarts)}
+    ${sc('Running hours', burnerHours, 'h')}
+    ${sc('Starts/hour', sph, '', badge(effCls, effLabel))}
+    ${sc('Burner active', burnerOnPct, '% samples')}
+    ${sc('Avg modulation', avgMod, '%')}
+    ${sc('Max modulation', maxMod, '%')}
   </div>
-  ${boilerRows.length < 5 ? `<p class="note">Solo ${boilerRows.length} campioni — i dati cresceranno nel tempo (1 ogni ~15 min).</p>` : ''}
+  ${boilerRows.length < 5 ? `<p class="note">Only ${boilerRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
   ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>` : ''}
 </div>
 
 <div class="box">
-  <h2>Circuito Riscaldamento (HC0)</h2>
+  <h2>Heating Circuit (HC0)</h2>
   <div class="grid">
-    ${sc('Temp. ambiente media', avgRoom, '°C')}
-    ${sc('Setpoint medio', avgTarget, '°C')}
+    ${sc('Avg room temp', avgRoom, '°C')}
+    ${sc('Avg setpoint', avgTarget, '°C')}
   </div>
-  ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Distribuzione programmi</div>
+  ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Program distribution</div>
   <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
   ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
 </div>
 
 <div class="box">
-  <h2>Acqua Calda Sanitaria (ACS)</h2>
+  <h2>Domestic Hot Water (DHW)</h2>
   <div class="grid">
-    ${sc('Temp. media', avgDhw, '°C')}
-    ${sc('Setpoint medio', avgDhwTarget, '°C')}
+    ${sc('Avg temp', avgDhw, '°C')}
+    ${sc('Avg setpoint', avgDhwTarget, '°C')}
   </div>
   ${dhwRows.length >= 2 ? `<div class="ch-tall"><canvas id="cDhw"></canvas></div>` : ''}
 </div>
+
+${energyRows.length >= 1 ? `
+<div class="box">
+  <h2>Energy System</h2>
+  <div class="grid">
+    ${hasPV ? sc('PV avg production', avgPV, 'W') : ''}
+    ${hasPV ? sc('PV max production', maxPV, 'W') : ''}
+    ${hasPV ? sc('PV yield (latest day)', lastPvDaily, 'kWh') : ''}
+    ${hasBattery ? sc('Battery level (latest)', lastBattLevel, '%') : ''}
+    ${hasWallbox ? sc('Wallbox avg power', avgWallboxPwr, 'W') : ''}
+  </div>
+  ${energyRows.length < 5 ? `<p class="note">Only ${energyRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
+  ${hasPV && energyRows.length >= 2 ? `<div class="ch-tall"><canvas id="cPV"></canvas></div>` : ''}
+  ${hasBattery && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cBatt"></canvas></div>` : ''}
+  ${hasWallbox && energyRows.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cWallbox"></canvas></div>` : ''}
+</div>` : ''}
 
 </div>
 <footer>homebridge-viessmann-vicare &nbsp;|&nbsp; ${CSV_FILE}</footer>
@@ -268,13 +302,13 @@ function mk(id,labels,datasets,yLbl){
   new Chart(c,{type:'line',data:{
     labels:${JSON.stringify(ovLabels)},
     datasets:[
-      {label:'Temp. ambiente (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
-      {label:'Setpoint HC0 (°C)',   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
-      {label:'Temp. ACS (°C)',      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
-      {label:'Temp. esterna (°C)',  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
-      {label:'Modulazione (%)',     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
-      {label:'Bruciatore (0/100)',  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
-      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:'Umidità esterna (%)', yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
+      {label:'Room temp (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
+      {label:'HC0 setpoint (°C)',   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
+      {label:'DHW temp (°C)',      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
+      {label:'Outdoor temp (°C)',  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
+      {label:'Modulation (%)',     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
+      {label:'Burner (0/100)',  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
+      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:'Outdoor humidity (%)', yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
     ]
   },options:{
     responsive:true,maintainAspectRatio:false,
@@ -283,26 +317,29 @@ function mk(id,labels,datasets,yLbl){
     scales:{
       x:{ticks:{maxTicksLimit:10,maxRotation:30},grid:{color:'#f5f5f5'}},
       yTemp:{type:'linear',position:'left', title:{display:true,text:'°C'},grid:{color:'#f5f5f5'},ticks:{color:'#4e9af1'}},
-      yRight:{type:'linear',position:'right',title:{display:true,text:'% / ON-OFF'},grid:{drawOnChartArea:false},min:0,max:110,ticks:{color:'#e65100'}}
+      yRight:{type:'linear',position:'right',title:{display:true,text:'% / ON–OFF'},grid:{drawOnChartArea:false},min:0,max:110,ticks:{color:'#e65100'}}
     }
   }});
 })();
 ${boilerRows.length>=2?`
-mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulazione (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
-mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:'Bruciatore (1=ON 0=OFF)',data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
+mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulation (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
+mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:'Burner (1=ON 0=OFF)',data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
 ${hcRows.length>=2?`
 mk('cRoom',${JSON.stringify(roomChart.labels)},[
-  {label:'Temp. ambiente (°C)',data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:'Room temp (°C)',data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
   {label:'Setpoint (°C)',data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[
-  {label:'Temp. ACS (°C)',data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:'Setpoint ACS (°C)',data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  {label:'DHW temp (°C)',data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:'DHW setpoint (°C)',data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
-<\/script>
+${hasPV&&energyRows.length>=2?`
+mk('cPV',${JSON.stringify(pvChart.labels)},[{label:'PV production (W)',data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
+mk('cBatt',${JSON.stringify(battChart.labels)},[{label:'Battery level (%)',data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:'Charging (W)',data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:'Discharging (W)',data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
+mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)',data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n<\/script>
 </body></html>`;
 
 fs.writeFileSync(OUT_FILE, html, 'utf8');
-console.log(`Report generato: ${OUT_FILE}`);
-console.log(`Apri nel browser: file://${OUT_FILE}`);
+console.log(`Report generated: ${OUT_FILE}`);
+console.log(`Open in browser: file://${OUT_FILE}`);

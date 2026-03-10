@@ -203,6 +203,10 @@ Starting from v2.0.25 the plugin automatically records historical data at every 
 | Burner starts + hours (lifetime) | Boiler | CSV, HTML report |
 | Outside temperature | Boiler | CSV, HTML report |
 | Outside humidity (if sensor present) | Boiler | CSV, HTML report |
+| PV production (W) + daily yield (kWh) | Energy | CSV, HTML report |
+| Battery level (%) + charge/discharge (W) | Energy | CSV, HTML report |
+| Grid feed-in / draw (W) | Energy | CSV, HTML report |
+| Wallbox charging state + power (W) | Energy | CSV, HTML report |
 
 ---
 
@@ -937,6 +941,13 @@ For issues and questions:
 - 🔧 `postCommandRefreshDelay` config parameter removed and replaced by `postCommandRetry.delays` (array of ms, default `[5000, 15000, 30000, 60000]`) and `postCommandRetry.guardDuration` (ms, default `120000`).
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
+
+### [2.0.27] - 2026-03-10
+**Added**
+- ⚡ **Energy accessory** (`src/accessories/energy-accessory.ts`): new accessory supporting PV/solar production (Vitocharge VX3 / Vitovolt 300), battery storage, wallbox/EV charger, and electric DHW heater. Capabilities are auto-detected from API features — the accessory is silently skipped if none are present. HomeKit mapping: PV → Lightbulb (brightness = production %), Battery → Battery service + Lightbulb for power, Wallbox → Switch (enable/disable) + Outlet (plugged-in status), Electric DHW → HeaterCooler.
+- ⚡ **Energy CSV logging**: energy accessory logs PV production (W), daily yield (kWh), battery level (%), charging/discharging power (W), grid feed-in/draw (W), wallbox charging state and power (W) to `viessmann-history.csv` every refresh cycle.
+- 📊 **HTML report — Energy section**: new *Energy System* section in the report with stat cards and Chart.js graphs for PV production, battery level + charge/discharge, and wallbox power. Sections are shown only when data is present.
+- 📊 **CSV columns added**: `pv_production_w`, `pv_daily_kwh`, `battery_level`, `battery_charging_w`, `battery_discharging_w`, `grid_feedin_w`, `grid_draw_w`, `wallbox_charging`, `wallbox_power_w` appended after existing columns. Backward compatible — empty for non-energy rows.
 
 ### [2.0.26] - 2026-03-10
 **Added**

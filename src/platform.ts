@@ -19,6 +19,7 @@ import { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDev
 import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
+import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
 import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
@@ -675,6 +676,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Heating Circuits accessories
       await this.setupHeatingCircuitAccessories(installation, gateway, device, features);
 
+      // Setup Energy accessory (PV, Battery, Wallbox, Electric DHW) — optional, skipped if no features
+      await this.setupEnergyAccessory(installation, gateway, device, features);
+
     } catch (error) {
       this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
     }
@@ -793,6 +797,50 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         new ViessmannHeatingCircuitAccessory(this, accessory, installation, gateway, device, circuitNumber);
         this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
       }
+    }
+  }
+
+  async setupEnergyAccessory(
+    installation: ViessmannInstallation,
+    gateway: ViessmannGateway,
+    device: ViessmannDevice,
+    features: ViessmannFeature[],
+  ) {
+    // Detect energy-related features — skip silently if none present
+    const energyFeatures = features.filter(f =>
+      f.feature.startsWith('heating.photovoltaic') ||
+      f.feature.startsWith('heating.solar.power') ||
+      f.feature.startsWith('heating.powerStorage') ||
+      f.feature.startsWith('heating.battery') ||
+      f.feature.startsWith('charging.ev') ||
+      f.feature.startsWith('heating.ev') ||
+      f.feature.startsWith('heating.dhw.heating.rod') ||
+      f.feature === 'heating.dhw.operating.modes.electricBoost',
+    );
+
+    if (energyFeatures.length === 0) {
+      return;
+    }
+
+    this.log.info(`⚡ Energy features detected for device ${device.id}: ${energyFeatures.map(f => f.feature).join(', ')}`);
+
+    const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-energy`);
+    const displayName = `${installation.description} Energy`;
+
+    const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+
+    if (existingAccessory) {
+      this.log.info('Restoring existing energy accessory from cache:', existingAccessory.displayName);
+      new ViessmannEnergyAccessory(this, existingAccessory, installation, gateway, device);
+    } else {
+      this.log.info('Adding new energy accessory:', displayName);
+      const accessory = new this.api.platformAccessory(displayName, uuid);
+      accessory.context.device = device;
+      accessory.context.installation = installation;
+      accessory.context.gateway = gateway;
+
+      new ViessmannEnergyAccessory(this, accessory, installation, gateway, device);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
     }
   }
 
