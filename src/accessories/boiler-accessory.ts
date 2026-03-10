@@ -43,6 +43,7 @@ export class ViessmannBoilerAccessory {
     GasConsumptionToday: 0,
     GasConsumptionThisMonth: 0,
     GasConsumptionThisYear: 0,
+    GasConsumptionDhwToday: 0,   // heating.gas.consumption.summary.dhw.currentDay
     PowerConsumptionToday: 0,
     PowerConsumptionThisMonth: 0,
     PowerConsumptionThisYear: 0,
@@ -945,6 +946,12 @@ export class ViessmannBoilerAccessory {
       }
     }
 
+    // Update DHW gas consumption
+    const gasDhwFeature = features.find(f => f.feature === 'heating.gas.consumption.summary.dhw');
+    if (gasDhwFeature?.properties?.currentDay?.value !== undefined) {
+      this.states.GasConsumptionDhwToday = gasDhwFeature.properties.currentDay.value;
+    }
+
     // Update gas consumption occupancy sensor
     if (gasDataUpdated && this.gasConsumptionService) {
       const hasActiveConsumption = this.states.GasConsumptionToday > 0.1;
@@ -1141,6 +1148,8 @@ export class ViessmannBoilerAccessory {
         outside_humidity: this.states.OutsideHumidity,
         burner_starts: this.states.BurnerStarts,
         burner_hours: this.states.BurnerHours,
+        gas_heating_day_m3: this.states.GasConsumptionToday || undefined,
+        gas_dhw_day_m3: this.states.GasConsumptionDhwToday || undefined,
       });
     }
   }

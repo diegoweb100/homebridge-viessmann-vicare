@@ -942,6 +942,21 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.28] - 2026-03-10
+#### Added
+- **Flow temperature logging** — `heating.circuits.N.sensors.temperature.supply` now read and logged to CSV as `flow_temp` column from HC0 accessory
+- **Real gas consumption logging** — `heating.gas.consumption.summary.heating/dhw.currentDay` (m³) logged as `gas_heating_day_m3` / `gas_dhw_day_m3` columns from boiler accessory
+- **Heat demand estimation** — avg modulation × `nominalPowerKw` config param (default 24 kW) shown in report as stat card
+- **Condensing efficiency badge** — percentage of time flow temp < 55°C displayed in HC0 section with Good/Borderline/Not condensing badge
+- **Burner cycle analysis** — ON/OFF edges reconstructed from CSV; stat cards: cycle count, avg duration, shortest cycle with ⚠ badge if < 5 min
+- **Cycle duration histogram** — bar chart in report (5 buckets: 0–5, 5–10, 10–20, 20–40, 40+ min) shown when ≥ 3 cycles in period
+- **Flow temp chart** — dedicated chart in HC0 section with 55°C condensing threshold line
+- **Flow temp in overview chart** — added as dashed red series on left temperature axis
+- **`nominalPowerKw` config param** — optional, default 24 kW, for heat demand estimation
+
+#### CSV header (v2.0.28)
+`timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w`
+
 ### [2.0.27] - 2026-03-10
 **Added**
 - ⚡ **Energy accessory** (`src/accessories/energy-accessory.ts`): new accessory supporting PV/solar production (Vitocharge VX3 / Vitovolt 300), battery storage, wallbox/EV charger, and electric DHW heater. Capabilities are auto-detected from API features — the accessory is silently skipped if none are present. HomeKit mapping: PV → Lightbulb (brightness = production %), Battery → Battery service + Lightbulb for power, Wallbox → Switch (enable/disable) + Outlet (plugged-in status), Electric DHW → HeaterCooler.

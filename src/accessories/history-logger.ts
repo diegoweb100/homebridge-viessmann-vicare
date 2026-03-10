@@ -46,6 +46,9 @@ export interface CsvRow {
   mode?: string;
   burner_starts?: number;
   burner_hours?: number;
+  flow_temp?: number;           // heating.circuits.N.sensors.temperature.supply
+  gas_heating_day_m3?: number;  // heating.gas.consumption.summary.heating.currentDay
+  gas_dhw_day_m3?: number;      // heating.gas.consumption.summary.dhw.currentDay
   // Energy accessory fields
   pv_production_w?: number;
   pv_daily_kwh?: number;
@@ -58,7 +61,7 @@ export interface CsvRow {
   wallbox_power_w?: number;
 }
 
-const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w\n';
+const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w\n';
 
 export class ViessmannHistoryLogger {
   private fakeGatoService: any = null;
@@ -153,6 +156,9 @@ export class ViessmannHistoryLogger {
         row.mode ?? '',
         row.burner_starts ?? '',
         row.burner_hours ?? '',
+        row.flow_temp ?? '',
+        row.gas_heating_day_m3 ?? '',
+        row.gas_dhw_day_m3 ?? '',
         row.pv_production_w ?? '',
         row.pv_daily_kwh ?? '',
         row.battery_level ?? '',

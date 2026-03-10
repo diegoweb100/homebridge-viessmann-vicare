@@ -47,6 +47,9 @@ export interface ViessmannPlatformConfig extends AuthConfig {
   burnerUpdateDelay?: number;
   burnerUpdateDebounce?: number;
 
+  // 🆕 Boiler nominal power for heat demand estimation (kW, default 24)
+  nominalPowerKw?: number;
+
   // 🆕 Progressive post-command confirmation retry
   postCommandRetry?: {
     delays?: number[];      // ms between each confirmation attempt (default: [5000,15000,30000,60000])

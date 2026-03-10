@@ -54,6 +54,8 @@ export class ViessmannHeatingCircuitAccessory {
     RidottaActive: false,
     NormaleActive: true, // Default
     ComfortActiveAsProgram: false, // Different from ExtendedHeatingActive
+    // Flow temperature (heating.circuits.N.sensors.temperature.supply)
+    FlowTemperature: undefined as number | undefined,
   };
 
   // Store temperatures for each program
@@ -1676,6 +1678,12 @@ private setupTemperatureProgramServices() {
       }
     }
 
+    // Always read flow temperature (supply) independently for CSV logging and diagnostics
+    const flowTempFeature = features.find(f => f.feature === `${circuitPrefix}.sensors.temperature.supply`);
+    if (flowTempFeature?.properties?.value?.value !== undefined) {
+      this.states.FlowTemperature = flowTempFeature.properties.value.value;
+    }
+
     // Update temperature programs
     const programTypes = ['comfort', 'normal', 'reduced'];
 
@@ -1859,6 +1867,7 @@ private setupTemperatureProgramServices() {
         accessory: `hc${this.circuitNumber}`,
         room_temp: this.states.CurrentTemperature,
         target_temp: this.states.HeatingThresholdTemperature,
+        flow_temp: this.states.FlowTemperature,
         program: this.currentProgram,
         mode: this.currentMode,
       });

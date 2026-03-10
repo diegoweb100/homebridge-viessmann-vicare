@@ -80,6 +80,57 @@ const sph = (burnerStarts && burnerHours && parseFloat(burnerHours) > 0) ? (pars
 const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : 'warn') : 'neutral';
 const effLabel = sph ? (parseFloat(sph) < 2 ? 'Good' : 'High cycling') : 'N/A';
 
+// --- Flow temperature stats (from hc0 rows) ---
+const avgFlow  = avg(hcRows, 'flow_temp');
+const maxFlow  = maxVal(hcRows, 'flow_temp');
+// Condensing efficiency: flow < 55°C means returning in condensing range (proxy, no return sensor)
+const flowVals = hcRows.map(r => parseFloat(r.flow_temp)).filter(v => !isNaN(v) && v > 0);
+const condensingPct = flowVals.length ? ((flowVals.filter(v => v < 55).length / flowVals.length) * 100).toFixed(0) : null;
+const condensingCls = condensingPct !== null ? (parseFloat(condensingPct) >= 80 ? 'good' : parseFloat(condensingPct) >= 40 ? 'warn' : 'neutral') : 'neutral';
+const condensingLabel = condensingPct !== null ? (parseFloat(condensingPct) >= 80 ? 'Condensing ✓' : parseFloat(condensingPct) >= 40 ? 'Borderline' : 'Not condensing') : 'N/A';
+
+// --- Gas consumption (real data from API, m³/day) ---
+const hasGasData = boilerRows.some(r => r.gas_heating_day_m3 !== '' && r.gas_heating_day_m3 !== undefined);
+const latestGasRow = [...boilerRows].reverse().find(r => r.gas_heating_day_m3 !== '' && r.gas_heating_day_m3 !== undefined) || {};
+const gasHeatingToday  = latestGasRow.gas_heating_day_m3  || null;
+const gasDhwToday      = latestGasRow.gas_dhw_day_m3      || null;
+const gasTotalToday    = (gasHeatingToday && gasDhwToday) ? (parseFloat(gasHeatingToday) + parseFloat(gasDhwToday)).toFixed(2) : gasHeatingToday || null;
+
+// --- Heat demand: avg modulation × nominal power ---
+const NOMINAL_KW = typeof process.env.NOMINAL_KW !== 'undefined' ? parseFloat(process.env.NOMINAL_KW) : 24;
+const activeBurnerRows = boilerRows.filter(r => r.burner_active === 'true' && toNum(r.modulation) > 0);
+const avgHeatDemand = activeBurnerRows.length
+  ? ((activeBurnerRows.reduce((s,r) => s + toNum(r.modulation), 0) / activeBurnerRows.length / 100) * NOMINAL_KW).toFixed(1)
+  : null;
+
+// --- Burner cycle analysis ---
+// Reconstruct ON/OFF edges from boilerRows sorted by time
+const sortedBoiler = [...boilerRows].sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+const cycles = [];
+let cycleStart = null;
+for (let i = 0; i < sortedBoiler.length; i++) {
+  const on = sortedBoiler[i].burner_active === 'true';
+  if (on && cycleStart === null) cycleStart = new Date(sortedBoiler[i].timestamp);
+  if (!on && cycleStart !== null) {
+    const durationMin = (new Date(sortedBoiler[i].timestamp) - cycleStart) / 60000;
+    if (durationMin >= 1) cycles.push(durationMin); // ignore <1 min noise
+    cycleStart = null;
+  }
+}
+const cycleCount      = cycles.length;
+const avgCycleDur     = cycleCount ? (cycles.reduce((a,b)=>a+b,0)/cycleCount).toFixed(0) : null;
+const shortestCycle   = cycleCount ? Math.min(...cycles).toFixed(0) : null;
+const shortCycleCls   = shortestCycle ? (parseFloat(shortestCycle) < 5 ? 'warn' : 'good') : 'neutral';
+// Histogram buckets: 0-5, 5-10, 10-20, 20-40, 40+
+const histBuckets = [
+  { label:'0–5 min',  min:0,  max:5  },
+  { label:'5–10 min', min:5,  max:10 },
+  { label:'10–20 min',min:10, max:20 },
+  { label:'20–40 min',min:20, max:40 },
+  { label:'40+ min',  min:40, max:Infinity }
+];
+const histData = histBuckets.map(b => cycles.filter(d => d >= b.min && d < b.max).length);
+
 const programs = {};
 hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program]||0)+1; });
 const totalProg = Object.values(programs).reduce((a,b)=>a+b,0);
@@ -101,6 +152,7 @@ function chartData(arr, key) {
 const modChart    = chartData(boilerRows, 'modulation');
 const roomChart   = chartData(hcRows, 'room_temp');
 const targetChart = chartData(hcRows, 'target_temp');
+const flowChart   = chartData(hcRows, 'flow_temp');
 const dhwChart    = chartData(dhwRows, 'dhw_temp');
 const dhwTgtChart = chartData(dhwRows, 'dhw_target');
 const outsideChart = chartData(hcRows, 'outside_temp');
@@ -160,6 +212,7 @@ function lookupBurner(arr, ts) {
 const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; });
 const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp'));
 const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
+const ovFlow     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'flow_temp'));
 const ovDhw      = overviewTimes.map(ts => interpolate(dhwRows,   ts, 'dhw_temp'));
 const ovOutside  = overviewTimes.map(ts => interpolate(hcRows,    ts, 'outside_temp'));
 const ovOutsideHum = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_humidity'));
@@ -235,9 +288,17 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${sc('Burner active', burnerOnPct, '% samples')}
     ${sc('Avg modulation', avgMod, '%')}
     ${sc('Max modulation', maxMod, '%')}
+    ${avgHeatDemand ? sc('Avg heat demand', avgHeatDemand, ' kW') : ''}
+    ${hasGasData ? sc('Gas heating today', gasHeatingToday, ' m³') : ''}
+    ${hasGasData && gasDhwToday ? sc('Gas DHW today', gasDhwToday, ' m³') : ''}
+    ${hasGasData && gasTotalToday ? sc('Gas total today', gasTotalToday, ' m³') : ''}
+    ${cycleCount > 0 ? sc('Cycles (period)', cycleCount) : ''}
+    ${avgCycleDur ? sc('Avg cycle', avgCycleDur, ' min') : ''}
+    ${shortestCycle ? sc('Shortest cycle', shortestCycle, ' min', badge(shortCycleCls, parseFloat(shortestCycle)<5?'⚠ Short':'OK')) : ''}
   </div>
   ${boilerRows.length < 5 ? `<p class="note">Only ${boilerRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
   ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>` : ''}
+  ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Cycle duration histogram</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">Distribution of burner ON durations. Short cycles (&lt;5 min) indicate short-cycling.</p></div>` : ''}
 </div>
 
 <div class="box">
@@ -245,10 +306,14 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div class="grid">
     ${sc('Avg room temp', avgRoom, '°C')}
     ${sc('Avg setpoint', avgTarget, '°C')}
+    ${avgFlow ? sc('Avg flow temp', avgFlow, '°C') : ''}
+    ${maxFlow ? sc('Max flow temp', maxFlow, '°C') : ''}
+    ${condensingPct !== null ? sc('Condensing mode', condensingPct, '% time', badge(condensingCls, condensingLabel)) : ''}
   </div>
   ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Program distribution</div>
   <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
   ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
+  ${flowVals.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cFlow"></canvas></div><p class="note">Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.</p>` : ''}
 </div>
 
 <div class="box">
@@ -304,6 +369,7 @@ function mk(id,labels,datasets,yLbl){
     datasets:[
       {label:'Room temp (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
       {label:'HC0 setpoint (°C)',   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
+      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:'Flow temp (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
       {label:'DHW temp (°C)',      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
       {label:'Outdoor temp (°C)',  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
       {label:'Modulation (%)',     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
@@ -329,6 +395,12 @@ mk('cRoom',${JSON.stringify(roomChart.labels)},[
   {label:'Room temp (°C)',data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
   {label:'Setpoint (°C)',data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
+${flowVals.length>=2?`
+mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:'Flow temp (°C)',data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
+`:''}
+${cycleCount>=3?`
+(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:'Cycles',data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:'# cycles'},ticks:{stepSize:1}}}}});})();
+`:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[
   {label:'DHW temp (°C)',data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
