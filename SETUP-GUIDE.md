@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.29
+# Complete Setup Guide - v2.0.32
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.29 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, and **energy system monitoring** (PV, battery, wallbox).
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.32 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
 
 ## Prerequisites
 
@@ -304,6 +304,34 @@ CSV file location: `/var/lib/homebridge/viessmann-history.csv`
 > cp /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history.csv.bak
 > sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history.csv
 > ```
+
+#### **Heating schedule file (v2.0.31+)**
+
+Starting from v2.0.31, the plugin automatically saves the weekly heating schedule to a JSON file after every API refresh:
+
+```
+/var/lib/homebridge/viessmann-schedule.json
+```
+
+This file is read by the HTML report generator to:
+- Show a **"Today's schedule"** stat card in the HC0 section (e.g. `06:00–07:30 normal, 17:00–23:00 normal · rest: reduced`)
+- Render **schedule bands** as subtle background overlays on the overview chart (blue = normal, orange = comfort, grey = reduced/off)
+
+The file is created automatically after the first Homebridge restart — no manual action required. Example content:
+
+```json
+{
+  "circuit": 0,
+  "updatedAt": "2026-03-10T13:00:00.000Z",
+  "entries": {
+    "mon": [{"mode":"normal","start":"06:00","end":"07:30","position":0}, {"mode":"normal","start":"17:00","end":"23:00","position":1}],
+    "sat": [{"mode":"normal","start":"06:00","end":"22:00","position":0}],
+    ...
+  }
+}
+```
+
+> If the file does not exist (e.g. first install), the report works normally without schedule overlays.
 
 #### **Generate HTML report**
 
@@ -947,7 +975,7 @@ src/
 └── accessories/
     ├── 🔥 boiler-accessory.ts              # Boiler control, gas consumption, diagnostics
     ├── 🚿 dhw-accessory.ts                 # DHW temperature and modes
-    ├── 🏠 heating-circuit-accessory.ts     # Circuit control, flow temp, programs
+    ├── 🏠 heating-circuit-accessory.ts     # Circuit control, flow temp, programs, schedule persistence
     ├── ⚡ energy-accessory.ts              # PV, battery, wallbox (auto-detected)
     └── 📋 history-logger.ts               # CSV logging + FakeGato Eve history
 ```
@@ -978,7 +1006,7 @@ src/
 **🎛️ Accessory Layer:**
 - `boiler-accessory.ts`: Boiler temperature, burner status, modulation, gas consumption logging
 - `dhw-accessory.ts`: DHW temperature, operating modes (comfort/eco/off)
-- `heating-circuit-accessory.ts`: Heating circuits, flow temperature, temperature programs, holiday modes
+- `heating-circuit-accessory.ts`: Heating circuits, flow temperature, temperature programs, holiday modes, weekly schedule persistence to `viessmann-schedule.json`
 - `energy-accessory.ts`: PV production, battery storage, wallbox/EV charger (auto-detected, silently skipped if not present)
 - `history-logger.ts`: CSV logging to `viessmann-history.csv`, FakeGato Eve history entries
 
@@ -1087,7 +1115,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.29",
+    "plugin_version": "2.0.32",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1101,6 +1129,8 @@ When reporting issues, include:
     "force_service_recreation": false,
     "csv_logging_active": true,
     "csv_header_version": "v2.0.28",
+    "schedule_file_present": true,
+    "schedule_last_updated": "2026-03-10T...",
     "energy_accessory_present": false,
     "nominal_power_kw": 24
 }
@@ -1139,6 +1169,7 @@ sudo systemctl restart homebridge
 - [ ] Force service recreation disabled for production use
 - [ ] Debug logging disabled for production use
 - [ ] CSV history logging verified (`tail -5 /var/lib/homebridge/viessmann-history.csv`)
+- [ ] Schedule file created after first restart (`cat /var/lib/homebridge/viessmann-schedule.json`)
 - [ ] CSV header updated if upgrading from v2.0.25 or earlier (see step 7)
 - [ ] HTML report generated and verified
 - [ ] Automated report script configured (optional)

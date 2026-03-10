@@ -112,6 +112,64 @@ const gasBarDhw       = gasDays.map(d => +gasPerDay[d].dhw.toFixed(2));
 const gasLineTotal    = gasDays.map(d => +(gasPerDay[d].heating + gasPerDay[d].dhw).toFixed(2));
 const hasGasChart     = gasDays.length >= 1;
 
+// --- Heating schedule ---
+const SCHED_FILE = path.join(HB_PATH, 'viessmann-schedule.json');
+let heatingSchedule = null;
+try {
+  if (fs.existsSync(SCHED_FILE)) {
+    heatingSchedule = JSON.parse(fs.readFileSync(SCHED_FILE, 'utf8'));
+  }
+} catch(_) {}
+
+// Given a Date, return expected program from schedule ('normal'|'reduced'|'comfort'|null)
+function expectedProgram(dt) {
+  if (!heatingSchedule?.entries) return null;
+  const days = ['sun','mon','tue','wed','thu','fri','sat'];
+  const dayKey = days[dt.getDay()];
+  const slots = heatingSchedule.entries[dayKey] || [];
+  const hhmm = dt.getHours() * 60 + dt.getMinutes();
+  for (const s of slots) {
+    const [sh, sm] = s.start.split(':').map(Number);
+    const [eh, em] = s.end.split(':').map(Number);
+    if (hhmm >= sh * 60 + sm && hhmm < eh * 60 + em) return s.mode;
+  }
+  return 'reduced';
+}
+
+// Build today's schedule slots as human-readable string
+function todayScheduleText() {
+  if (!heatingSchedule?.entries) return null;
+  const days = ['sun','mon','tue','wed','thu','fri','sat'];
+  const dayKey = days[new Date().getDay()];
+  const slots = heatingSchedule.entries[dayKey] || [];
+  if (!slots.length) return 'reduced (all day)';
+  const parts = slots.map(s => `${s.start}–${s.end} ${s.mode}`);
+  return parts.join(', ') + ' · rest: reduced';
+}
+
+// Build background annotation bands for overview chart (one band per normal slot today)
+function schedBands() {
+  if (!heatingSchedule?.entries) return [];
+  const days = ['sun','mon','tue','wed','thu','fri','sat'];
+  const bands = [];
+  // For each day in the report period build bands
+  const now = new Date();
+  for (let i = DAYS - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const dayKey = days[d.getDay()];
+    const dateStr = d.toISOString().slice(0,10);
+    const slots = heatingSchedule.entries[dayKey] || [];
+    for (const s of slots) {
+      bands.push({ date: dateStr, start: s.start, end: s.end, mode: s.mode });
+    }
+  }
+  return bands;
+}
+
+const scheduleToday = todayScheduleText();
+const schedBandData = schedBands();
+
 // --- Heat demand: avg modulation × nominal power ---
 const NOMINAL_KW = typeof process.env.NOMINAL_KW !== 'undefined' ? parseFloat(process.env.NOMINAL_KW) : 24;
 const activeBurnerRows = boilerRows.filter(r => r.burner_active === 'true' && toNum(r.modulation) > 0);
@@ -326,6 +384,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${avgFlow ? sc('Avg flow temp', avgFlow, '°C') : ''}
     ${maxFlow ? sc('Max flow temp', maxFlow, '°C') : ''}
     ${condensingPct !== null ? sc('Condensing mode', condensingPct, '% time', badge(condensingCls, condensingLabel)) : ''}
+    ${scheduleToday ? sc('Today\'s schedule', scheduleToday) : ''}
   </div>
   ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Program distribution</div>
   <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
@@ -402,7 +461,46 @@ function mk(id,labels,datasets,yLbl){
       yTemp:{type:'linear',position:'left', title:{display:true,text:'°C'},grid:{color:'#f5f5f5'},ticks:{color:'#4e9af1'}},
       yRight:{type:'linear',position:'right',title:{display:true,text:'% / ON–OFF'},grid:{drawOnChartArea:false},min:0,max:110,ticks:{color:'#e65100'}}
     }
-  }});
+    }});
+
+  // Schedule bands overlay — draw after chart renders
+  ${schedBandData.length ? `
+  (function(){
+    const bands = ${JSON.stringify(schedBandData)};
+    const labels = ${JSON.stringify(ovLabels)};
+    const chart = Chart.getChart(document.getElementById('cOverview'));
+    if(!chart) return;
+    // Map band start/end (HH:MM) to label index using dd/MM HH:MM format
+    function labelForBand(dateStr, timeStr) {
+      const [y,m,d] = dateStr.split('-');
+      return d+'/'+m+' '+timeStr;
+    }
+    Chart.register({
+      id: 'schedBands',
+      beforeDraw(ch) {
+        const {ctx, chartArea:{left,right,top,bottom}, scales:{x}} = ch;
+        if(!x) return;
+        ctx.save();
+        bands.forEach(b => {
+          const l0 = labelForBand(b.date, b.start);
+          const l1 = labelForBand(b.date, b.end);
+          // find nearest label indices
+          let i0 = labels.findIndex(l => l >= l0);
+          let i1 = labels.findIndex(l => l >= l1);
+          if(i0 < 0) i0 = 0;
+          if(i1 < 0) i1 = labels.length - 1;
+          const x0 = x.getPixelForValue(i0);
+          const x1 = x.getPixelForValue(i1);
+          if(x1 < left || x0 > right) return;
+          ctx.fillStyle = b.mode === 'normal' ? 'rgba(78,154,241,0.08)' : b.mode === 'comfort' ? 'rgba(255,152,0,0.1)' : 'rgba(180,180,180,0.06)';
+          ctx.fillRect(Math.max(x0,left), top, Math.min(x1,right)-Math.max(x0,left), bottom-top);
+        });
+        ctx.restore();
+      }
+    });
+    chart.update();
+  })();
+  ` : ''}
 })();
 ${boilerRows.length>=2?`
 mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulation (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');

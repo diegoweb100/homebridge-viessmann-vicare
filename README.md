@@ -1008,6 +1008,16 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.32] - 2026-03-10
+#### Fixed
+- **All charts broken in v2.0.31** — the schedule bands overlay used `plugins:[{...}]` at the Chart.js root level which is invalid syntax in Chart.js 3/4 and caused all charts to fail silently. Replaced with `Chart.register()` + `Chart.getChart()` approach called after chart instantiation. Also fixed band positioning to use label index lookup instead of ISO string matching (labels are formatted as `dd/MM HH:MM`).
+
+### [2.0.31] - 2026-03-10
+#### Added
+- **Heating schedule awareness** — the plugin now persists the weekly heating schedule to `/var/lib/homebridge/viessmann-schedule.json` after every API refresh, reading `heating.circuits.0.heating.schedule` (timeslots with `mode`, `start`, `end` per weekday).
+- **HTML report: Today's schedule stat card** — shows the active timeslots for the current day (e.g. `06:00–07:30 normal, 17:00–23:00 normal · rest: reduced`) in the HC0 section.
+- **HTML report: Schedule bands overlay** — the overview chart renders subtle background bands (blue=normal, orange=comfort, grey=reduced) to visually align temperature/burner data with the programmed schedule.
+
 ### [2.0.30] - 2026-03-10
 #### Fixed
 - **Daily gas chart not rendering**: the Chart.js initializer for `cGas` was nested inside the `cycleCount>=3` conditional block — if fewer than 3 burner cycles were present in the selected period the gas chart canvas was drawn but never initialized. Extracted as independent block, now renders whenever gas data is available (`hasGasChart=true`).
