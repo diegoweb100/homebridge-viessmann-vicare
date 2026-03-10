@@ -96,6 +96,22 @@ const gasHeatingToday  = latestGasRow.gas_heating_day_m3  || null;
 const gasDhwToday      = latestGasRow.gas_dhw_day_m3      || null;
 const gasTotalToday    = (gasHeatingToday && gasDhwToday) ? (parseFloat(gasHeatingToday) + parseFloat(gasDhwToday)).toFixed(2) : gasHeatingToday || null;
 
+// --- Daily gas aggregation (max per calendar day = total consumption for that day) ---
+const gasPerDay = {};
+boilerRows.forEach(r => {
+  if (!r.gas_heating_day_m3 && !r.gas_dhw_day_m3) return;
+  const day = r.timestamp.slice(0, 10);
+  if (!gasPerDay[day]) gasPerDay[day] = { heating: 0, dhw: 0 };
+  gasPerDay[day].heating = Math.max(gasPerDay[day].heating, parseFloat(r.gas_heating_day_m3) || 0);
+  gasPerDay[day].dhw     = Math.max(gasPerDay[day].dhw,     parseFloat(r.gas_dhw_day_m3)     || 0);
+});
+const gasDays         = Object.keys(gasPerDay).sort();
+const gasBarLabels    = gasDays.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; });
+const gasBarHeating   = gasDays.map(d => +gasPerDay[d].heating.toFixed(2));
+const gasBarDhw       = gasDays.map(d => +gasPerDay[d].dhw.toFixed(2));
+const gasLineTotal    = gasDays.map(d => +(gasPerDay[d].heating + gasPerDay[d].dhw).toFixed(2));
+const hasGasChart     = gasDays.length >= 1;
+
 // --- Heat demand: avg modulation × nominal power ---
 const NOMINAL_KW = typeof process.env.NOMINAL_KW !== 'undefined' ? parseFloat(process.env.NOMINAL_KW) : 24;
 const activeBurnerRows = boilerRows.filter(r => r.burner_active === 'true' && toNum(r.modulation) > 0);
@@ -155,7 +171,7 @@ const targetChart = chartData(hcRows, 'target_temp');
 const flowChart   = chartData(hcRows, 'flow_temp');
 const dhwChart    = chartData(dhwRows, 'dhw_temp');
 const dhwTgtChart = chartData(dhwRows, 'dhw_target');
-const outsideChart = chartData(hcRows, 'outside_temp');
+const outsideChart = chartData(boilerRows, 'outside_temp');
 // Energy charts
 const pvChart      = chartData(energyRows, 'pv_production_w');
 const battChart    = chartData(energyRows, 'battery_level');
@@ -214,7 +230,7 @@ const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp
 const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
 const ovFlow     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'flow_temp'));
 const ovDhw      = overviewTimes.map(ts => interpolate(dhwRows,   ts, 'dhw_temp'));
-const ovOutside  = overviewTimes.map(ts => interpolate(hcRows,    ts, 'outside_temp'));
+const ovOutside  = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_temp'));
 const ovOutsideHum = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_humidity'));
 const ovMod      = overviewTimes.map(ts => interpolate(boilerRows,ts, 'modulation'));
 const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
@@ -299,6 +315,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   ${boilerRows.length < 5 ? `<p class="note">Only ${boilerRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
   ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>` : ''}
   ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Cycle duration histogram</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">Distribution of burner ON durations. Short cycles (&lt;5 min) indicate short-cycling.</p></div>` : ''}
+  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Daily gas consumption (m³)</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">Stacked bars: heating (dark blue) + DHW (teal). Red line: daily total. Today's bar shows current accumulated value.</p></div>` : ''}
 </div>
 
 <div class="box">
@@ -400,6 +417,31 @@ mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:'Flow temp (°C)',data:${
 `:''}
 ${cycleCount>=3?`
 (function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:'Cycles',data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:'# cycles'},ticks:{stepSize:1}}}}});})();
+${hasGasChart?`
+(function(){
+  const c=document.getElementById('cGas'); if(!c)return;
+  new Chart(c,{
+    type:'bar',
+    data:{
+      labels:${JSON.stringify(gasBarLabels)},
+      datasets:[
+        {type:'bar', label:'Heating (m³)', data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'bar', label:'DHW (m³)',     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'line',label:'Total (m³)',   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
+      scales:{
+        x:{grid:{color:'#f5f5f5'},stacked:true},
+        y:{title:{display:true,text:'m³'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
+      }
+    }
+  });
+})();
+`:''}
 `:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[

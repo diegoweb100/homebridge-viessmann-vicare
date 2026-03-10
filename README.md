@@ -203,6 +203,9 @@ Starting from v2.0.25 the plugin automatically records historical data at every 
 | Burner starts + hours (lifetime) | Boiler | CSV, HTML report |
 | Outside temperature | Boiler | CSV, HTML report |
 | Outside humidity (if sensor present) | Boiler | CSV, HTML report |
+| Flow temperature / supply temp (HC0) | HC0 | CSV, HTML report |
+| Gas consumption heating (m³/day) | Boiler | CSV, HTML report |
+| Gas consumption DHW/ACS (m³/day) | Boiler | CSV, HTML report |
 | PV production (W) + daily yield (kWh) | Energy | CSV, HTML report |
 | Battery level (%) + charge/discharge (W) | Energy | CSV, HTML report |
 | Grid feed-in / draw (W) | Energy | CSV, HTML report |
@@ -266,15 +269,78 @@ node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
 
 **Copy to your Mac and open in browser**:
 ```bash
-scp user@raspberry:/var/lib/homebridge/viessmann-report-$(date +%Y-%m-%d).html ~/Desktop/
+scp user@raspberry:/tmp/report.html ~/Desktop/viessmann-report.html && open ~/Desktop/viessmann-report.html
 ```
 
 The report includes:
-- **Overview chart**: all series on a unified timeline with dual Y axis — room temp, setpoint, DHW temp, outside temp, modulation (%), burner ON/OFF, and outside humidity (if sensor is present). All temperature series are linearly interpolated for continuous lines even when accessory refresh cycles are offset.
-- **Stat cards**: burner efficiency (starts/hour + Good/Poor rating), modulation %, temperatures
+- **Overview chart**: all series on a unified timeline with dual Y axis — room temp, flow temp, setpoint, DHW temp, outside temp, modulation (%), burner ON/OFF, and outside humidity (if sensor is present). All temperature series are linearly interpolated for continuous lines even when accessory refresh cycles are offset.
+- **Stat cards**: burner efficiency (starts/hour), avg/max modulation, avg heat demand (kW), gas consumption heating + DHW (m³/day), condensing mode badge, burner cycle count, avg and shortest cycle duration
+- **Cycle histogram**: distribution of burner ON durations across 5 buckets — highlights short-cycling at a glance
+- **Flow temperature chart**: dedicated chart with 55°C condensing threshold line
 - **Detail charts**: modulation over time, burner ON/OFF stepped, room temp vs setpoint, DHW temp vs setpoint
 - **Program distribution** bars (normal/reduced/comfort %)
-- Works offline once downloaded
+- Works offline once downloaded — no server required, all data is embedded
+
+---
+
+### 📧 Automated email report via crontab
+
+You can schedule the report to be generated and emailed automatically using a shell script on your Raspberry Pi (or any Linux host running Homebridge).
+
+**Create the script** at `/home/pi/Scripts/viessmann-report.sh`:
+
+```bash
+#!/bin/bash
+
+REPORT="/tmp/report.html"
+DAYS="${1:-30}"
+EMAIL="$2"
+LOG="/var/log/viessmann-report.log"
+
+if [ -z "$EMAIL" ]; then
+  echo "[$(date)] ERROR: email not specified." >> "$LOG"
+  exit 1
+fi
+
+echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
+
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
+  --days "$DAYS" \
+  --out "$REPORT" >> "$LOG" 2>&1
+
+if [ ! -f "$REPORT" ]; then
+  echo "[$(date)] ERROR: report.html not found." >> "$LOG"
+  exit 1
+fi
+
+mail -s "Viessmann Monthly Report - $(date +'%B %Y')" \
+  -A "$REPORT" \
+  "$EMAIL" <<< "Please find attached the Viessmann ViCare report for the last $DAYS days."
+
+rm -f "$REPORT"
+echo "[$(date)] Report sent and cleaned up." >> "$LOG"
+```
+
+Make it executable:
+```bash
+chmod +x /home/pi/Scripts/viessmann-report.sh
+```
+
+**Schedule with crontab** — send on the 1st of every month at 08:00:
+```bash
+crontab -e
+```
+Add:
+```
+0 8 1 * * /home/pi/Scripts/viessmann-report.sh 30 your@email.com
+```
+
+Or weekly every Monday at 07:00:
+```
+0 7 * * 1 /home/pi/Scripts/viessmann-report.sh 7 your@email.com
+```
+
+> **Note**: requires `mailutils` installed on the Pi (`sudo apt install mailutils`) and a working mail relay (e.g. Postfix with SMTP configured).
 
 ---
 
@@ -941,6 +1007,14 @@ For issues and questions:
 - 🔧 `postCommandRefreshDelay` config parameter removed and replaced by `postCommandRetry.delays` (array of ms, default `[5000, 15000, 30000, 60000]`) and `postCommandRetry.guardDuration` (ms, default `120000`).
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
+
+### [2.0.29] - 2026-03-10
+#### Fixed
+- **Outdoor temperature chart** — `outside_temp` is written by boiler accessory but was incorrectly read from `hcRows` in the report; fixed to read from `boilerRows`. Outdoor temp now appears correctly in overview chart and dedicated series.
+
+#### Added
+- **Daily gas consumption chart** — stacked bar chart (heating = dark blue, DHW = teal) + red line overlay for daily total. Aggregates `max(gas_*_day_m3)` per calendar day so the daily reset at midnight is handled correctly. Works for any `--days` value.
+- README: expanded HTML report section, added automated email script + crontab scheduling examples, updated "What is recorded" table.
 
 ### [2.0.28] - 2026-03-10
 #### Added

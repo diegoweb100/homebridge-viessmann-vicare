@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.0
+# Complete Setup Guide - v2.0.29
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0 for Homebridge, including all the new advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, and **complete localization support with custom names**.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.29 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, and **energy system monitoring** (PV, battery, wallbox).
 
 ## Prerequisites
 
@@ -46,11 +46,11 @@ To obtain API credentials:
 
 #### Via npm (Command Line)
 ```bash
-# Install globally
-sudo npm install -g homebridge-viessmann-vicare
+# Install via npm prefix (recommended for Raspberry Pi / Linux)
+sudo npm install --prefix /usr/local homebridge-viessmann-vicare
 
-# Or install in Homebridge directory
-npm install homebridge-viessmann-vicare
+# Always restart Homebridge after install
+sudo systemctl restart homebridge
 ```
 
 ### 2. Initial Configuration
@@ -77,6 +77,7 @@ Data Refresh Interval: 120000 (2 minutes)
 Enable Rate Limit Protection: ✅ (checked)
 Enable API Caching: ✅ (checked)
 Enable Debug Logging: ✅ (checked for initial setup)
+Nominal Boiler Power (kW): 24 (adjust to your boiler's nominal output)
 ```
 
 5. Click "**Save**" to apply the configuration
@@ -274,6 +275,109 @@ After successful authentication:
 
 3. **Restart Homebridge** one final time for production configuration
 
+---
+
+### 7. 📊 CSV History Logging & HTML Reports
+
+Starting from v2.0.26, the plugin automatically logs heating data to a CSV file and includes a standalone HTML report generator.
+
+#### **What is logged (every ~15 minutes)**
+
+| Column | Source | Description |
+|---|---|---|
+| `burner_active`, `modulation` | Boiler | Burner state and modulation % |
+| `outside_temp`, `outside_humidity` | Boiler | Outdoor sensors (if available) |
+| `gas_heating_day_m3`, `gas_dhw_day_m3` | Boiler | Daily gas consumption in m³ |
+| `burner_starts`, `burner_hours` | Boiler | Lifetime statistics |
+| `room_temp`, `target_temp` | HC0 | Room temperature and setpoint |
+| `flow_temp` | HC0 | Supply/flow temperature |
+| `program`, `mode` | HC0 | Active heating program and mode |
+| `dhw_temp`, `dhw_target` | ACS | DHW temperature and setpoint |
+| `pv_production_w`, `pv_daily_kwh` | Energy | PV production (if available) |
+| `battery_level`, `battery_charging_w` | Energy | Battery state (if available) |
+| `wallbox_charging`, `wallbox_power_w` | Energy | Wallbox state (if available) |
+
+CSV file location: `/var/lib/homebridge/viessmann-history.csv`
+
+> ⚠️ **After upgrading from v2.0.25 or earlier**: the CSV header needs to be updated manually since the file already exists. Run:
+> ```bash
+> cp /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history.csv.bak
+> sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history.csv
+> ```
+
+#### **Generate HTML report**
+
+```bash
+# Last 7 days (default)
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
+
+# Last 30 days
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30
+
+# Custom output path
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.html
+```
+
+**Copy to Mac and open in browser**:
+```bash
+scp user@raspberry:/tmp/report.html ~/Desktop/viessmann-report.html && open ~/Desktop/viessmann-report.html
+```
+
+The report includes:
+- **Overview chart** — all series on unified timeline (room temp, flow temp, setpoint, DHW, outdoor, modulation, burner)
+- **Boiler stat cards** — starts/hour efficiency, avg heat demand (kW), gas heating + DHW today (m³), condensing mode badge, burner cycle stats
+- **Daily gas consumption chart** — stacked bar (heating + DHW) with total line overlay, aggregated per calendar day
+- **Cycle duration histogram** — distribution of burner ON durations, highlights short-cycling
+- **Flow temperature chart** — with 55°C condensing threshold line
+- **DHW chart** — temperature vs setpoint over time
+- **Program distribution** — bar chart of normal/reduced/comfort usage %
+
+#### **Automated email report via crontab**
+
+Create `/home/pi/Scripts/viessmann-report.sh`:
+
+```bash
+#!/bin/bash
+REPORT="/tmp/report.html"
+DAYS="${1:-30}"
+EMAIL="$2"
+LOG="/var/log/viessmann-report.log"
+
+if [ -z "$EMAIL" ]; then
+  echo "[$(date)] ERROR: email not specified." >> "$LOG"
+  exit 1
+fi
+
+echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
+
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
+  --days "$DAYS" --out "$REPORT" >> "$LOG" 2>&1
+
+if [ ! -f "$REPORT" ]; then
+  echo "[$(date)] ERROR: report.html not found." >> "$LOG"
+  exit 1
+fi
+
+mail -s "Viessmann Report - $(date +'%B %Y')" -A "$REPORT" "$EMAIL" \
+  <<< "Please find attached the Viessmann ViCare report for the last $DAYS days."
+
+rm -f "$REPORT"
+echo "[$(date)] Report sent and cleaned up." >> "$LOG"
+```
+
+```bash
+chmod +x /home/pi/Scripts/viessmann-report.sh
+```
+
+Schedule with crontab — 1st of every month at 08:00:
+```bash
+crontab -e
+# Add:
+0 8 1 * * /home/pi/Scripts/viessmann-report.sh 30 your@email.com
+```
+
+> Requires `mailutils` (`sudo apt install mailutils`) and a working mail relay (e.g. Postfix).
+
 ## Advanced Configuration
 
 ### 🛡️ Rate Limiting Protection
@@ -378,6 +482,7 @@ Enable/disable specific accessory types:
     "password": "your_password",
     "refreshInterval": 120000,
     "enableRateLimitProtection": true,
+    "nominalPowerKw": 24,
     "customNames": {
         "installationPrefix": "Casa Principale",
         "boiler": "Caldaia Viessmann",
@@ -529,6 +634,17 @@ Enable/disable specific accessory types:
 ## Accessory Overview
 
 The plugin creates different types of accessories based on your heating system. **All names can be customized!**
+
+### ⚡ Energy System Accessories (Auto-detected, v2.0.27+)
+
+These accessories are created **only if your installation has the corresponding features** — they are silently skipped if not present.
+
+- **PV Production**: `[Installation] Energy PV` — Lightbulb service, brightness = production %
+- **Battery Storage**: `[Installation] Energy Battery` — Battery service + level %
+- **Wallbox / EV Charger**: `[Installation] Energy Wallbox` — Switch + Outlet service
+- **Electric DHW Heater**: `[Installation] Energy DHW Heater` — HeaterCooler service
+
+All energy data is also logged to the CSV history file and included in the HTML report.
 
 ### 🔥 Boiler Accessories
 - **Main Boiler Control**: `[Installation Prefix] [Custom Boiler Name]` - HeaterCooler service for temperature and mode control
@@ -817,21 +933,23 @@ The plugin has been completely refactored into a modular architecture for better
 
 ```
 src/
-├── 🔐 auth-manager.ts           # OAuth2 authentication & token management
-├── 🛡️ rate-limit-manager.ts    # API rate limiting protection
-├── 📡 api-client.ts             # HTTP client with retry logic
-├── 🌐 viessmann-api-endpoints.ts # Viessmann-specific API calls
-├── 🔧 network-utils.ts          # Network utilities (IP, browser)
-├── 💾 api-cache.ts              # Intelligent multi-layer caching
-├── 📊 api-health-monitor.ts     # Performance monitoring
-├── 🎯 viessmann-api.ts          # Main API facade
-├── 🏠 platform.ts               # Main platform with custom names support
-├── ⚙️ settings.ts               # Constants and configuration
-├── 🚀 index.ts                  # Plugin entry point
+├── 🔐 auth-manager.ts              # OAuth2 authentication & token management
+├── 🛡️ rate-limit-manager.ts       # API rate limiting protection
+├── 📡 api-client.ts                # HTTP client with retry logic
+├── 🌐 viessmann-api-endpoints.ts   # Viessmann-specific API calls
+├── 🔧 network-utils.ts             # Network utilities (IP, browser)
+├── 💾 api-cache.ts                 # Intelligent multi-layer caching
+├── 📊 api-health-monitor.ts        # Performance monitoring
+├── 🎯 viessmann-api.ts             # Main API facade
+├── 🏠 platform.ts                  # Main platform with custom names support
+├── ⚙️ settings.ts                  # Constants and configuration
+├── 🚀 index.ts                     # Plugin entry point
 └── accessories/
-    ├── 🔥 boiler-accessory.ts          # Boiler control with custom names
-    ├── 🚿 dhw-accessory.ts             # DHW temperature and modes with custom names
-    └── 🏠 heating-circuit-accessory.ts # Circuit control with custom names and programs
+    ├── 🔥 boiler-accessory.ts              # Boiler control, gas consumption, diagnostics
+    ├── 🚿 dhw-accessory.ts                 # DHW temperature and modes
+    ├── 🏠 heating-circuit-accessory.ts     # Circuit control, flow temp, programs
+    ├── ⚡ energy-accessory.ts              # PV, battery, wallbox (auto-detected)
+    └── 📋 history-logger.ts               # CSV logging + FakeGato Eve history
 ```
 
 #### Module Responsibilities
@@ -858,9 +976,11 @@ src/
 - `index.ts`: Plugin registration and entry point
 
 **🎛️ Accessory Layer:**
-- `boiler-accessory.ts`: Boiler temperature, burner status, modulation
+- `boiler-accessory.ts`: Boiler temperature, burner status, modulation, gas consumption logging
 - `dhw-accessory.ts`: DHW temperature, operating modes (comfort/eco/off)
-- `heating-circuit-accessory.ts`: Heating circuits, temperature programs, holiday modes
+- `heating-circuit-accessory.ts`: Heating circuits, flow temperature, temperature programs, holiday modes
+- `energy-accessory.ts`: PV production, battery storage, wallbox/EV charger (auto-detected, silently skipped if not present)
+- `history-logger.ts`: CSV logging to `viessmann-history.csv`, FakeGato Eve history entries
 
 #### Benefits
 
@@ -967,7 +1087,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.4",
+    "plugin_version": "2.0.29",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -978,7 +1098,11 @@ When reporting issues, include:
     "rate_limit_status": "OK",
     "authentication_method": "auto",
     "custom_names_used": true,
-    "force_service_recreation": false
+    "force_service_recreation": false,
+    "csv_logging_active": true,
+    "csv_header_version": "v2.0.28",
+    "energy_accessory_present": false,
+    "nominal_power_kw": 24
 }
 ```
 
@@ -1003,8 +1127,9 @@ sudo systemctl restart homebridge
 
 - [ ] ViCare account created and heating system registered
 - [ ] API credentials obtained from developer portal
-- [ ] Plugin installed via Homebridge Config UI X
+- [ ] Plugin installed via Homebridge Config UI X or `sudo npm install --prefix /usr/local homebridge-viessmann-vicare`
 - [ ] Basic configuration completed (Client ID, username, password)
+- [ ] `nominalPowerKw` set to your boiler's nominal output (default: 24 kW)
 - [ ] 🌍 Custom names configured (optional but recommended for non-English users)
 - [ ] Rate limiting protection enabled
 - [ ] Caching enabled with default settings
@@ -1013,11 +1138,16 @@ sudo systemctl restart homebridge
 - [ ] HomeKit testing completed with custom names verified
 - [ ] Force service recreation disabled for production use
 - [ ] Debug logging disabled for production use
+- [ ] CSV history logging verified (`tail -5 /var/lib/homebridge/viessmann-history.csv`)
+- [ ] CSV header updated if upgrading from v2.0.25 or earlier (see step 7)
+- [ ] HTML report generated and verified
+- [ ] Automated report script configured (optional)
 - [ ] Performance monitoring configured
 
-**Estimated setup time**: 
+**Estimated setup time**:
 - **Basic setup**: 15-30 minutes for new users
 - **With custom names**: Add 5-10 minutes for localization
+- **With report automation**: Add 5 minutes for crontab setup
 - **Experienced users**: 5-10 minutes total
 
 **Need help?** Visit our [GitHub repository](https://github.com/diegoweb100/homebridge-viessmann-vicare) for support and updates.
