@@ -1008,9 +1008,16 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
-### [2.0.33] - 2026-03-10
+### [2.0.34] - 2026-03-10
 #### Fixed
 - **Schedule bands wrong position** — band X positions were calculated using string comparison (`l >= "10/03 06:00"`) which matched label indices incorrectly. Replaced with numeric minutes-since-midnight comparison (`dd*1440 + HH*60 + MM`) so bands align precisely to the actual schedule times on the overview chart.
+
+### [2.0.34] - 2026-03-10
+#### Fixed
+- **Schedule bands overlay removed** — Canvas-based overlay approach caused all charts to break across multiple attempts. Replaced entirely with a pure HTML/CSS horizontal bar below the overview chart.
+
+#### Added
+- **Heating schedule bar** — A pure HTML/CSS bar under the overview chart shows the full 24h schedule split into colored segments: 🟢 Normal, ⬜ Reduced, 🟠 Comfort, 🔴 Off. Computed server-side at report generation time, zero JavaScript, zero Chart.js interference. Tooltip on hover shows mode and duration in hours.
 
 ### [2.0.32] - 2026-03-10
 #### Fixed

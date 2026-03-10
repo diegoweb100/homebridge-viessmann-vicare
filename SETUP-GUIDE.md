@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.33
+# Complete Setup Guide - v2.0.34
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.33 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.34 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
 
 ## Prerequisites
 
@@ -1115,7 +1115,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.32",
+    "plugin_version": "2.0.34",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",

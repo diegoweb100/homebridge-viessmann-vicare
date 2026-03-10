@@ -170,6 +170,61 @@ function schedBands() {
 const scheduleToday = todayScheduleText();
 const schedBandData = schedBands();
 
+// --- Schedule bar HTML (pre-computed server-side, injected as static HTML) ---
+function buildScheduleBarHtml() {
+  if (!heatingSchedule?.entries) return '';
+  const COLORS = { normal:'#4caf50', comfort:'#ff9800', reduced:'#90a4ae', off:'#ef5350' };
+  const DAYS = ['sun','mon','tue','wed','thu','fri','sat'];
+  const entries = heatingSchedule.entries;
+  const totalMins = 24 * 60;
+
+  // Get unique days present in the report (from ovLabels)
+  const daySet = [...new Set(ovLabels.map(l => {
+    const dp = l.split(' ')[0].split('/'); // [dd, MM]
+    return dp[1] + '-' + dp[0]; // YYYY-MM format compatible
+  }))];
+
+  let segments = [];
+  for (const ds of daySet) {
+    const [mo, dd] = ds.split('-');
+    const dt = new Date(new Date().getFullYear(), parseInt(mo)-1, parseInt(dd));
+    const dayKey = DAYS[dt.getDay()];
+    const slots = [...(entries[dayKey] || [])].sort((a, b) => {
+      const am = parseInt(a.start)*60 + parseInt(a.start.split(':')[1]);
+      const bm = parseInt(b.start)*60 + parseInt(b.start.split(':')[1]);
+      return am - bm;
+    });
+    let prev = 0;
+    for (const s of slots) {
+      const sm = parseInt(s.start.split(':')[0])*60 + parseInt(s.start.split(':')[1]);
+      const em = parseInt(s.end.split(':')[0])*60   + parseInt(s.end.split(':')[1]);
+      if (sm > prev) segments.push({ mode:'reduced', mins: sm - prev });
+      segments.push({ mode: s.mode, mins: em - sm });
+      prev = em;
+    }
+    if (prev < totalMins) segments.push({ mode:'reduced', mins: totalMins - prev });
+  }
+
+  const totalSegMins = segments.reduce((a, b) => a + b.mins, 0);
+  const bars = segments.map(s => {
+    const pct = (s.mins / totalSegMins * 100).toFixed(3);
+    const color = COLORS[s.mode] || COLORS.reduced;
+    const label = s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
+    const hrs = Math.round(s.mins / 60 * 10) / 10;
+    return `<div title="${label} (${hrs}h)" style="width:${pct}%;background:${color};height:100%"></div>`;
+  }).join('');
+
+  const legend = Object.entries(COLORS).map(([mode, color]) =>
+    `<span style="font-size:10px;color:#888"><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:3px;vertical-align:middle"></span>${mode.charAt(0).toUpperCase()+mode.slice(1)}</span>`
+  ).join('<span style="margin:0 8px"></span>');
+
+  return `<div style="margin-top:6px">
+    <div style="font-size:11px;color:#888;margin-bottom:3px">Heating schedule</div>
+    <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;width:100%">${bars}</div>
+    <div style="display:flex;gap:12px;margin-top:4px;flex-wrap:wrap">${legend}</div>
+  </div>`;
+}
+
 // --- Heat demand: avg modulation × nominal power ---
 const NOMINAL_KW = typeof process.env.NOMINAL_KW !== 'undefined' ? parseFloat(process.env.NOMINAL_KW) : 24;
 const activeBurnerRows = boilerRows.filter(r => r.burner_active === 'true' && toNum(r.modulation) > 0);
@@ -284,6 +339,7 @@ function lookupBurner(arr, ts) {
 }
 
 const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; });
+const scheduleBarHtml = buildScheduleBarHtml();
 const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp'));
 const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
 const ovFlow     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'flow_temp'));
@@ -350,6 +406,8 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 <div class="box">
   <h2>Overview</h2>
   <div class="ch-overview"><canvas id="cOverview"></canvas></div>
+  ${scheduleBarHtml}
+
   <p class="note">Left axis: temperatures (°C) — Right axis: modulation, burner & outdoor humidity (% / 0–100)</p>
 </div>
 
@@ -463,52 +521,6 @@ function mk(id,labels,datasets,yLbl){
     }
     }});
 
-  // Schedule bands overlay — draw after chart renders
-  ${schedBandData.length ? `
-  (function(){
-    const bands = ${JSON.stringify(schedBandData)};
-    const labels = ${JSON.stringify(ovLabels)};
-    const chart = Chart.getChart(document.getElementById('cOverview'));
-    if(!chart) return;
-    // Convert label "dd/MM HH:MM" to comparable minutes-since-midnight * date
-    function labelToMins(label) {
-      // label format: "10/03 15:48"
-      const m = label.match(/(\d+)\/(\d+) (\d+):(\d+)/);
-      if(!m) return 0;
-      return parseInt(m[2])*100000 + parseInt(m[1])*1440 + parseInt(m[3])*60 + parseInt(m[4]);
-    }
-    function bandToMins(dateStr, timeStr) {
-      // dateStr: "2026-03-10", timeStr: "17:00"
-      const [y,mo,d] = dateStr.split('-');
-      const [h,mi] = timeStr.split(':');
-      return parseInt(mo)*100000 + parseInt(d)*1440 + parseInt(h)*60 + parseInt(mi);
-    }
-    Chart.register({
-      id: 'schedBands',
-      beforeDraw(ch) {
-        const {ctx, chartArea:{left,right,top,bottom}, scales:{x}} = ch;
-        if(!x) return;
-        ctx.save();
-        bands.forEach(b => {
-          const m0 = bandToMins(b.date, b.start);
-          const m1 = bandToMins(b.date, b.end);
-          // find label indices by numeric time comparison
-          let i0 = labels.findIndex(l => labelToMins(l) >= m0);
-          let i1 = labels.findIndex(l => labelToMins(l) >= m1);
-          if(i0 < 0) return; // band entirely before data range
-          if(i1 < 0) i1 = labels.length - 1;
-          const x0 = x.getPixelForValue(i0);
-          const x1 = x.getPixelForValue(i1);
-          if(x1 < left || x0 > right) return;
-          ctx.fillStyle = b.mode === 'normal' ? 'rgba(78,154,241,0.10)' : b.mode === 'comfort' ? 'rgba(255,152,0,0.12)' : 'rgba(180,180,180,0.06)';
-          ctx.fillRect(Math.max(x0,left), top, Math.min(x1,right)-Math.max(x0,left), bottom-top);
-        });
-        ctx.restore();
-      }
-    });
-    chart.update();
-  })();
-  ` : ''}
 })();
 ${boilerRows.length>=2?`
 mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulation (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
