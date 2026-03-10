@@ -63,7 +63,7 @@ export class ViessmannDHWAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', 'ACS');
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', 'ACS', installation?.id);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();

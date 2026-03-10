@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.34
+# Complete Setup Guide - v2.0.35
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.34 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.35 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
 
 ## Prerequisites
 
@@ -297,12 +297,18 @@ Starting from v2.0.26, the plugin automatically logs heating data to a CSV file 
 | `battery_level`, `battery_charging_w` | Energy | Battery state (if available) |
 | `wallbox_charging`, `wallbox_power_w` | Energy | Wallbox state (if available) |
 
-CSV file location: `/var/lib/homebridge/viessmann-history.csv`
+CSV files location: `/var/lib/homebridge/viessmann-history-<installationId>.csv` (one file per installation)
 
-> ⚠️ **After upgrading from v2.0.25 or earlier**: the CSV header needs to be updated manually since the file already exists. Run:
+> ⚠️ **Upgrading from v2.0.34 or earlier**: rename your existing files to include the installation ID (v2.0.35+):
 > ```bash
-> cp /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history.csv.bak
-> sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history.csv
+> mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-2045571.csv
+> mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-2045571.json
+> ```
+> Replace `2045571` with your actual installation ID (visible in Homebridge logs on startup).
+>
+> ⚠️ **Upgrading from v2.0.25 or earlier**: also update the CSV header:
+> ```bash
+> sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history-2045571.csv
 > ```
 
 #### **Heating schedule file (v2.0.31+)**
@@ -310,7 +316,7 @@ CSV file location: `/var/lib/homebridge/viessmann-history.csv`
 Starting from v2.0.31, the plugin automatically saves the weekly heating schedule to a JSON file after every API refresh:
 
 ```
-/var/lib/homebridge/viessmann-schedule.json
+/var/lib/homebridge/viessmann-schedule-<installationId>.json
 ```
 
 This file is read by the HTML report generator to:
@@ -336,14 +342,14 @@ The file is created automatically after the first Homebridge restart — no manu
 #### **Generate HTML report**
 
 ```bash
-# Last 7 days (default)
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
+# Last 7 days (default) — replace 2045571 with your installation ID
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571
 
 # Last 30 days
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 30
 
 # Custom output path
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.html
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 7 --out /tmp/report.html
 ```
 
 **Copy to Mac and open in browser**:
@@ -360,6 +366,11 @@ The report includes:
 - **DHW chart** — temperature vs setpoint over time
 - **Program distribution** — bar chart of normal/reduced/comfort usage %
 
+
+**Preview:**
+
+![Viessmann Report Full Preview](https://raw.githubusercontent.com/diegoweb100/homebridge-viessmann-vicare/main/docs/report_preview_full.png)
+
 #### **Automated email report via crontab**
 
 Create `/home/pi/Scripts/viessmann-report.sh`:
@@ -369,6 +380,7 @@ Create `/home/pi/Scripts/viessmann-report.sh`:
 REPORT="/tmp/report.html"
 DAYS="${1:-30}"
 EMAIL="$2"
+INSTALLATION_ID="${3:-2045571}"  # your installation ID
 LOG="/var/log/viessmann-report.log"
 
 if [ -z "$EMAIL" ]; then
@@ -379,7 +391,7 @@ fi
 echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
 
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
-  --days "$DAYS" --out "$REPORT" >> "$LOG" 2>&1
+  --installation "${INSTALLATION_ID}" --days "$DAYS" --out "$REPORT" >> "$LOG" 2>&1
 
 if [ ! -f "$REPORT" ]; then
   echo "[$(date)] ERROR: report.html not found." >> "$LOG"
@@ -1115,7 +1127,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.34",
+    "plugin_version": "2.0.35",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",

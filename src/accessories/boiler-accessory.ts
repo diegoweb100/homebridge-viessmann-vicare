@@ -77,7 +77,7 @@ export class ViessmannBoilerAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Boiler');
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Boiler', installation?.id);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();

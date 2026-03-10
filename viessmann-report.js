@@ -5,12 +5,16 @@
  * with Chart.js graphs (no extra dependencies — Chart.js loaded via CDN).
  *
  * Usage:
- *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
- *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7
- *   node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30 --out /tmp/report.html
+ *   node viessmann-report.js --installation 2045571
+ *   node viessmann-report.js --installation 2045571 --days 7
+ *   node viessmann-report.js --installation 2045571 --days 30 --out /tmp/report.html
+ *
+ * --installation <ID>  Installation ID (creates viessmann-history-<ID>.csv)
+ * --days <N>           Number of days to include (default: 7)
+ * --path <dir>         Homebridge storage path (default: /var/lib/homebridge)
+ * --out <file>         Output HTML file path
  *
  * No extra dependencies needed — open the generated HTML in any browser.
- * CSV file: /var/lib/homebridge/viessmann-history.csv
  */
 
 'use strict';
@@ -21,12 +25,19 @@ const args = process.argv.slice(2);
 const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i+1] ? args[i+1] : def; };
 const DAYS = parseInt(getArg('--days', '7'), 10);
 const HB_PATH = getArg('--path', '/var/lib/homebridge');
-const CSV_FILE = path.join(HB_PATH, 'viessmann-history.csv');
+const INSTALLATION_ID = getArg('--installation', '');
+const csvSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
+const CSV_FILE = path.join(HB_PATH, `viessmann-history${csvSuffix}.csv`);
+const SCHED_FILE_PATH = INSTALLATION_ID
+  ? path.join(HB_PATH, `viessmann-schedule-${INSTALLATION_ID}.json`)
+  : path.join(HB_PATH, 'viessmann-schedule.json');
 const today = new Date().toISOString().slice(0, 10);
-const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report-${today}.html`));
+const outSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
+const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report${outSuffix}-${today}.html`));
 
 if (!fs.existsSync(CSV_FILE)) {
-  console.error(`ERROR: CSV not found: ${CSV_FILE}\nStart Homebridge with the plugin to begin collecting data.`);
+  const hint = INSTALLATION_ID ? '' : '\nTip: use --installation <ID> to specify an installation (e.g. --installation 2045571)';
+  console.error(`ERROR: CSV not found: ${CSV_FILE}${hint}\nStart Homebridge with the plugin to begin collecting data.`);
   process.exit(1);
 }
 
@@ -113,7 +124,7 @@ const gasLineTotal    = gasDays.map(d => +(gasPerDay[d].heating + gasPerDay[d].d
 const hasGasChart     = gasDays.length >= 1;
 
 // --- Heating schedule ---
-const SCHED_FILE = path.join(HB_PATH, 'viessmann-schedule.json');
+const SCHED_FILE = SCHED_FILE_PATH;
 let heatingSchedule = null;
 try {
   if (fs.existsSync(SCHED_FILE)) {

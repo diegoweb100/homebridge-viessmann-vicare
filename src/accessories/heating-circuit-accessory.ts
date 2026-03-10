@@ -97,7 +97,7 @@ export class ViessmannHeatingCircuitAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `HC${circuitNumber}`);
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `HC${circuitNumber}`, installation?.id);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -1853,6 +1853,18 @@ private setupTemperatureProgramServices() {
     const scheduleFeatureData = features.find(f => f.feature === `${circuitPrefixForSchedule}.heating.schedule`);
     if (scheduleFeatureData?.properties?.entries?.value) {
       this.heatingSchedule = scheduleFeatureData.properties.entries.value;
+      // Persist schedule to JSON for HTML report
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        const basePath2 = this.platform.api?.user?.storagePath?.() || '/var/lib/homebridge';
+        const schedPath = require('path').join(basePath2, `viessmann-schedule-${this.installation.id}.json`);
+        fs.writeFileSync(schedPath, JSON.stringify({
+          circuit: this.circuitNumber,
+          updatedAt: new Date().toISOString(),
+          entries: this.heatingSchedule,
+        }, null, 2), 'utf8');
+      } catch (_) { /* non-critical */ }
     }
     this.scheduleNextProgramBoundary();
 

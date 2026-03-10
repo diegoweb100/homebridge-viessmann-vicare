@@ -109,6 +109,7 @@ export class ViessmannEnergyAccessory {
       accessory,
       'energy',
       'energy',
+      installation?.id,
     );
 
     // Discover capabilities and build services

@@ -74,12 +74,12 @@ export class ViessmannHistoryLogger {
     private readonly accessory: any,
     private readonly historyType: HistoryType,
     logName: string,
+    installationId?: number,
   ) {
     this.logName = logName;
-    this.csvPath = path.join(
-      platform.api?.user?.storagePath?.() || '/var/lib/homebridge',
-      'viessmann-history.csv',
-    );
+    const basePath = platform.api?.user?.storagePath?.() || '/var/lib/homebridge';
+    const suffix = installationId ? `-${installationId}` : '';
+    this.csvPath = path.join(basePath, `viessmann-history${suffix}.csv`);
     this.initFakeGato();
   }
 
