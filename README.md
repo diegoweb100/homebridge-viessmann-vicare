@@ -265,15 +265,27 @@ No extra dependencies — Chart.js is loaded from CDN. Open the generated file i
 
 **Generate report**:
 ```bash
-# Last 7 days (default)
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js
+# Last 7 days — replace YOUR_INSTALLATION_ID with your actual ID (visible in Homebridge logs)
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID
+
+# With full system analysis (recommended — add your boiler's nominal kW from the ViCare app)
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --boilerKW 25 --designTemp -10
 
 # Last 30 days
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 30
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --days 30 --boilerKW 25 --designTemp -10
 
 # Custom output path
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --days 7 --out /tmp/report.html
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --days 7 --out /tmp/report.html
 ```
+
+| Parameter | Description | Default |
+|---|---|---|
+| `--installation <ID>` | Installation ID (required) | — |
+| `--days <N>` | Number of days to include | `7` |
+| `--boilerKW <kW>` | Boiler nominal power (enables kW analysis) | disabled |
+| `--designTemp <°C>` | Design outdoor temperature for peak load calc | `-7` |
+| `--path <dir>` | Homebridge storage path | `/var/lib/homebridge` |
+| `--out <file>` | Output HTML file path | auto-generated |
 
 **Copy to your Mac and open in browser**:
 ```bash
@@ -303,6 +315,9 @@ You can schedule the report to be generated and emailed automatically using a sh
 REPORT="/tmp/report.html"
 DAYS="${1:-30}"
 EMAIL="$2"
+INSTALLATION_ID="${3:-YOUR_INSTALLATION_ID}"
+BOILER_KW="${4:-0}"       # nominal boiler power in kW (e.g. 25) — 0 = disabled
+DESIGN_TEMP="${5:--7}"    # design outdoor temperature for peak load calculation
 LOG="/var/log/viessmann-report.log"
 
 if [ -z "$EMAIL" ]; then
@@ -313,7 +328,10 @@ fi
 echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
 
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
+  --installation "$INSTALLATION_ID" \
   --days "$DAYS" \
+  ${BOILER_KW:+--boilerKW "$BOILER_KW"} \
+  ${DESIGN_TEMP:+--designTemp "$DESIGN_TEMP"} \
   --out "$REPORT" >> "$LOG" 2>&1
 
 if [ ! -f "$REPORT" ]; then
@@ -340,12 +358,12 @@ crontab -e
 ```
 Add:
 ```
-0 8 1 * * /home/pi/Scripts/viessmann-report.sh 30 your@email.com
+0 8 1 * * /home/pi/Scripts/viessmann-report.sh 30 your@email.com YOUR_INSTALLATION_ID 25 -10
 ```
 
 Or weekly every Monday at 07:00:
 ```
-0 7 * * 1 /home/pi/Scripts/viessmann-report.sh 7 your@email.com
+0 7 * * 1 /home/pi/Scripts/viessmann-report.sh 7 your@email.com YOUR_INSTALLATION_ID 25 -10
 ```
 
 > **Note**: requires `mailutils` installed on the Pi (`sudo apt install mailutils`) and a working mail relay (e.g. Postfix with SMTP configured).
@@ -1005,6 +1023,20 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.36] - 2026-03-10
+#### Added
+- **Heating System Assistant** — new *System Analysis* section in the HTML report with deterministic diagnostics:
+  - **Heat demand** (kW): avg modulation × nominal power (requires `--boilerKW`)
+  - **House heat loss coefficient** (kW/°C): heat demand ÷ ΔT (room vs outdoor)
+  - **Estimated peak load** (kW): heat loss × (room setpoint − design temp, default −7°C)
+  - **House efficiency rating**: Excellent / Good / Average / Poor based on heat loss coefficient
+  - **Boiler sizing check**: warns if nominal power > 2× estimated peak load
+  - **Cycling diagnostics**: cycles/hour, short-cycling detection (avg < 5 min), excessive cycling (> 6/hr)
+  - **Flow temperature heuristic**: suggests lowering heating curve if flow > 55°C when outdoor > 5°C
+  - **Human-readable insight cards**: ✅ / ⚠️ / ℹ️ with actionable explanations
+- **New CLI parameters**: `--boilerKW <kW>` (nominal boiler power), `--designTemp <°C>` (design outdoor temp, default −7°C)
+- All kW-based calculations gracefully hidden if `--boilerKW` is not provided — report works for all users
+
 ### [2.0.35] - 2026-03-10
 #### Added
 - **Multi-installation support** — CSV and schedule files are now per-installation: `viessmann-history-<ID>.csv` and `viessmann-schedule-<ID>.json`. Each installation writes its own file, no data mixing.
@@ -1054,7 +1086,7 @@ mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-sch
 ### [2.0.28] - 2026-03-10
 #### Added
 - **Flow temperature logging** — `heating.circuits.N.sensors.temperature.supply` now read and logged to CSV as `flow_temp` column from HC0 accessory.
-- **HTML report** — interactive multi-chart report (`viessmann-report.js`) with overview chart, burner cycles, temperature history, condensing analysis, flow temp, gas consumption, and stat cards. Run with `node viessmann-report.js --days 7`.
+- **HTML report** — interactive multi-chart report (`viessmann-report.js`) with overview chart, burner cycles, temperature history, condensing analysis, flow temp, gas consumption, and stat cards. Run with `node viessmann-report.js --installation YOUR_INSTALLATION_ID --days 7`.
 - Condensing badge in report: shows % time in condensing mode (flow temp ≤ 57°C).
 - Cache statistics and custom names in report header.
 

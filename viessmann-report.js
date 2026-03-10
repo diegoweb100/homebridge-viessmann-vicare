@@ -261,6 +261,86 @@ const cycleCount      = cycles.length;
 const avgCycleDur     = cycleCount ? (cycles.reduce((a,b)=>a+b,0)/cycleCount).toFixed(0) : null;
 const shortestCycle   = cycleCount ? Math.min(...cycles).toFixed(0) : null;
 const shortCycleCls   = shortestCycle ? (parseFloat(shortestCycle) < 5 ? 'warn' : 'good') : 'neutral';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HEATING SYSTEM ASSISTANT
+// boilerNominalPowerKW: CLI param > env var > default 0 (kW-based cards hidden)
+// designOutdoorTemp:    CLI param > env var > default -7°C (Europe central)
+// ─────────────────────────────────────────────────────────────────────────────
+const BOILER_KW  = parseFloat(getArg('--boilerKW', process.env.BOILER_KW || '0'));
+const DESIGN_TEMP = parseFloat(getArg('--designTemp', process.env.DESIGN_TEMP || '-7'));
+const hasBoilerKW = BOILER_KW > 0;
+
+// Override avgHeatDemand with correct nominal power if provided
+const avgModActive = activeBurnerRows.length
+  ? activeBurnerRows.reduce((s,r) => s + toNum(r.modulation), 0) / activeBurnerRows.length
+  : null;
+const heatDemandKW = (hasBoilerKW && avgModActive !== null)
+  ? (BOILER_KW * avgModActive / 100).toFixed(1)
+  : null;
+
+// House heat loss coefficient  [kW/°C]
+const avgRoomNum    = avgRoom    ? parseFloat(avgRoom)    : null;
+const avgOutsideNum = avg(boilerRows, 'outside_temp') ? parseFloat(avg(boilerRows, 'outside_temp')) : null;
+const deltaT        = (avgRoomNum !== null && avgOutsideNum !== null) ? avgRoomNum - avgOutsideNum : null;
+const heatLossCoeff = (heatDemandKW !== null && deltaT !== null && deltaT > 0)
+  ? (parseFloat(heatDemandKW) / deltaT).toFixed(2)
+  : null;
+
+// House efficiency rating
+function houseEffRating(coeff) {
+  if (coeff === null) return null;
+  const c = parseFloat(coeff);
+  if (c < 0.25) return { label: 'Excellent', cls: 'good' };
+  if (c < 0.40) return { label: 'Good',      cls: 'good' };
+  if (c < 0.60) return { label: 'Average',   cls: 'warn' };
+  return             { label: 'Poor',        cls: 'bad'  };
+}
+const houseEff = houseEffRating(heatLossCoeff);
+
+// Estimated peak load at design temperature
+const peakLoadKW = (heatLossCoeff !== null && avgRoomNum !== null)
+  ? (parseFloat(heatLossCoeff) * (avgRoomNum - DESIGN_TEMP)).toFixed(1)
+  : null;
+
+// Boiler sizing check
+const boilerOversized = (hasBoilerKW && peakLoadKW !== null && BOILER_KW > parseFloat(peakLoadKW) * 2);
+
+// Cycle diagnostics
+const reportHours  = DAYS * 24;
+const cyclesPerHour = cycleCount && reportHours ? (cycleCount / reportHours).toFixed(2) : null;
+const avgCycleDurNum  = avgCycleDur ? parseFloat(avgCycleDur) : null;
+const shortCycling    = avgCycleDurNum !== null && avgCycleDurNum < 5;
+const excessiveCycling = cyclesPerHour !== null && parseFloat(cyclesPerHour) > 6;
+
+// Flow temp heuristic
+const avgFlowNum    = avgFlow ? parseFloat(avgFlow) : null;
+const avgOutNum     = avgOutsideNum;
+const highFlowTemp  = avgFlowNum !== null && avgOutNum !== null && avgFlowNum > 55 && avgOutNum > 5;
+
+// Inefficient operation: low modulation + short cycles
+const avgModNum = avgMod ? parseFloat(avgMod) : null;
+const inefficientOp = avgModNum !== null && avgCycleDurNum !== null && avgModNum < 25 && avgCycleDurNum < 6;
+
+// Build assistant insights
+const insights = [];
+if (shortCycling || excessiveCycling)
+  insights.push({ type:'warn', text: shortCycling
+    ? `Short cycling detected — avg cycle ${avgCycleDur} min (ideal > 10 min). Check system pressure, pump speed, or boiler minimum modulation setting.`
+    : `High cycling rate — ${cyclesPerHour} cycles/hour. Consider increasing heating curve or minimum burner runtime.` });
+if (inefficientOp)
+  insights.push({ type:'warn', text: `Boiler running at low modulation (avg ${avgMod}%) with short cycles. Consider lowering the heating curve to reduce cycling.` });
+if (highFlowTemp)
+  insights.push({ type:'warn', text: `Flow temperature (avg ${avgFlow}°C) is higher than necessary for current outdoor conditions (${avgOutsideNum?.toFixed(1)}°C). Lowering the heating curve improves condensing efficiency.` });
+if (boilerOversized)
+  insights.push({ type:'info', text: `Boiler nominal power (${BOILER_KW} kW) is more than twice the estimated peak load (~${peakLoadKW} kW). Oversizing is common for combi boilers but contributes to cycling.` });
+if (houseEff && (houseEff.label === 'Good' || houseEff.label === 'Excellent'))
+  insights.push({ type:'good', text: `Building thermal efficiency rated ${houseEff.label} (heat loss ${heatLossCoeff} kW/°C). Good insulation reduces heating demand.` });
+if (!hasBoilerKW)
+  insights.push({ type:'info', text: `Add --boilerKW <nominal_kW> to enable heat demand, peak load and house efficiency calculations (e.g. --boilerKW 19).` });
+if (insights.length === 0 && hasBoilerKW)
+  insights.push({ type:'good', text: 'No issues detected. System appears to be operating normally.' });
+
 // Histogram buckets: 0-5, 5-10, 10-20, 20-40, 40+
 const histBuckets = [
   { label:'0–5 min',  min:0,  max:5  },
@@ -459,6 +539,26 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
   ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
   ${flowVals.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cFlow"></canvas></div><p class="note">Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.</p>` : ''}
+</div>
+
+<div class="box">
+  <h2>🔍 System Analysis</h2>
+  <div class="grid">
+    ${heatDemandKW ? sc('Avg heat demand', heatDemandKW, ' kW') : ''}
+    ${heatLossCoeff ? sc('Heat loss coeff.', heatLossCoeff, ' kW/°C') : ''}
+    ${peakLoadKW ? sc('Est. peak load', peakLoadKW, ' kW', '<span style=\"font-size:10px;color:#888\">at '+DESIGN_TEMP+'°C outdoor</span>') : ''}
+    ${hasBoilerKW ? sc('Boiler nominal', BOILER_KW, ' kW', boilerOversized ? badge('warn','Oversized') : badge('good','OK')) : ''}
+    ${houseEff ? sc('House efficiency', houseEff.label, '', badge(houseEff.cls, heatLossCoeff+' kW/°C')) : ''}
+    ${cyclesPerHour ? sc('Cycles/hour', cyclesPerHour, '', (excessiveCycling ? badge('warn','High') : badge('good','OK'))) : ''}
+  </div>
+  <div style="margin-top:16px">
+    ${insights.map(i => {
+      const icon = i.type==='good' ? '✅' : i.type==='warn' ? '⚠️' : 'ℹ️';
+      const bg   = i.type==='good' ? '#f1f8f1' : i.type==='warn' ? '#fff8e1' : '#e8f4fd';
+      const br   = i.type==='good' ? '#a5d6a7' : i.type==='warn' ? '#ffe082' : '#90caf9';
+      return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;margin-bottom:8px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+i.text+'</span></div>';
+    }).join('')}
+  </div>
 </div>
 
 <div class="box">
