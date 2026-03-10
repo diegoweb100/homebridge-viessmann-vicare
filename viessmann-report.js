@@ -470,10 +470,18 @@ function mk(id,labels,datasets,yLbl){
     const labels = ${JSON.stringify(ovLabels)};
     const chart = Chart.getChart(document.getElementById('cOverview'));
     if(!chart) return;
-    // Map band start/end (HH:MM) to label index using dd/MM HH:MM format
-    function labelForBand(dateStr, timeStr) {
-      const [y,m,d] = dateStr.split('-');
-      return d+'/'+m+' '+timeStr;
+    // Convert label "dd/MM HH:MM" to comparable minutes-since-midnight * date
+    function labelToMins(label) {
+      // label format: "10/03 15:48"
+      const m = label.match(/(\d+)\/(\d+) (\d+):(\d+)/);
+      if(!m) return 0;
+      return parseInt(m[2])*100000 + parseInt(m[1])*1440 + parseInt(m[3])*60 + parseInt(m[4]);
+    }
+    function bandToMins(dateStr, timeStr) {
+      // dateStr: "2026-03-10", timeStr: "17:00"
+      const [y,mo,d] = dateStr.split('-');
+      const [h,mi] = timeStr.split(':');
+      return parseInt(mo)*100000 + parseInt(d)*1440 + parseInt(h)*60 + parseInt(mi);
     }
     Chart.register({
       id: 'schedBands',
@@ -482,17 +490,17 @@ function mk(id,labels,datasets,yLbl){
         if(!x) return;
         ctx.save();
         bands.forEach(b => {
-          const l0 = labelForBand(b.date, b.start);
-          const l1 = labelForBand(b.date, b.end);
-          // find nearest label indices
-          let i0 = labels.findIndex(l => l >= l0);
-          let i1 = labels.findIndex(l => l >= l1);
-          if(i0 < 0) i0 = 0;
+          const m0 = bandToMins(b.date, b.start);
+          const m1 = bandToMins(b.date, b.end);
+          // find label indices by numeric time comparison
+          let i0 = labels.findIndex(l => labelToMins(l) >= m0);
+          let i1 = labels.findIndex(l => labelToMins(l) >= m1);
+          if(i0 < 0) return; // band entirely before data range
           if(i1 < 0) i1 = labels.length - 1;
           const x0 = x.getPixelForValue(i0);
           const x1 = x.getPixelForValue(i1);
           if(x1 < left || x0 > right) return;
-          ctx.fillStyle = b.mode === 'normal' ? 'rgba(78,154,241,0.08)' : b.mode === 'comfort' ? 'rgba(255,152,0,0.1)' : 'rgba(180,180,180,0.06)';
+          ctx.fillStyle = b.mode === 'normal' ? 'rgba(78,154,241,0.10)' : b.mode === 'comfort' ? 'rgba(255,152,0,0.12)' : 'rgba(180,180,180,0.06)';
           ctx.fillRect(Math.max(x0,left), top, Math.min(x1,right)-Math.max(x0,left), bottom-top);
         });
         ctx.restore();

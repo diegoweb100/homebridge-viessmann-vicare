@@ -1008,6 +1008,10 @@ For issues and questions:
 - 🔧 `scheduleStateRefresh()` replaced by `scheduleCommandConfirmation()` in all three accessories.
 - 🔧 Applied uniformly to `dhw-accessory`, `boiler-accessory`, and `heating-circuit-accessory`.
 
+### [2.0.33] - 2026-03-10
+#### Fixed
+- **Schedule bands wrong position** — band X positions were calculated using string comparison (`l >= "10/03 06:00"`) which matched label indices incorrectly. Replaced with numeric minutes-since-midnight comparison (`dd*1440 + HH*60 + MM`) so bands align precisely to the actual schedule times on the overview chart.
+
 ### [2.0.32] - 2026-03-10
 #### Fixed
 - **All charts broken in v2.0.31** — the schedule bands overlay used `plugins:[{...}]` at the Chart.js root level which is invalid syntax in Chart.js 3/4 and caused all charts to fail silently. Replaced with `Chart.register()` + `Chart.getChart()` approach called after chart instantiation. Also fixed band positioning to use label index lookup instead of ISO string matching (labels are formatted as `dd/MM HH:MM`).
