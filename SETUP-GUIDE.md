@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.36
+# Complete Setup Guide - v2.0.37
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.36 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.37 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
 
 ## Prerequisites
 
@@ -299,7 +299,7 @@ Starting from v2.0.26, the plugin automatically logs heating data to a CSV file 
 
 CSV files location: `/var/lib/homebridge/viessmann-history-<installationId>.csv` (one file per installation)
 
-> ⚠️ **Upgrading from v2.0.34 or earlier**: rename your existing files to include the installation ID (v2.0.36+):
+> ⚠️ **Upgrading from v2.0.34 or earlier**: rename your existing files to include the installation ID (v2.0.37+):
 > ```bash
 > mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-2045571.csv
 > mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-2045571.json
@@ -342,15 +342,29 @@ The file is created automatically after the first Homebridge restart — no manu
 #### **Generate HTML report**
 
 ```bash
-# Last 7 days (default) — replace 2045571 with your installation ID
+# Last 7 days — basic (cycling, flow temp, schedule analysis)
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571
 
+# Full analysis — recommended (add your boiler's nominal kW from the ViCare app)
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --boilerKW 25 --designTemp -10
+
 # Last 30 days
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 30
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 30 --boilerKW 25 --designTemp -10
 
 # Custom output path
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 7 --out /tmp/report.html
 ```
+
+| Parameter | Description | Default |
+|---|---|---|
+| `--installation <ID>` | Installation ID (required) | — |
+| `--days <N>` | Number of days | `7` |
+| `--boilerKW <kW>` | Boiler nominal power — enables heat demand, efficiency, peak load, scatter plot | disabled |
+| `--designTemp <°C>` | Design outdoor temp for peak load calculation | `-7` |
+| `--path <dir>` | Homebridge storage path | `/var/lib/homebridge` |
+| `--out <file>` | Output HTML file | auto-generated |
+
+> 💡 Find your boiler's nominal kW in the ViCare app under **Caldaia → Nome del prodotto** (e.g. Vitodens 100-W B1KF-25 = 25 kW max). For design temperature, use -7°C for Central Europe, -10°C for Northern Italy/Alpine areas.
 
 **Copy to Mac and open in browser**:
 ```bash
@@ -359,7 +373,8 @@ scp user@raspberry:/tmp/report.html ~/Desktop/viessmann-report.html && open ~/De
 
 The report includes:
 - **Overview chart** — all series on unified timeline (room temp, flow temp, setpoint, DHW, outdoor, modulation, burner)
-- **Boiler stat cards** — starts/hour efficiency, avg heat demand (kW), gas heating + DHW today (m³), condensing mode badge, burner cycle stats
+- **Boiler stat cards** — starts/hour efficiency, avg heat demand (kW), gas consumption, condensing mode badge, burner cycle stats
+- **🔍 System Analysis** — cycling severity score, comfort stability, estimated efficiency, heating curve behaviour, heat demand vs outdoor scatter plot with balance point, human-readable insight cards (requires `--boilerKW` for kW-based metrics)
 - **Daily gas consumption chart** — stacked bar (heating + DHW) with total line overlay, aggregated per calendar day
 - **Cycle duration histogram** — distribution of burner ON durations, highlights short-cycling
 - **Flow temperature chart** — with 55°C condensing threshold line
@@ -381,6 +396,8 @@ REPORT="/tmp/report.html"
 DAYS="${1:-30}"
 EMAIL="$2"
 INSTALLATION_ID="${3:-2045571}"  # your installation ID
+BOILER_KW="${4:-0}"       # nominal boiler power in kW (e.g. 25) — 0 = disabled
+DESIGN_TEMP="${5:--7}"    # design outdoor temperature for peak load calculation
 LOG="/var/log/viessmann-report.log"
 
 if [ -z "$EMAIL" ]; then
@@ -390,8 +407,12 @@ fi
 
 echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
 
+EXTRA_ARGS=""
+[ "$BOILER_KW" != "0" ] && EXTRA_ARGS="$EXTRA_ARGS --boilerKW $BOILER_KW"
+[ -n "$DESIGN_TEMP" ]   && EXTRA_ARGS="$EXTRA_ARGS --designTemp $DESIGN_TEMP"
+
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
-  --installation "${INSTALLATION_ID}" --days "$DAYS" --out "$REPORT" >> "$LOG" 2>&1
+  --installation "${INSTALLATION_ID}" --days "$DAYS" $EXTRA_ARGS --out "$REPORT" >> "$LOG" 2>&1
 
 if [ ! -f "$REPORT" ]; then
   echo "[$(date)] ERROR: report.html not found." >> "$LOG"
@@ -1127,7 +1148,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.36",
+    "plugin_version": "2.0.37",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",

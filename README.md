@@ -293,12 +293,19 @@ scp user@raspberry:/tmp/report.html ~/Desktop/viessmann-report.html && open ~/De
 ```
 
 The report includes:
-- **Overview chart**: all series on a unified timeline with dual Y axis — room temp, flow temp, setpoint, DHW temp, outside temp, modulation (%), burner ON/OFF, and outside humidity (if sensor is present). All temperature series are linearly interpolated for continuous lines even when accessory refresh cycles are offset.
-- **Stat cards**: burner efficiency (starts/hour), avg/max modulation, avg heat demand (kW), gas consumption heating + DHW (m³/day), condensing mode badge, burner cycle count, avg and shortest cycle duration
-- **Cycle histogram**: distribution of burner ON durations across 5 buckets — highlights short-cycling at a glance
-- **Flow temperature chart**: dedicated chart with 55°C condensing threshold line
-- **Detail charts**: modulation over time, burner ON/OFF stepped, room temp vs setpoint, DHW temp vs setpoint
-- **Program distribution** bars (normal/reduced/comfort %)
+- **Overview chart**: all series on a unified timeline — room temp, flow temp, setpoint, DHW temp, outside temp, modulation (%), burner ON/OFF, humidity. Linearly interpolated for continuous lines.
+- **Heating schedule bar**: HTML/CSS bar showing the programmed weekly schedule (normal/reduced/comfort/off segments)
+- **Boiler stat cards**: starts/hour, avg/max modulation, heat demand (kW), gas consumption, condensing badge, cycle count and durations
+- **Daily gas consumption chart**: stacked bar (heating + DHW) with daily total line
+- **Cycle duration histogram**: distribution across 5 buckets — highlights short-cycling at a glance
+- **🔍 System Analysis section** (v2.0.36+):
+  - Heat demand (kW), house heat loss coefficient (kW/°C), estimated peak load, house efficiency rating
+  - Boiler sizing check, cycling severity score, comfort stability (room temp stddev)
+  - Estimated system efficiency (%), heating curve behaviour (weather-compensated vs fixed flow)
+  - **Heat Demand vs Outdoor Temperature** scatter plot with regression line and balance point
+  - Human-readable insight cards (✅ / ⚠️ / ℹ️) with actionable diagnostics
+- **Heating Circuit (HC0)**: room temp vs setpoint chart, flow temperature chart, program distribution
+- **DHW chart**: temperature vs setpoint over time
 - Works offline once downloaded — no server required, all data is embedded
 
 ---
@@ -327,11 +334,14 @@ fi
 
 echo "[$(date)] Generating report for last $DAYS days..." >> "$LOG"
 
+EXTRA_ARGS=""
+[ "$BOILER_KW" != "0" ] && EXTRA_ARGS="$EXTRA_ARGS --boilerKW $BOILER_KW"
+[ -n "$DESIGN_TEMP" ]   && EXTRA_ARGS="$EXTRA_ARGS --designTemp $DESIGN_TEMP"
+
 node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js \
   --installation "$INSTALLATION_ID" \
   --days "$DAYS" \
-  ${BOILER_KW:+--boilerKW "$BOILER_KW"} \
-  ${DESIGN_TEMP:+--designTemp "$DESIGN_TEMP"} \
+  $EXTRA_ARGS \
   --out "$REPORT" >> "$LOG" 2>&1
 
 if [ ! -f "$REPORT" ]; then
@@ -1022,6 +1032,15 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.37] - 2026-03-10
+#### Added
+- **Comfort stability** — standard deviation of room temperature samples, rated Excellent (<0.2°C) / Good (<0.5°C) / Unstable
+- **Cycling severity score** — composite score (cycles/hour × 10/avgDuration): Excellent <1, Acceptable 1–3, Severe >3
+- **Minimum modulation check** — detects boiler operating near minimum modulation with short cycles (possible oversizing)
+- **Estimated system efficiency** — heatProduced(kWh) ÷ gasUsed(m³ × 10.6 kWh/m³), shown as % (requires `--boilerKW` + gas data)
+- **Heating curve behaviour** — Pearson correlation between outdoor temp and flow temp: weather-compensated / fixed flow / misconfigured
+- **Heat Demand vs Outdoor Temperature scatter plot** — each point is one burner-active sample; red regression line shows heating curve slope and estimated balance point (outdoor temp where heating demand = 0)
 
 ### [2.0.36] - 2026-03-10
 #### Added

@@ -341,6 +341,147 @@ if (!hasBoilerKW)
 if (insights.length === 0 && hasBoilerKW)
   insights.push({ type:'good', text: 'No issues detected. System appears to be operating normally.' });
 
+// ── Comfort stability: stddev of room temperature ────────────────────────────
+const roomTemps = hcRows.map(r => parseFloat(r.room_temp)).filter(v => !isNaN(v) && v > 0);
+let comfortStddev = null, comfortRating = null, comfortCls = 'neutral';
+if (roomTemps.length >= 10) {
+  const mean = roomTemps.reduce((a,b) => a+b, 0) / roomTemps.length;
+  comfortStddev = Math.sqrt(roomTemps.reduce((a,v) => a + (v-mean)**2, 0) / roomTemps.length).toFixed(2);
+  const sd = parseFloat(comfortStddev);
+  if (sd < 0.2)      { comfortRating = 'Excellent'; comfortCls = 'good'; }
+  else if (sd < 0.5) { comfortRating = 'Good';      comfortCls = 'good'; }
+  else               { comfortRating = 'Unstable';  comfortCls = 'warn'; }
+}
+
+// ── Cycling severity score ───────────────────────────────────────────────────
+// score = cyclesPerHour × (10 / avgCycleDuration)  →  <1 excellent, 1-3 ok, >3 severe
+let cyclingScore = null, cyclingSeverity = null, cyclingSeverityCls = 'neutral';
+if (cyclesPerHour && avgCycleDurNum && avgCycleDurNum > 0) {
+  cyclingScore = (parseFloat(cyclesPerHour) * (10 / avgCycleDurNum)).toFixed(2);
+  const sc2 = parseFloat(cyclingScore);
+  if (sc2 < 1)      { cyclingSeverity = 'Excellent'; cyclingSeverityCls = 'good'; }
+  else if (sc2 < 3) { cyclingSeverity = 'Acceptable'; cyclingSeverityCls = 'warn'; }
+  else              { cyclingSeverity = 'Severe';     cyclingSeverityCls = 'bad';  }
+  if (sc2 >= 3)
+    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} (severe). Boiler is cycling too frequently and too briefly — check minimum burner runtime setting or hydraulic balancing.` });
+}
+
+// ── Min modulation check ─────────────────────────────────────────────────────
+const minModCheck = (avgModNum !== null && avgModNum < 20 && avgCycleDurNum !== null && avgCycleDurNum < 10);
+if (minModCheck)
+  insights.push({ type:'warn', text: `Boiler frequently operating near minimum modulation (avg ${avgMod}%). Combined with short cycles, this suggests oversizing or flow temperature set too high.` });
+
+// ── Gas efficiency: estimated kWh produced per m³ gas ───────────────────────
+// heatProduced (kWh) = avgHeatDemand(kW) × burnerRuntime(h)
+// gasUsed (m³) from latest daily reading × days
+// 1 m³ natural gas ≈ 10.6 kWh (lower heating value)
+const GAS_KWH_PER_M3 = 10.6;
+let gasEfficiencyPct = null;
+if (hasBoilerKW && heatDemandKW && burnerHours && hasGasData) {
+  // total gas used in period: sum of daily maxes
+  const totalGasM3 = gasDays.reduce((sum, d) => sum + gasPerDay[d].heating + gasPerDay[d].dhw, 0);
+  // burner runtime in period (hours): use last - first burner_hours from boilerRows
+  const firstBH = parseFloat(boilerRows[0]?.burner_hours || 0);
+  const lastBH  = parseFloat(lb.burner_hours || 0);
+  const runtimeH = lastBH - firstBH;
+  if (totalGasM3 > 0 && runtimeH > 0) {
+    const heatProduced = parseFloat(heatDemandKW) * runtimeH;
+    const gasInputKwh  = totalGasM3 * GAS_KWH_PER_M3;
+    gasEfficiencyPct   = Math.min(110, (heatProduced / gasInputKwh * 100)).toFixed(0);
+  }
+}
+
+// ── Heating curve behaviour: correlation flow vs outdoor ─────────────────────
+// Pearson correlation: negative = correct curve, ~0 = fixed flow, positive = misconfigured
+let heatCurveCorr = null, heatCurveBehaviour = null, heatCurveCls = 'neutral';
+const corrPairs = hcRows
+  .map(r => {
+    const flow = parseFloat(r.flow_temp);
+    const out  = parseFloat(r.outside_temp) || parseFloat(
+      boilerRows.find(b => b.timestamp === r.timestamp)?.outside_temp || ''
+    );
+    return (isNaN(flow) || isNaN(out) || flow <= 0 || out === 0) ? null : [out, flow];
+  })
+  .filter(Boolean);
+
+// Also try matching outdoor from boilerRows by nearest timestamp
+const corrPairs2 = (() => {
+  const bySorted = [...boilerRows].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp));
+  return hcRows.map(r => {
+    const flow = parseFloat(r.flow_temp);
+    if (isNaN(flow) || flow <= 0) return null;
+    const t = new Date(r.timestamp).getTime();
+    let best = null, bd = Infinity;
+    for (const b of bySorted) {
+      const d = Math.abs(new Date(b.timestamp).getTime() - t);
+      if (d < bd) { bd = d; best = b; }
+    }
+    const out = best && bd < 30*60*1000 ? parseFloat(best.outside_temp) : NaN;
+    return (!isNaN(out) && out !== 0) ? [out, flow] : null;
+  }).filter(Boolean);
+})();
+
+const usePairs = corrPairs2.length >= corrPairs.length ? corrPairs2 : corrPairs;
+if (usePairs.length >= 20) {
+  const n  = usePairs.length;
+  const mx = usePairs.reduce((a,p) => a+p[0], 0) / n;
+  const my = usePairs.reduce((a,p) => a+p[1], 0) / n;
+  const num = usePairs.reduce((a,p) => a + (p[0]-mx)*(p[1]-my), 0);
+  const den = Math.sqrt(usePairs.reduce((a,p) => a+(p[0]-mx)**2, 0) * usePairs.reduce((a,p) => a+(p[1]-my)**2, 0));
+  heatCurveCorr = den > 0 ? (num/den).toFixed(2) : null;
+  if (heatCurveCorr !== null) {
+    const c = parseFloat(heatCurveCorr);
+    if (c < -0.3)      { heatCurveBehaviour = 'Weather-compensated ✓'; heatCurveCls = 'good'; }
+    else if (c < 0.1)  { heatCurveBehaviour = 'Fixed flow temp';        heatCurveCls = 'warn'; }
+    else               { heatCurveBehaviour = 'Check curve config';     heatCurveCls = 'bad';  }
+    if (c >= 0.1)
+      insights.push({ type:'warn', text: `Heating curve may be misconfigured — flow temperature correlates positively with outdoor temperature (r=${heatCurveCorr}). Expected: flow should rise when outdoor drops.` });
+    else if (c > -0.3 && c < 0.1)
+      insights.push({ type:'info', text: `Flow temperature appears fixed (r=${heatCurveCorr}). Consider enabling weather compensation on your boiler controller to improve efficiency.` });
+  }
+}
+
+// ── Scatter data: heat demand vs outdoor temp ─────────────────────────────────
+// Each point: x=outside_temp, y=heatDemand(kW) when burner active
+const scatterData = (() => {
+  if (!hasBoilerKW) return [];
+  return boilerRows
+    .filter(r => r.burner_active === 'true' && parseFloat(r.modulation) > 0)
+    .map(r => {
+      // find nearest boilerRow with outside_temp
+      const out = parseFloat(r.outside_temp);
+      const mod = parseFloat(r.modulation);
+      if (isNaN(out) || out === 0 || isNaN(mod)) return null;
+      return { x: out, y: +(BOILER_KW * mod / 100).toFixed(2) };
+    })
+    .filter(Boolean);
+})();
+
+// Linear regression on scatter for trendline
+const scatterRegression = (() => {
+  if (scatterData.length < 10) return null;
+  const n  = scatterData.length;
+  const mx = scatterData.reduce((a,p) => a+p.x, 0) / n;
+  const my = scatterData.reduce((a,p) => a+p.y, 0) / n;
+  const num = scatterData.reduce((a,p) => a + (p.x-mx)*(p.y-my), 0);
+  const den = scatterData.reduce((a,p) => a + (p.x-mx)**2, 0);
+  if (den === 0) return null;
+  const slope     = num / den;
+  const intercept = my - slope * mx;
+  // balance point: outdoor temp where heat demand = 0
+  const balancePoint = slope !== 0 ? (-intercept / slope).toFixed(1) : null;
+  // trendline: two points covering outdoor range
+  const xs = scatterData.map(p => p.x);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  return {
+    slope: slope.toFixed(3), intercept: intercept.toFixed(2), balancePoint,
+    line: [
+      { x: xMin, y: +(slope*xMin + intercept).toFixed(2) },
+      { x: xMax, y: +(slope*xMax + intercept).toFixed(2) }
+    ]
+  };
+})();
+
 // Histogram buckets: 0-5, 5-10, 10-20, 20-40, 40+
 const histBuckets = [
   { label:'0–5 min',  min:0,  max:5  },
@@ -550,6 +691,10 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${hasBoilerKW ? sc('Boiler nominal', BOILER_KW, ' kW', boilerOversized ? badge('warn','Oversized') : badge('good','OK')) : ''}
     ${houseEff ? sc('House efficiency', houseEff.label, '', badge(houseEff.cls, heatLossCoeff+' kW/°C')) : ''}
     ${cyclesPerHour ? sc('Cycles/hour', cyclesPerHour, '', (excessiveCycling ? badge('warn','High') : badge('good','OK'))) : ''}
+    ${cyclingScore ? sc('Cycling severity', cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
+    ${comfortStddev ? sc('Comfort stability', comfortRating, '', badge(comfortCls, '±'+comfortStddev+'°C')) : ''}
+    ${gasEfficiencyPct ? sc('Est. efficiency', gasEfficiencyPct, '%') : ''}
+    ${heatCurveCorr ? sc('Heating curve', heatCurveBehaviour, '', badge(heatCurveCls, 'r='+heatCurveCorr)) : ''}
   </div>
   <div style="margin-top:16px">
     ${insights.map(i => {
@@ -559,6 +704,12 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
       return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;margin-bottom:8px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+i.text+'</span></div>';
     }).join('')}
   </div>
+  ${scatterData.length >= 10 ? `
+  <div style="margin-top:18px">
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
+    <div class="ch-tall"><canvas id="cScatter"></canvas></div>
+    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}</p>
+  </div>` : ''}
 </div>
 
 <div class="box">
@@ -680,7 +831,50 @@ mk('cDhw',${JSON.stringify(dhwChart.labels)},[
 ${hasPV&&energyRows.length>=2?`
 mk('cPV',${JSON.stringify(pvChart.labels)},[{label:'PV production (W)',data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
 mk('cBatt',${JSON.stringify(battChart.labels)},[{label:'Battery level (%)',data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:'Charging (W)',data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:'Discharging (W)',data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
-mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)',data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n<\/script>
+mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)',data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
+(function(){
+  const c=document.getElementById('cScatter'); if(!c)return;
+  const pts=${JSON.stringify(scatterData.length > 300 ? scatterData.filter((_,i)=>i%Math.ceil(scatterData.length/300)===0) : scatterData)};
+  const reg=${JSON.stringify(scatterRegression)};
+  const datasets=[{
+    label:'Heat demand (kW)',
+    data:pts,
+    backgroundColor:'rgba(78,154,241,0.35)',
+    pointRadius:3,
+    pointHoverRadius:5,
+    type:'scatter'
+  }];
+  if(reg){
+    datasets.push({
+      label:'Trend',
+      data:reg.line,
+      type:'line',
+      borderColor:'#ef5350',
+      backgroundColor:'transparent',
+      borderWidth:2,
+      pointRadius:0,
+      tension:0
+    });
+  }
+  new Chart(c,{
+    type:'scatter',
+    data:{datasets},
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{display:true,position:'top'},
+        tooltip:{callbacks:{label:p=>'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
+      },
+      scales:{
+        x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}}
+      }
+    }
+  });
+})();
+`:``}
+<\/script>
 </body></html>`;
 
 fs.writeFileSync(OUT_FILE, html, 'utf8');
