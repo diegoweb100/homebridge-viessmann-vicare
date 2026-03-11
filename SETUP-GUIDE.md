@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.38
+# Complete Setup Guide - v2.0.39
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.38 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.39 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.38",
+    "plugin_version": "2.0.39",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1224,3 +1224,16 @@ sudo systemctl restart homebridge
 - **Experienced users**: 5-10 minutes total
 
 **Need help?** Visit our [GitHub repository](https://github.com/diegoweb100/homebridge-viessmann-vicare) for support and updates.
+---
+
+## Changelog
+
+### v2.0.39 (2026-03-11)
+**Critical fix** — Heat pump device detection overhaul:
+- Fixed `isHeatPumpDevice()`: removed `type:E3` which matched ALL gen3 devices. Now requires `type:heatpump` (exact) or Vitocal modelId.
+- Fixed HP path resolution for Vitocal 250A: `heating.compressors.0` (active), `heating.compressors.0.speed.current` (speed/mod), `heating.sensors.temperature.return` (return temp), `heating.scop.heating` (COP/SCOP).
+- Added compressor speed modulation read (rps → %).
+- Energy device role detection: VitoCharge (`type:ess`, `type:photovoltaic;integrated`) and wallbox (`type:accessory;vehicleChargingStation`) now correctly identified from roles.
+
+### v2.0.38 (2026-03-11)
+Heat pump support: full feature dump logging, `type:heatpump` role detection, `roles`/`brand` fields in device interface, HeaterCooler + COP Lightbulb services.

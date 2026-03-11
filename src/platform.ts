@@ -808,22 +808,33 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   ) {
     // Detect whether this device has energy or heat pump features.
     // Heat pump devices always get an accessory (for the full feature dump log).
-    // Energy devices need at least one known feature path to proceed.
+    // Energy devices need at least one known feature path or role to proceed.
     const roles = device.roles ?? [];
+    // IMPORTANT: 'type:E3' is present on ALL Viessmann gen3 devices — NOT a heat pump indicator.
+    // Only 'type:heatpump' (exact) or Vitocal modelId identifies the actual heat pump.
     const isHeatPump =
-      roles.some(r =>
-        r === 'type:heatpump' ||
-        r === 'type:E3' ||
-        r.toLowerCase().includes('heatpump') ||
-        r.toLowerCase().includes('vitocal'),
-      ) || (device.modelId ?? '').toLowerCase().includes('vitocal');
+      roles.includes('type:heatpump') ||
+      (device.modelId ?? '').toLowerCase().includes('vitocal');
+
+    // Role-based energy device detection (VitoCharge ESS/PV, wallbox)
+    const hasPVRole = roles.some(r => r === 'type:photovoltaic;integrated' || r.startsWith('type:photovoltaic'));
+    const hasBatteryRole = roles.some(r => r === 'type:ess' || r.startsWith('type:ess;'));
+    const hasWallboxRole = roles.some(r =>
+      r === 'type:accessory;vehicleChargingStation' ||
+      r === 'interface:battery;vehicleChargingStation',
+    );
 
     const hasEnergyFeatures =
+      hasPVRole || hasBatteryRole || hasWallboxRole ||
       features.some(f =>
         f.feature.startsWith('heating.photovoltaic') ||
         f.feature.startsWith('heating.solar.power') ||
         f.feature.startsWith('heating.powerStorage') ||
         f.feature.startsWith('heating.battery') ||
+        f.feature.startsWith('ess.') ||
+        f.feature.startsWith('photovoltaic.') ||
+        f.feature.startsWith('pcc.') ||
+        f.feature.startsWith('vcs.') ||
         f.feature.startsWith('charging.ev') ||
         f.feature.startsWith('heating.ev') ||
         f.feature.startsWith('heating.dhw.heating.rod') ||

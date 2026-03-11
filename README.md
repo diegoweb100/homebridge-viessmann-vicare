@@ -1033,6 +1033,13 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.39] - 2026-03-11
+#### Fixed
+- **Critical: Heat pump device detection** — `isHeatPumpDevice()` was incorrectly matching ALL Viessmann gen3 devices because `type:E3` is a gen3 architecture marker present on every device (TCU gateway, TRVs, room sensors, repeaters, VitoCharge, HEMS, wallbox, etc.). Detection now requires `type:heatpump` (exact role) or modelId containing `vitocal`. This was causing spurious "Adding new energy accessory: … Heat Pump" log entries for every device.
+- **Heat pump path resolution** — Fixed `compressorActive` path to use `heating.compressors.0` (correct for Vitocal 250A gen3), `compressorMod` to use `heating.compressors.0.speed.current`, `returnTemp` to use `heating.sensors.temperature.return`, `cop` to use `heating.scop.heating` / `heating.spf.heating`.
+- **Energy device detection** — PV/Battery/Wallbox capabilities now also detected from device roles (`type:photovoltaic;integrated`, `type:ess`, `type:accessory;vehicleChargingStation`) in addition to feature path scanning. VitoCharge ESS+PV and wallbox now correctly identified.
+- Added compressor speed modulation read (`heating.compressors.0.speed.current` in rps, normalised to 0–100%).
+
 ### [2.0.38] - 2026-03-11
 #### Added
 - **Heat pump support (Wärmepumpe)** — automatic device detection via `roles` field (`type:heatpump`, `type:E3`, Vitocal modelId); creates a dedicated HomeKit HeaterCooler accessory (compressor state, outside temp) and a COP Lightbulb (Brightness = COP × 20%)

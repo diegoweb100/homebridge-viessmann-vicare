@@ -17,8 +17,9 @@ import {
  *  - Electric DHW heater             (heating.dhw.heating.*)
  *
  * Device detection via device.roles:
- *  - ["type:heatpump"] or ["type:E3"] → heat pump path
- *  - otherwise                        → energy device path (PV/battery/wallbox/elec DHW)
+ *  - ["type:heatpump"] (exact) or modelId contains "vitocal" → heat pump path
+ *  - ["type:ess"] / ["type:photovoltaic;integrated"] → energy device path
+ *  NOTE: "type:E3" is present on ALL gen3 devices — NOT a heat pump indicator
  *
  * On first run ALL feature paths are logged at INFO level so unknown
  * device types can be reverse-engineered from user logs.
@@ -137,12 +138,10 @@ export class ViessmannEnergyAccessory {
 
   private isHeatPumpDevice(): boolean {
     const roles = this.device.roles ?? [];
-    return roles.some(r =>
-      r === 'type:heatpump' ||
-      r === 'type:E3' ||
-      r.toLowerCase().includes('heatpump') ||
-      r.toLowerCase().includes('vitocal'),
-    ) || (this.device.modelId ?? '').toLowerCase().includes('vitocal');
+    // IMPORTANT: 'type:E3' is a gen3 architecture marker present on ALL Viessmann gen3 devices.
+    // Only 'type:heatpump' (exact) correctly identifies the actual heat pump (e.g. Vitocal 250A).
+    return roles.includes('type:heatpump') ||
+      (this.device.modelId ?? '').toLowerCase().includes('vitocal');
   }
 
   // ── Capability discovery ───────────────────────────────────────────────────
@@ -215,20 +214,31 @@ export class ViessmannEnergyAccessory {
       this.platform.log.info(`${tag} Device identified as HEAT PUMP via roles/modelId`);
       this.resolveHeatPumpPaths(names);
     } else {
-      // ── Energy devices ──
+      // ── Energy devices: detect from roles (primary) and feature paths (fallback) ──
+      const roles = this.device.roles ?? [];
+      const hasPVRole = roles.some(r => r === 'type:photovoltaic;integrated' || r.startsWith('type:photovoltaic'));
+      const hasBatteryRole = roles.some(r => r === 'type:ess' || r.startsWith('type:ess;'));
+      const hasWallboxRole = roles.some(r => r === 'type:accessory;vehicleChargingStation' || r === 'interface:battery;vehicleChargingStation');
+
       this.hasPV =
+        hasPVRole ||
         names.some(n => n.startsWith('heating.photovoltaic')) ||
         names.some(n => n.startsWith('heating.solar.power')) ||
-        names.some(n => n === 'heating.solar');
+        names.some(n => n === 'heating.solar') ||
+        names.some(n => n.startsWith('photovoltaic.')) ||
+        names.some(n => n.startsWith('pcc.'));
 
       this.hasBattery =
+        hasBatteryRole ||
         names.some(n => n.startsWith('heating.powerStorage')) ||
-        names.some(n => n.startsWith('heating.buffer.')) ||
-        names.some(n => n.startsWith('heating.battery'));
+        names.some(n => n.startsWith('heating.battery')) ||
+        names.some(n => n.startsWith('ess.'));
 
       this.hasWallbox =
+        hasWallboxRole ||
         names.some(n => n.startsWith('charging.ev')) ||
-        names.some(n => n.startsWith('heating.ev'));
+        names.some(n => n.startsWith('heating.ev')) ||
+        names.some(n => n.startsWith('vcs.'));
 
       this.hasElectricDHW =
         names.some(n => n.startsWith('heating.dhw.heating.rod')) ||
@@ -256,12 +266,14 @@ export class ViessmannEnergyAccessory {
       candidates.find(c => names.includes(c)) ?? '';
 
     this.hpPaths.compressorActive = pick(
+      'heating.compressors.0',
       'heating.compressor.0',
       'heating.compressor',
       'heating.heatpump.operating.state',
       'heating.heatpump.status',
     );
     this.hpPaths.compressorMod = pick(
+      'heating.compressors.0.speed.current',
       'heating.compressor.0.statistics',
       'heating.compressor.statistics',
       'heating.heatpump.statistics',
@@ -277,14 +289,18 @@ export class ViessmannEnergyAccessory {
       'heating.heatpump.sensors.temperature.flow',
     );
     this.hpPaths.returnTemp = pick(
+      'heating.sensors.temperature.return',
+      'heating.secondaryCircuit.sensors.temperature.return',
       'heating.primaryCircuit.sensors.temperature.return',
       'heating.heatpump.sensors.temperature.return',
       'heating.circuits.0.sensors.temperature.return',
     );
     this.hpPaths.cop = pick(
+      'heating.scop.heating',
+      'heating.spf.heating',
+      'heating.scop.total',
       'heating.heatpump.cop',
       'heating.compressor.0.cop',
-      'heating.heatpump.energy.consumption.heating',
     );
 
     this.platform.log.info(`${tag} Resolved paths:`);
@@ -634,7 +650,7 @@ export class ViessmannEnergyAccessory {
     if (this.hpPaths.compressorActive) {
       const f = get(this.hpPaths.compressorActive);
       if (f) {
-        // Try various property shapes seen on different devices
+        // heating.compressors.0 has an 'active' boolean property
         const active =
           f.properties?.active?.value === true ||
           f.properties?.status?.value === 'on' ||
@@ -654,6 +670,18 @@ export class ViessmannEnergyAccessory {
           `${tag}[HP] Unknown compressor path — found candidate: ${anyCompressor.feature} ` +
           `props=${JSON.stringify(anyCompressor.properties)}`,
         );
+      }
+    }
+
+    // Compressor modulation / speed
+    if (this.hpPaths.compressorMod) {
+      const f = get(this.hpPaths.compressorMod);
+      if (f) {
+        // heating.compressors.0.speed.current → value in revolutionsPerSecond
+        // Normalize to 0–100 percent: assume max ~50 rps for Vitocal 250A
+        const rps = f.properties?.value?.value ?? 0;
+        this.states.hpModulation = rps > 0 ? Math.min(100, Math.round((rps / 50) * 100)) : 0;
+        this.platform.log.debug(`${tag}[HP] compressor speed=${rps}rps modulation=${this.states.hpModulation}%`);
       }
     }
 
