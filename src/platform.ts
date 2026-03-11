@@ -676,7 +676,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Heating Circuits accessories
       await this.setupHeatingCircuitAccessories(installation, gateway, device, features);
 
-      // Setup Energy accessory (PV, Battery, Wallbox, Electric DHW) — optional, skipped if no features
+      // Setup Energy / Heat Pump accessory (PV, battery, wallbox, electric DHW, Wärmepumpe)
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
     } catch (error) {
@@ -804,30 +804,44 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     installation: ViessmannInstallation,
     gateway: ViessmannGateway,
     device: ViessmannDevice,
-    features: ViessmannFeature[],
+    features: ViessmannFeature[]
   ) {
-    // Detect energy-related features — skip silently if none present
-    const energyFeatures = features.filter(f =>
-      f.feature.startsWith('heating.photovoltaic') ||
-      f.feature.startsWith('heating.solar.power') ||
-      f.feature.startsWith('heating.powerStorage') ||
-      f.feature.startsWith('heating.battery') ||
-      f.feature.startsWith('charging.ev') ||
-      f.feature.startsWith('heating.ev') ||
-      f.feature.startsWith('heating.dhw.heating.rod') ||
-      f.feature === 'heating.dhw.operating.modes.electricBoost',
-    );
+    // Detect whether this device has energy or heat pump features.
+    // Heat pump devices always get an accessory (for the full feature dump log).
+    // Energy devices need at least one known feature path to proceed.
+    const roles = device.roles ?? [];
+    const isHeatPump =
+      roles.some(r =>
+        r === 'type:heatpump' ||
+        r === 'type:E3' ||
+        r.toLowerCase().includes('heatpump') ||
+        r.toLowerCase().includes('vitocal'),
+      ) || (device.modelId ?? '').toLowerCase().includes('vitocal');
 
-    if (energyFeatures.length === 0) {
-      return;
+    const hasEnergyFeatures =
+      features.some(f =>
+        f.feature.startsWith('heating.photovoltaic') ||
+        f.feature.startsWith('heating.solar.power') ||
+        f.feature.startsWith('heating.powerStorage') ||
+        f.feature.startsWith('heating.battery') ||
+        f.feature.startsWith('charging.ev') ||
+        f.feature.startsWith('heating.ev') ||
+        f.feature.startsWith('heating.dhw.heating.rod') ||
+        f.feature === 'heating.dhw.operating.modes.electricBoost'
+      );
+
+    if (!isHeatPump && !hasEnergyFeatures) {
+      return; // Standard gas boiler — skip silently, no log noise
     }
 
-    this.log.info(`⚡ Energy features detected for device ${device.id}: ${energyFeatures.map(f => f.feature).join(', ')}`);
+    const uuid = this.api.hap.uuid.generate(
+      `${installation.id}-${gateway.serial}-${device.id}-energy`,
+    );
+    const displayName = isHeatPump
+      ? `${installation.description} Heat Pump`
+      : `${installation.description} Energy`;
 
-    const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-energy`);
-    const displayName = `${installation.description} Energy`;
-
-    const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+    const existingAccessory = this.accessories.find(a => a.UUID === uuid);
 
     if (existingAccessory) {
       this.log.info('Restoring existing energy accessory from cache:', existingAccessory.displayName);
@@ -835,9 +849,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     } else {
       this.log.info('Adding new energy accessory:', displayName);
       const accessory = new this.api.platformAccessory(displayName, uuid);
-      accessory.context.device = device;
+      accessory.context.device       = device;
       accessory.context.installation = installation;
-      accessory.context.gateway = gateway;
+      accessory.context.gateway      = gateway;
 
       new ViessmannEnergyAccessory(this, accessory, installation, gateway, device);
       this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);

@@ -1033,6 +1033,18 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.38] - 2026-03-11
+#### Added
+- **Heat pump support (Wärmepumpe)** — automatic device detection via `roles` field (`type:heatpump`, `type:E3`, Vitocal modelId); creates a dedicated HomeKit HeaterCooler accessory (compressor state, outside temp) and a COP Lightbulb (Brightness = COP × 20%)
+- **Energy / Heat Pump accessory** fully integrated into the standard discovery flow — no separate config required
+- **Full feature dump** — on first startup every device logs ALL feature paths (name, enabled state, property values, available commands) at INFO level; essential for reverse-engineering unknown device types
+- **Automatic path resolution for heat pumps** — tries multiple known path variants for compressor, outside temp, supply/return temp and COP; logs which paths were found and which were not
+- **`roles` and `brand` fields** added to `ViessmannDevice` interface and device mapping (previously discarded from API response)
+- **PV, battery, wallbox, electric DHW** accessories now properly integrated in main discovery (were previously only in beta branch)
+
+#### Changed
+- `setupDeviceAccessories` in `platform.ts` now calls `setupEnergyAccessory` as the last step — gas boiler users see zero impact (silent `return` if no energy features found)
+
 ### [2.0.37] - 2026-03-10
 #### Added
 - **Comfort stability** — standard deviation of room temperature samples, rated Excellent (<0.2°C) / Good (<0.5°C) / Unstable

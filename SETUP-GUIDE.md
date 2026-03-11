@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.37
+# Complete Setup Guide - v2.0.38
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.37 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.38 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -696,6 +696,15 @@ Enable/disable specific accessory types:
 
 The plugin creates different types of accessories based on your heating system. **All names can be customized!**
 
+### 🌡️ Heat Pump Accessories (Auto-detected, v2.0.38+)
+
+These accessories are created **only if your device is detected as a heat pump** (Vitocal or any device with `type:heatpump` / `type:E3` role). Gas boiler installations are unaffected.
+
+- **Compressor**: `[Installation] Heat Pump` — HeaterCooler service showing compressor state (Active/Idle) and outside temperature
+- **COP Indicator**: `[Installation] Heat Pump COP` — Lightbulb service where Brightness = COP × 20% (e.g. COP 4.0 → 80%)
+
+On first startup the plugin logs a **full dump of all feature paths** at INFO level — this is intentional and helps identify the correct API paths for your specific heat pump model. The dump only runs once per restart.
+
 ### ⚡ Energy System Accessories (Auto-detected, v2.0.27+)
 
 These accessories are created **only if your installation has the corresponding features** — they are silently skipped if not present.
@@ -1148,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.37",
+    "plugin_version": "2.0.38",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",

@@ -5,63 +5,89 @@ import {
   ViessmannGateway,
   ViessmannDevice,
 } from '../platform';
-import { ViessmannHistoryLogger } from './history-logger';
 
 /**
  * ViessmannEnergyAccessory
  *
- * Handles energy-related Viessmann devices:
- *  - Vitocharge VX3 / photovoltaic system  (heating.solar / heating.photovoltaic)
- *  - Battery storage                        (heating.buffer / heating.powerStorage)
- *  - Wallbox / EV charger                  (charging.ev.*)
- *  - Electric DHW heater                   (heating.dhw.heating.*)
+ * Handles energy-related and heat pump Viessmann devices:
+ *  - Heat pump (Wärmepumpe)          (heating.compressor.*, heating.heatpump.*)
+ *  - Vitocharge VX3 / photovoltaic   (heating.solar / heating.photovoltaic)
+ *  - Battery storage                 (heating.buffer / heating.powerStorage)
+ *  - Wallbox / EV charger            (charging.ev.*)
+ *  - Electric DHW heater             (heating.dhw.heating.*)
  *
- * HomeKit mapping:
- *  - PV production      → Lightbulb (Brightness = watts %)
- *  - Battery level      → Battery service
- *  - Grid feed-in       → Switch (read-only via Eve-like sensor)
- *  - Wallbox charging   → Switch (on/off) + Outlet
- *  - Electric DHW       → HeaterCooler
+ * Device detection via device.roles:
+ *  - ["type:heatpump"] or ["type:E3"] → heat pump path
+ *  - otherwise                        → energy device path (PV/battery/wallbox/elec DHW)
+ *
+ * On first run ALL feature paths are logged at INFO level so unknown
+ * device types can be reverse-engineered from user logs.
  */
 export class ViessmannEnergyAccessory {
 
-  // ── History logger ────────────────────────────────────────────────────────
-  private historyLogger?: ViessmannHistoryLogger;
-
   // ── Services ──────────────────────────────────────────────────────────────
+
   private informationService: Service;
 
+  // Heat pump
+  private heatpumpService?: Service;         // HeaterCooler — main HP on/off + temperature
+  private heatpumpCOPService?: Service;       // Lightbulb — Brightness = COP × 10 (0-100)
+
   // PV / Solar
-  private pvProductionService?: Service;       // Lightbulb – brightness = production %
-  private pvStatusService?: Service;           // TemperatureSensor re-used for watt value
+  private pvProductionService?: Service;
+  private pvStatusService?: Service;
 
   // Battery
-  private batteryService?: Service;            // Battery
-  private batteryPowerService?: Service;       // Lightbulb – brightness = charge/discharge %
+  private batteryService?: Service;
+  private batteryPowerService?: Service;
 
   // Wallbox
-  private wallboxService?: Service;            // Switch – charging on/off
-  private wallboxOutletService?: Service;      // Outlet  – present = plugged in
+  private wallboxService?: Service;
+  private wallboxOutletService?: Service;
 
   // Electric DHW heater
-  private electricDHWService?: Service;        // HeaterCooler
+  private electricDHWService?: Service;
 
-  // ── Capabilities flags ────────────────────────────────────────────────────
-  private hasPV = false;
-  private hasBattery = false;
-  private hasWallbox = false;
-  private hasElectricDHW = false;
+  // ── Capability flags ──────────────────────────────────────────────────────
+
+  private isHeatPump      = false;
+  private hasPV           = false;
+  private hasBattery      = false;
+  private hasWallbox      = false;
+  private hasElectricDHW  = false;
+
+  // ── Known heat pump feature path variants (populated at runtime) ──────────
+  // We try several known paths; whichever resolves first is stored here.
+  private hpPaths = {
+    compressorActive:   '' as string,   // e.g. heating.compressor.0
+    compressorMod:      '' as string,   // e.g. heating.compressor.0.statistics
+    outsideTemp:        '' as string,
+    supplyTemp:         '' as string,
+    returnTemp:         '' as string,
+    cop:                '' as string,
+  };
 
   // ── State cache ───────────────────────────────────────────────────────────
   private states = {
+    // Heat pump
+    hpActive: false,
+    hpCurrentTemp: 20,
+    hpTargetTemp: 20,
+    hpHeatingState: 0,    // 0=INACTIVE 1=IDLE 2=HEATING 3=COOLING
+    hpCOP: 0,
+    hpOutsideTemp: 0,
+    hpSupplyTemp: 0,
+    hpReturnTemp: 0,
+    hpModulation: 0,
+
     // PV
     pvProductionW: 0,
-    pvProductionPercent: 0,       // 0-100 mapped to Brightness
+    pvProductionPercent: 0,
     pvActive: false,
     pvDailyYieldKwh: 0,
 
     // Battery
-    batteryLevelPercent: 0,       // 0-100
+    batteryLevelPercent: 0,
     batteryCharging: false,
     batteryChargingW: 0,
     batteryDischargingW: 0,
@@ -81,7 +107,7 @@ export class ViessmannEnergyAccessory {
     electricDHWCurrentTemp: 20,
     electricDHWTargetTemp: 55,
     electricDHWActive: false,
-    electricDHWHeatingState: 0,   // 0=OFF, 1=HEAT
+    electricDHWHeatingState: 0,
   };
 
   constructor(
@@ -91,32 +117,36 @@ export class ViessmannEnergyAccessory {
     private readonly gateway: ViessmannGateway,
     private readonly device: ViessmannDevice,
   ) {
-    // ── Accessory Information ───────────────────────────────────────────────
     this.informationService =
       this.accessory.getService(this.platform.Service.AccessoryInformation)!;
+
+    const modelLabel = device.modelId || (this.isHeatPumpDevice() ? 'Heat Pump' : 'Energy System');
     this.informationService
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Viessmann')
-      .setCharacteristic(this.platform.Characteristic.Model, device.modelId || 'Energy System')
+      .setCharacteristic(this.platform.Characteristic.Model, modelLabel)
       .setCharacteristic(this.platform.Characteristic.SerialNumber, gateway.serial)
       .setCharacteristic(this.platform.Characteristic.FirmwareRevision, '1.0.0');
 
-    // Register update handler so platform can call handleUpdate()
+    // Register update handler
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
-    // 📊 History logger
-    this.historyLogger = new ViessmannHistoryLogger(
-      platform,
-      accessory,
-      'energy',
-      'energy',
-      installation?.id,
-    );
-
-    // Discover capabilities and build services
     this.initializeCapabilities();
   }
 
+  // ── Device type helpers ───────────────────────────────────────────────────
+
+  private isHeatPumpDevice(): boolean {
+    const roles = this.device.roles ?? [];
+    return roles.some(r =>
+      r === 'type:heatpump' ||
+      r === 'type:E3' ||
+      r.toLowerCase().includes('heatpump') ||
+      r.toLowerCase().includes('vitocal'),
+    ) || (this.device.modelId ?? '').toLowerCase().includes('vitocal');
+  }
+
   // ── Capability discovery ───────────────────────────────────────────────────
+
   private async initializeCapabilities(): Promise<void> {
     try {
       const features = await this.platform.viessmannAPI.getDeviceFeatures(
@@ -125,123 +155,266 @@ export class ViessmannEnergyAccessory {
         this.device.id,
       );
 
+      this.logAllFeatures(features);
       this.detectCapabilities(features);
       this.setupServices();
       await this.updateFromFeatures(features);
 
     } catch (error) {
       this.platform.log.error(
-        `[EnergyAccessory] Error initializing capabilities for ${this.device.id}:`, error,
+        `[EnergyAccessory] Error initializing capabilities for device ${this.device.id}:`, error,
       );
-      // Fallback: build services without data
       this.setupServices();
     }
   }
 
+  // ── Full feature dump (always logged at INFO) ─────────────────────────────
+
+  private logAllFeatures(features: any[]): void {
+    const tag = '[EnergyAccessory]';
+    const deviceLabel = `device=${this.device.id} model=${this.device.modelId ?? '?'} roles=${JSON.stringify(this.device.roles ?? [])}`;
+
+    this.platform.log.info(`${tag} ════════════════════════════════════════════════`);
+    this.platform.log.info(`${tag} FULL FEATURE DUMP — ${deviceLabel}`);
+    this.platform.log.info(`${tag} Total features: ${features.length}`);
+    this.platform.log.info(`${tag} ────────────────────────────────────────────────`);
+
+    // Sort features alphabetically for readability
+    const sorted = [...features].sort((a, b) => a.feature.localeCompare(b.feature));
+
+    for (const f of sorted) {
+      const propKeys  = Object.keys(f.properties  ?? {}).join(', ') || '—';
+      const cmdKeys   = Object.keys(f.commands    ?? {}).join(', ') || '—';
+      const enabled   = f.isEnabled ? '✓' : '✗';
+      const ready     = f.isReady   ? '✓' : '✗';
+      const propVals  = JSON.stringify(f.properties ?? {});
+
+      this.platform.log.info(
+        `${tag}   [${enabled}${ready}] ${f.feature}`,
+      );
+      this.platform.log.info(
+        `${tag}        props=(${propKeys}) values=${propVals.substring(0, 120)}`,
+      );
+      if (cmdKeys !== '—') {
+        this.platform.log.info(`${tag}        commands=(${cmdKeys})`);
+      }
+    }
+
+    this.platform.log.info(`${tag} ════════════════════════════════════════════════`);
+  }
+
+  // ── Capability detection ──────────────────────────────────────────────────
+
   private detectCapabilities(features: any[]): void {
     const names = features.map(f => f.feature);
+    const tag = '[EnergyAccessory]';
 
-    // ── Log ALL features for analysis ─────────────────────────────────────
-    this.platform.log.info('[EnergyAccessory] ── Feature scan start ─────────────────────────');
-    this.platform.log.info(`[EnergyAccessory] Total features available: ${names.length}`);
+    // ── Heat pump ──
+    if (this.isHeatPumpDevice()) {
+      this.isHeatPump = true;
+      this.platform.log.info(`${tag} Device identified as HEAT PUMP via roles/modelId`);
+      this.resolveHeatPumpPaths(names);
+    } else {
+      // ── Energy devices ──
+      this.hasPV =
+        names.some(n => n.startsWith('heating.photovoltaic')) ||
+        names.some(n => n.startsWith('heating.solar.power')) ||
+        names.some(n => n === 'heating.solar');
 
-    const energyRelated = features.filter(f =>
-      f.feature.startsWith('heating.photovoltaic') ||
-      f.feature.startsWith('heating.solar') ||
-      f.feature.startsWith('heating.powerStorage') ||
-      f.feature.startsWith('heating.battery') ||
-      f.feature.startsWith('heating.buffer') ||
-      f.feature.startsWith('charging.ev') ||
-      f.feature.startsWith('heating.ev') ||
-      f.feature.startsWith('heating.dhw.heating') ||
-      f.feature === 'heating.dhw.operating.modes.electricBoost'
+      this.hasBattery =
+        names.some(n => n.startsWith('heating.powerStorage')) ||
+        names.some(n => n.startsWith('heating.buffer.')) ||
+        names.some(n => n.startsWith('heating.battery'));
+
+      this.hasWallbox =
+        names.some(n => n.startsWith('charging.ev')) ||
+        names.some(n => n.startsWith('heating.ev'));
+
+      this.hasElectricDHW =
+        names.some(n => n.startsWith('heating.dhw.heating.rod')) ||
+        names.some(n => n.startsWith('heating.dhw.pumps.primary')) ||
+        names.some(n => n === 'heating.dhw.operating.modes.electricBoost');
+    }
+
+    this.platform.log.info(`${tag} ── Capability result:`);
+    this.platform.log.info(`${tag}    isHeatPump   : ${this.isHeatPump}`);
+    this.platform.log.info(`${tag}    PV/Solar     : ${this.hasPV}`);
+    this.platform.log.info(`${tag}    Battery      : ${this.hasBattery}`);
+    this.platform.log.info(`${tag}    Wallbox/EV   : ${this.hasWallbox}`);
+    this.platform.log.info(`${tag}    Electric DHW : ${this.hasElectricDHW}`);
+  }
+
+  /**
+   * Tries multiple known path variants for heat pump features.
+   * Whichever variant exists in the feature list is stored for later use.
+   * Unknown devices will show all paths as empty → logged, visible in dump.
+   */
+  private resolveHeatPumpPaths(names: string[]): void {
+    const tag = '[EnergyAccessory][HP]';
+
+    const pick = (...candidates: string[]): string =>
+      candidates.find(c => names.includes(c)) ?? '';
+
+    this.hpPaths.compressorActive = pick(
+      'heating.compressor.0',
+      'heating.compressor',
+      'heating.heatpump.operating.state',
+      'heating.heatpump.status',
+    );
+    this.hpPaths.compressorMod = pick(
+      'heating.compressor.0.statistics',
+      'heating.compressor.statistics',
+      'heating.heatpump.statistics',
+    );
+    this.hpPaths.outsideTemp = pick(
+      'heating.sensors.temperature.outside',
+      'heating.heatpump.sensors.temperature.outside',
+      'heating.outdoor.sensors.temperature',
+    );
+    this.hpPaths.supplyTemp = pick(
+      'heating.circuits.0.sensors.temperature.supply',
+      'heating.primaryCircuit.sensors.temperature.supply',
+      'heating.heatpump.sensors.temperature.flow',
+    );
+    this.hpPaths.returnTemp = pick(
+      'heating.primaryCircuit.sensors.temperature.return',
+      'heating.heatpump.sensors.temperature.return',
+      'heating.circuits.0.sensors.temperature.return',
+    );
+    this.hpPaths.cop = pick(
+      'heating.heatpump.cop',
+      'heating.compressor.0.cop',
+      'heating.heatpump.energy.consumption.heating',
     );
 
-    if (energyRelated.length > 0) {
-      this.platform.log.info(`[EnergyAccessory] Energy-related features found (${energyRelated.length}):`);
-      energyRelated.forEach(f => {
-        this.platform.log.info(
-          `[EnergyAccessory]   • ${f.feature} | enabled=${f.isEnabled} | ready=${f.isReady} | ` +
-          `properties=${JSON.stringify(f.properties)} | commands=${JSON.stringify(Object.keys(f.commands || {}))}`,
-        );
-      });
-    } else {
-      this.platform.log.info('[EnergyAccessory] No energy-related features found.');
-      this.platform.log.info('[EnergyAccessory] Full feature list for analysis:');
-      names.forEach(n => this.platform.log.info(`[EnergyAccessory]   - ${n}`));
+    this.platform.log.info(`${tag} Resolved paths:`);
+    for (const [key, val] of Object.entries(this.hpPaths)) {
+      const status = val ? `✓ ${val}` : '✗ not found (will log raw features above)';
+      this.platform.log.info(`${tag}   ${key.padEnd(18)}: ${status}`);
     }
-    this.platform.log.info('[EnergyAccessory] ── Feature scan end ──────────────────────────');
-
-    // PV / Solar
-    this.hasPV =
-      names.some(n => n.startsWith('heating.photovoltaic')) ||
-      names.some(n => n.startsWith('heating.solar.power')) ||
-      names.some(n => n === 'heating.solar');
-
-    // Battery / power storage
-    this.hasBattery =
-      names.some(n => n.startsWith('heating.powerStorage')) ||
-      names.some(n => n.startsWith('heating.buffer.')) ||
-      names.some(n => n.startsWith('heating.battery'));
-
-    // Wallbox / EV charging
-    this.hasWallbox =
-      names.some(n => n.startsWith('charging.ev')) ||
-      names.some(n => n.startsWith('heating.ev'));
-
-    // Electric DHW heater
-    this.hasElectricDHW =
-      names.some(n => n.startsWith('heating.dhw.heating.rod')) ||
-      names.some(n => n.startsWith('heating.dhw.pumps.primary')) ||
-      names.some(n => n === 'heating.dhw.operating.modes.electricBoost');
-
-    this.platform.log.info('[EnergyAccessory] ── Capability result ──────────────────────────');
-    this.platform.log.info(`[EnergyAccessory]   PV/Solar    : ${this.hasPV}`);
-    this.platform.log.info(`[EnergyAccessory]   Battery     : ${this.hasBattery}`);
-    this.platform.log.info(`[EnergyAccessory]   Wallbox/EV  : ${this.hasWallbox}`);
-    this.platform.log.info(`[EnergyAccessory]   Electric DHW: ${this.hasElectricDHW}`);
-    this.platform.log.info('[EnergyAccessory] ─────────────────────────────────────────────────');
   }
 
   // ── Service creation ───────────────────────────────────────────────────────
+
   private setupServices(): void {
-    if (this.hasPV) {
-      this.setupPVServices();
-    }
-    if (this.hasBattery) {
-      this.setupBatteryServices();
-    }
-    if (this.hasWallbox) {
-      this.setupWallboxServices();
-    }
-    if (this.hasElectricDHW) {
-      this.setupElectricDHWService();
+    if (this.isHeatPump) {
+      this.setupHeatPumpServices();
+    } else {
+      if (this.hasPV)          { this.setupPVServices(); }
+      if (this.hasBattery)     { this.setupBatteryServices(); }
+      if (this.hasWallbox)     { this.setupWallboxServices(); }
+      if (this.hasElectricDHW) { this.setupElectricDHWService(); }
     }
 
-    if (!this.hasPV && !this.hasBattery && !this.hasWallbox && !this.hasElectricDHW) {
+    if (!this.isHeatPump && !this.hasPV && !this.hasBattery && !this.hasWallbox && !this.hasElectricDHW) {
       this.platform.log.warn(
-        `[EnergyAccessory] No energy features detected for device ${this.device.id}. ` +
-        'Check that the device is online and the API returns features.',
+        `[EnergyAccessory] No known features detected for device ${this.device.id}. ` +
+        'Review the FULL FEATURE DUMP above and report to the plugin maintainer.',
       );
     }
   }
 
+  // ── Heat pump services ────────────────────────────────────────────────────
+
+  private setupHeatPumpServices(): void {
+    // Main HeaterCooler: represents the compressor unit
+    this.heatpumpService =
+      this.accessory.getService('Heat Pump') ||
+      this.accessory.addService(this.platform.Service.HeaterCooler, 'Heat Pump', 'heatpump-main');
+
+    this.heatpumpService.setCharacteristic(this.platform.Characteristic.Name, 'Heat Pump');
+
+    this.heatpumpService
+      .getCharacteristic(this.platform.Characteristic.Active)
+      .onGet(() =>
+        this.states.hpActive
+          ? this.platform.Characteristic.Active.ACTIVE
+          : this.platform.Characteristic.Active.INACTIVE,
+      )
+      .onSet(async () => {
+        // Read-only — restore
+        setTimeout(() => {
+          this.heatpumpService!
+            .getCharacteristic(this.platform.Characteristic.Active)
+            .updateValue(
+              this.states.hpActive
+                ? this.platform.Characteristic.Active.ACTIVE
+                : this.platform.Characteristic.Active.INACTIVE,
+            );
+        }, 300);
+      });
+
+    this.heatpumpService
+      .getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
+      .onGet(() => {
+        if (!this.states.hpActive) {
+          return this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE;
+        }
+        return this.states.hpHeatingState === 2
+          ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING
+          : this.platform.Characteristic.CurrentHeaterCoolerState.IDLE;
+      });
+
+    this.heatpumpService
+      .getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
+      .setProps({ validValues: [this.platform.Characteristic.TargetHeaterCoolerState.HEAT] })
+      .onGet(() => this.platform.Characteristic.TargetHeaterCoolerState.HEAT)
+      .onSet(async () => { /* fixed */ });
+
+    this.heatpumpService
+      .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+      .onGet(() => this.states.hpCurrentTemp);
+
+    this.heatpumpService
+      .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+      .setProps({ minValue: -30, maxValue: 50, minStep: 0.5 })
+      .onGet(() => this.states.hpOutsideTemp);
+
+    // COP as Lightbulb brightness (COP 1.0→5.0 mapped to 20→100%)
+    this.heatpumpCOPService =
+      this.accessory.getService('COP') ||
+      this.accessory.addService(this.platform.Service.Lightbulb, 'COP', 'heatpump-cop');
+
+    this.heatpumpCOPService.setCharacteristic(this.platform.Characteristic.Name, 'COP');
+
+    this.heatpumpCOPService
+      .getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => this.states.hpActive)
+      .onSet(async () => {
+        setTimeout(() => {
+          this.heatpumpCOPService!
+            .getCharacteristic(this.platform.Characteristic.On)
+            .updateValue(this.states.hpActive);
+        }, 300);
+      });
+
+    this.heatpumpCOPService
+      .getCharacteristic(this.platform.Characteristic.Brightness)
+      .onGet(() => Math.min(100, Math.round(this.states.hpCOP * 20)))  // COP 5 = 100%
+      .onSet(async () => {
+        setTimeout(() => {
+          this.heatpumpCOPService!
+            .getCharacteristic(this.platform.Characteristic.Brightness)
+            .updateValue(Math.min(100, Math.round(this.states.hpCOP * 20)));
+        }, 300);
+      });
+
+    this.platform.log.debug('[EnergyAccessory] Heat pump services created');
+  }
+
   // ── PV ─────────────────────────────────────────────────────────────────────
+
   private setupPVServices(): void {
-    // Use Lightbulb: On = producing, Brightness = production as % of peak
     this.pvProductionService =
       this.accessory.getService('PV Production') ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'PV Production', 'pv-production');
 
-    this.pvProductionService.setCharacteristic(
-      this.platform.Characteristic.Name, 'PV Production',
-    );
+    this.pvProductionService.setCharacteristic(this.platform.Characteristic.Name, 'PV Production');
 
     this.pvProductionService
       .getCharacteristic(this.platform.Characteristic.On)
       .onGet(() => this.states.pvActive)
       .onSet(async () => {
-        // Read-only: restore previous state
         setTimeout(() => {
           this.pvProductionService!
             .getCharacteristic(this.platform.Characteristic.On)
@@ -253,7 +426,6 @@ export class ViessmannEnergyAccessory {
       .getCharacteristic(this.platform.Characteristic.Brightness)
       .onGet(() => this.states.pvProductionPercent)
       .onSet(async () => {
-        // Read-only: restore previous state
         setTimeout(() => {
           this.pvProductionService!
             .getCharacteristic(this.platform.Characteristic.Brightness)
@@ -265,15 +437,13 @@ export class ViessmannEnergyAccessory {
   }
 
   // ── Battery ────────────────────────────────────────────────────────────────
+
   private setupBatteryServices(): void {
-    // Battery service: level + charging state
     this.batteryService =
       this.accessory.getService(this.platform.Service.Battery) ||
       this.accessory.addService(this.platform.Service.Battery, 'Battery Storage', 'battery-storage');
 
-    this.batteryService.setCharacteristic(
-      this.platform.Characteristic.Name, 'Battery Storage',
-    );
+    this.batteryService.setCharacteristic(this.platform.Characteristic.Name, 'Battery Storage');
 
     this.batteryService
       .getCharacteristic(this.platform.Characteristic.BatteryLevel)
@@ -281,12 +451,11 @@ export class ViessmannEnergyAccessory {
 
     this.batteryService
       .getCharacteristic(this.platform.Characteristic.ChargingState)
-      .onGet(() => {
-        if (this.states.batteryCharging) {
-          return this.platform.Characteristic.ChargingState.CHARGING;
-        }
-        return this.platform.Characteristic.ChargingState.NOT_CHARGING;
-      });
+      .onGet(() =>
+        this.states.batteryCharging
+          ? this.platform.Characteristic.ChargingState.CHARGING
+          : this.platform.Characteristic.ChargingState.NOT_CHARGING,
+      );
 
     this.batteryService
       .getCharacteristic(this.platform.Characteristic.StatusLowBattery)
@@ -296,14 +465,11 @@ export class ViessmannEnergyAccessory {
           : this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL,
       );
 
-    // Lightbulb to show charge/discharge power as brightness
     this.batteryPowerService =
       this.accessory.getService('Battery Power') ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'Battery Power', 'battery-power');
 
-    this.batteryPowerService.setCharacteristic(
-      this.platform.Characteristic.Name, 'Battery Power',
-    );
+    this.batteryPowerService.setCharacteristic(this.platform.Characteristic.Name, 'Battery Power');
 
     this.batteryPowerService
       .getCharacteristic(this.platform.Characteristic.On)
@@ -319,16 +485,12 @@ export class ViessmannEnergyAccessory {
     this.batteryPowerService
       .getCharacteristic(this.platform.Characteristic.Brightness)
       .onGet(() => {
-        const power = this.states.batteryCharging
-          ? this.states.batteryChargingW
-          : this.states.batteryDischargingW;
-        return Math.min(100, Math.round(power / 50)); // 5000W peak → 100%
+        const power = this.states.batteryCharging ? this.states.batteryChargingW : this.states.batteryDischargingW;
+        return Math.min(100, Math.round(power / 50));
       })
       .onSet(async () => {
         setTimeout(() => {
-          const power = this.states.batteryCharging
-            ? this.states.batteryChargingW
-            : this.states.batteryDischargingW;
+          const power = this.states.batteryCharging ? this.states.batteryChargingW : this.states.batteryDischargingW;
           this.batteryPowerService!
             .getCharacteristic(this.platform.Characteristic.Brightness)
             .updateValue(Math.min(100, Math.round(power / 50)));
@@ -339,15 +501,13 @@ export class ViessmannEnergyAccessory {
   }
 
   // ── Wallbox ────────────────────────────────────────────────────────────────
+
   private setupWallboxServices(): void {
-    // Switch: enable/disable charging
     this.wallboxService =
       this.accessory.getService('EV Charging') ||
       this.accessory.addService(this.platform.Service.Switch, 'EV Charging', 'wallbox-charging');
 
-    this.wallboxService.setCharacteristic(
-      this.platform.Characteristic.Name, 'EV Charging',
-    );
+    this.wallboxService.setCharacteristic(this.platform.Characteristic.Name, 'EV Charging');
 
     this.wallboxService
       .getCharacteristic(this.platform.Characteristic.On)
@@ -356,20 +516,16 @@ export class ViessmannEnergyAccessory {
         await this.setWallboxCharging(value as boolean);
       });
 
-    // Outlet: plugged in status
     this.wallboxOutletService =
       this.accessory.getService('EV Plugged In') ||
       this.accessory.addService(this.platform.Service.Outlet, 'EV Plugged In', 'wallbox-outlet');
 
-    this.wallboxOutletService.setCharacteristic(
-      this.platform.Characteristic.Name, 'EV Plugged In',
-    );
+    this.wallboxOutletService.setCharacteristic(this.platform.Characteristic.Name, 'EV Plugged In');
 
     this.wallboxOutletService
       .getCharacteristic(this.platform.Characteristic.On)
       .onGet(() => this.states.wallboxPluggedIn)
       .onSet(async () => {
-        // Read-only
         setTimeout(() => {
           this.wallboxOutletService!
             .getCharacteristic(this.platform.Characteristic.On)
@@ -385,6 +541,7 @@ export class ViessmannEnergyAccessory {
   }
 
   // ── Electric DHW heater ────────────────────────────────────────────────────
+
   private setupElectricDHWService(): void {
     this.electricDHWService =
       this.accessory.getService('Electric Hot Water') ||
@@ -396,7 +553,6 @@ export class ViessmannEnergyAccessory {
       this.platform.Characteristic.Name, 'Electric Hot Water',
     );
 
-    // Active
     this.electricDHWService
       .getCharacteristic(this.platform.Characteristic.Active)
       .onGet(() =>
@@ -408,7 +564,6 @@ export class ViessmannEnergyAccessory {
         await this.setElectricDHWActive(value === this.platform.Characteristic.Active.ACTIVE);
       });
 
-    // Current heater state
     this.electricDHWService
       .getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
       .onGet(() => {
@@ -420,21 +575,16 @@ export class ViessmannEnergyAccessory {
           : this.platform.Characteristic.CurrentHeaterCoolerState.IDLE;
       });
 
-    // Target heater state — HEAT only
     this.electricDHWService
       .getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
-      .setProps({
-        validValues: [this.platform.Characteristic.TargetHeaterCoolerState.HEAT],
-      })
+      .setProps({ validValues: [this.platform.Characteristic.TargetHeaterCoolerState.HEAT] })
       .onGet(() => this.platform.Characteristic.TargetHeaterCoolerState.HEAT)
       .onSet(async () => { /* fixed to HEAT */ });
 
-    // Current temperature
     this.electricDHWService
       .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
       .onGet(() => this.states.electricDHWCurrentTemp);
 
-    // Heating threshold = target temperature
     this.electricDHWService
       .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
       .setProps({ minValue: 10, maxValue: 85, minStep: 1 })
@@ -447,6 +597,7 @@ export class ViessmannEnergyAccessory {
   }
 
   // ── Data update ────────────────────────────────────────────────────────────
+
   public async handleUpdate(): Promise<void> {
     try {
       const features = await this.platform.viessmannAPI.getDeviceFeatures(
@@ -461,86 +612,188 @@ export class ViessmannEnergyAccessory {
   }
 
   private async updateFromFeatures(features: any[]): Promise<void> {
-    const get = (featureName: string) => features.find(f => f.feature === featureName);
+    const get = (name: string) => features.find(f => f.feature === name);
+    const tag = '[EnergyAccessory]';
 
-    this.platform.log.debug(`[EnergyAccessory] updateFromFeatures — ${features.length} features, device=${this.device.id}`);
+    if (this.isHeatPump) {
+      await this.updateHeatPump(features, get, tag);
+    } else {
+      await this.updateEnergyDevices(features, get, tag);
+    }
+  }
 
-    // ── PV ──────────────────────────────────────────────────────────────────
-    if (this.hasPV) {
-      // Vitocharge VX3 / Vitovolt 300: heating.photovoltaic.production.current
-      const pvCurrent = get('heating.photovoltaic.production.current') ||
-                        get('heating.solar.power.production');
-      const pvStatus  = get('heating.photovoltaic.status') ||
-                        get('heating.solar.sensors.temperature.collector');
+  // ── Heat pump update ───────────────────────────────────────────────────────
 
-      this.platform.log.debug(`[EnergyAccessory] PV: pvCurrent feature=${pvCurrent?.feature ?? 'not found'} raw=${JSON.stringify(pvCurrent?.properties)}`);
-      if (pvCurrent) {
-        this.states.pvProductionW = pvCurrent.properties?.value?.value ?? 0;
-        // Assume 10 kW peak system → express as percentage
-        this.states.pvProductionPercent = Math.min(100, Math.round(this.states.pvProductionW / 100));
-        this.states.pvActive = this.states.pvProductionW > 10;
-        this.platform.log.info(`[EnergyAccessory] PV → production=${this.states.pvProductionW}W (${this.states.pvProductionPercent}%) active=${this.states.pvActive}`);
+  private async updateHeatPump(
+    features: any[],
+    get: (name: string) => any,
+    tag: string,
+  ): Promise<void> {
+
+    // Compressor active state
+    if (this.hpPaths.compressorActive) {
+      const f = get(this.hpPaths.compressorActive);
+      if (f) {
+        // Try various property shapes seen on different devices
+        const active =
+          f.properties?.active?.value === true ||
+          f.properties?.status?.value === 'on' ||
+          f.properties?.status?.value === 'active' ||
+          f.properties?.value?.value === 'on';
+        this.states.hpActive = active;
+        this.states.hpHeatingState = active ? 2 : 1;
+        this.platform.log.debug(`${tag}[HP] compressor active=${active} raw=${JSON.stringify(f.properties)}`);
       }
-
-      // Daily yield
-      const pvDaily = get('heating.photovoltaic.production.day') ||
-                      get('heating.solar.power.production.day');
-      this.platform.log.debug(`[EnergyAccessory] PV: pvDaily feature=${pvDaily?.feature ?? 'not found'} raw=${JSON.stringify(pvDaily?.properties)}`);
-      if (pvDaily) {
-        this.states.pvDailyYieldKwh = pvDaily.properties?.value?.value ?? 0;
-        this.platform.log.info(`[EnergyAccessory] PV → dailyYield=${this.states.pvDailyYieldKwh}kWh`);
-      }
-
-      if (this.pvProductionService) {
-        this.pvProductionService
-          .getCharacteristic(this.platform.Characteristic.On)
-          .updateValue(this.states.pvActive);
-        this.pvProductionService
-          .getCharacteristic(this.platform.Characteristic.Brightness)
-          .updateValue(this.states.pvProductionPercent);
+    } else {
+      // Path unknown — try generic compressor scan
+      const anyCompressor = features.find(f =>
+        f.feature.includes('compressor') || f.feature.includes('heatpump'),
+      );
+      if (anyCompressor) {
+        this.platform.log.info(
+          `${tag}[HP] Unknown compressor path — found candidate: ${anyCompressor.feature} ` +
+          `props=${JSON.stringify(anyCompressor.properties)}`,
+        );
       }
     }
 
-    // ── Battery ──────────────────────────────────────────────────────────────
-    if (this.hasBattery) {
-      const battLevel    = get('heating.powerStorage.charging.level') ||
-                           get('heating.battery.level');
-      const battCharging = get('heating.powerStorage.charging.power') ||
-                           get('heating.battery.charging.power');
-      const battDischarge = get('heating.powerStorage.discharging.power') ||
-                            get('heating.battery.discharging.power');
+    // Outside temperature
+    if (this.hpPaths.outsideTemp) {
+      const f = get(this.hpPaths.outsideTemp);
+      if (f) {
+        this.states.hpOutsideTemp = f.properties?.value?.value ?? 0;
+        this.states.hpCurrentTemp = this.states.hpOutsideTemp; // show outside temp in HeaterCooler
+        this.platform.log.debug(`${tag}[HP] outsideTemp=${this.states.hpOutsideTemp}°C`);
+      }
+    }
 
-      this.platform.log.debug(`[EnergyAccessory] Battery: level feature=${battLevel?.feature ?? 'not found'} raw=${JSON.stringify(battLevel?.properties)}`);
-      this.platform.log.debug(`[EnergyAccessory] Battery: charging feature=${battCharging?.feature ?? 'not found'} raw=${JSON.stringify(battCharging?.properties)}`);
-      this.platform.log.debug(`[EnergyAccessory] Battery: discharge feature=${battDischarge?.feature ?? 'not found'} raw=${JSON.stringify(battDischarge?.properties)}`);
+    // Supply temperature
+    if (this.hpPaths.supplyTemp) {
+      const f = get(this.hpPaths.supplyTemp);
+      if (f) {
+        this.states.hpSupplyTemp = f.properties?.value?.value ?? 0;
+        this.platform.log.debug(`${tag}[HP] supplyTemp=${this.states.hpSupplyTemp}°C`);
+      }
+    }
+
+    // Return temperature
+    if (this.hpPaths.returnTemp) {
+      const f = get(this.hpPaths.returnTemp);
+      if (f) {
+        this.states.hpReturnTemp = f.properties?.value?.value ?? 0;
+        this.platform.log.debug(`${tag}[HP] returnTemp=${this.states.hpReturnTemp}°C`);
+      }
+    }
+
+    // COP
+    if (this.hpPaths.cop) {
+      const f = get(this.hpPaths.cop);
+      if (f) {
+        this.states.hpCOP = f.properties?.value?.value ?? 0;
+        this.platform.log.debug(`${tag}[HP] COP=${this.states.hpCOP}`);
+      }
+    }
+
+    this.platform.log.info(
+      `${tag}[HP] active=${this.states.hpActive} outside=${this.states.hpOutsideTemp}°C ` +
+      `supply=${this.states.hpSupplyTemp}°C return=${this.states.hpReturnTemp}°C COP=${this.states.hpCOP}`,
+    );
+
+    // Push to HomeKit
+    if (this.heatpumpService) {
+      this.heatpumpService
+        .getCharacteristic(this.platform.Characteristic.Active)
+        .updateValue(
+          this.states.hpActive
+            ? this.platform.Characteristic.Active.ACTIVE
+            : this.platform.Characteristic.Active.INACTIVE,
+        );
+      this.heatpumpService
+        .getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
+        .updateValue(
+          this.states.hpActive
+            ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING
+            : this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE,
+        );
+      this.heatpumpService
+        .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+        .updateValue(this.states.hpOutsideTemp);
+      this.heatpumpService
+        .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+        .updateValue(this.states.hpOutsideTemp);
+    }
+
+    if (this.heatpumpCOPService) {
+      this.heatpumpCOPService
+        .getCharacteristic(this.platform.Characteristic.On)
+        .updateValue(this.states.hpActive);
+      this.heatpumpCOPService
+        .getCharacteristic(this.platform.Characteristic.Brightness)
+        .updateValue(Math.min(100, Math.round(this.states.hpCOP * 20)));
+    }
+  }
+
+  // ── Energy devices update ─────────────────────────────────────────────────
+
+  private async updateEnergyDevices(
+    features: any[],
+    get: (name: string) => any,
+    tag: string,
+  ): Promise<void> {
+
+    // PV
+    if (this.hasPV) {
+      const pvCurrent = get('heating.photovoltaic.production.current') ||
+                        get('heating.solar.power.production');
+      const pvDaily   = get('heating.photovoltaic.production.day') ||
+                        get('heating.solar.power.production.day');
+
+      if (pvCurrent) {
+        this.states.pvProductionW       = pvCurrent.properties?.value?.value ?? 0;
+        this.states.pvProductionPercent = Math.min(100, Math.round(this.states.pvProductionW / 100));
+        this.states.pvActive            = this.states.pvProductionW > 10;
+        this.platform.log.info(`${tag} PV → ${this.states.pvProductionW}W (${this.states.pvProductionPercent}%)`);
+      }
+      if (pvDaily) {
+        this.states.pvDailyYieldKwh = pvDaily.properties?.value?.value ?? 0;
+        this.platform.log.debug(`${tag} PV → dailyYield=${this.states.pvDailyYieldKwh}kWh`);
+      }
+
+      this.pvProductionService?.getCharacteristic(this.platform.Characteristic.On)
+        .updateValue(this.states.pvActive);
+      this.pvProductionService?.getCharacteristic(this.platform.Characteristic.Brightness)
+        .updateValue(this.states.pvProductionPercent);
+    }
+
+    // Battery
+    if (this.hasBattery) {
+      const battLevel    = get('heating.powerStorage.charging.level') || get('heating.battery.level');
+      const battCharging = get('heating.powerStorage.charging.power') || get('heating.battery.charging.power');
+      const battDischarge= get('heating.powerStorage.discharging.power') || get('heating.battery.discharging.power');
+
       if (battLevel) {
         this.states.batteryLevelPercent = Math.round(battLevel.properties?.value?.value ?? 0);
-        this.states.batteryStatusLow = this.states.batteryLevelPercent < 15;
-        this.platform.log.info(`[EnergyAccessory] Battery → level=${this.states.batteryLevelPercent}% low=${this.states.batteryStatusLow}`);
+        this.states.batteryStatusLow    = this.states.batteryLevelPercent < 15;
+        this.platform.log.info(`${tag} Battery → ${this.states.batteryLevelPercent}% low=${this.states.batteryStatusLow}`);
       }
       if (battCharging) {
         this.states.batteryChargingW = battCharging.properties?.value?.value ?? 0;
-        this.states.batteryCharging = this.states.batteryChargingW > 0;
-        this.platform.log.info(`[EnergyAccessory] Battery → charging=${this.states.batteryCharging} power=${this.states.batteryChargingW}W`);
+        this.states.batteryCharging  = this.states.batteryChargingW > 0;
       }
       if (battDischarge) {
         this.states.batteryDischargingW = battDischarge.properties?.value?.value ?? 0;
-        this.platform.log.info(`[EnergyAccessory] Battery → discharging=${this.states.batteryDischargingW}W`);
       }
 
       if (this.batteryService) {
-        this.batteryService
-          .getCharacteristic(this.platform.Characteristic.BatteryLevel)
+        this.batteryService.getCharacteristic(this.platform.Characteristic.BatteryLevel)
           .updateValue(this.states.batteryLevelPercent);
-        this.batteryService
-          .getCharacteristic(this.platform.Characteristic.ChargingState)
+        this.batteryService.getCharacteristic(this.platform.Characteristic.ChargingState)
           .updateValue(
             this.states.batteryCharging
               ? this.platform.Characteristic.ChargingState.CHARGING
               : this.platform.Characteristic.ChargingState.NOT_CHARGING,
           );
-        this.batteryService
-          .getCharacteristic(this.platform.Characteristic.StatusLowBattery)
+        this.batteryService.getCharacteristic(this.platform.Characteristic.StatusLowBattery)
           .updateValue(
             this.states.batteryStatusLow
               ? this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
@@ -549,106 +802,69 @@ export class ViessmannEnergyAccessory {
       }
     }
 
-    // ── Wallbox ───────────────────────────────────────────────────────────────
+    // Wallbox
     if (this.hasWallbox) {
       const evStatus  = get('charging.ev.status') || get('heating.ev.status');
       const evPower   = get('charging.ev.power')  || get('heating.ev.charging.power');
       const evSession = get('charging.ev.session.charged') || get('heating.ev.session.energy');
 
-      this.platform.log.debug(`[EnergyAccessory] Wallbox: status feature=${evStatus?.feature ?? 'not found'} raw=${JSON.stringify(evStatus?.properties)}`);
-      this.platform.log.debug(`[EnergyAccessory] Wallbox: power feature=${evPower?.feature ?? 'not found'} raw=${JSON.stringify(evPower?.properties)}`);
       if (evStatus) {
         const status = evStatus.properties?.status?.value ?? '';
-        this.states.wallboxPluggedIn = ['plugged', 'charging', 'connected'].includes(
-          status.toLowerCase(),
-        );
+        this.states.wallboxPluggedIn      = ['plugged', 'charging', 'connected'].includes(status.toLowerCase());
         this.states.wallboxChargingActive = status.toLowerCase() === 'charging';
-        this.platform.log.info(`[EnergyAccessory] Wallbox → status="${status}" pluggedIn=${this.states.wallboxPluggedIn} charging=${this.states.wallboxChargingActive}`);
+        this.platform.log.info(`${tag} Wallbox → status="${status}" pluggedIn=${this.states.wallboxPluggedIn} charging=${this.states.wallboxChargingActive}`);
       }
       if (evPower) {
         this.states.wallboxChargingPowerW = evPower.properties?.value?.value ?? 0;
-        this.platform.log.info(`[EnergyAccessory] Wallbox → chargingPower=${this.states.wallboxChargingPowerW}W`);
       }
       if (evSession) {
         this.states.wallboxEnergySessionKwh = evSession.properties?.value?.value ?? 0;
-        this.platform.log.info(`[EnergyAccessory] Wallbox → sessionEnergy=${this.states.wallboxEnergySessionKwh}kWh`);
       }
 
-      if (this.wallboxService) {
-        this.wallboxService
-          .getCharacteristic(this.platform.Characteristic.On)
-          .updateValue(this.states.wallboxChargingActive);
-      }
-      if (this.wallboxOutletService) {
-        this.wallboxOutletService
-          .getCharacteristic(this.platform.Characteristic.On)
-          .updateValue(this.states.wallboxPluggedIn);
-        this.wallboxOutletService
-          .getCharacteristic(this.platform.Characteristic.OutletInUse)
-          .updateValue(this.states.wallboxChargingActive);
-      }
+      this.wallboxService?.getCharacteristic(this.platform.Characteristic.On)
+        .updateValue(this.states.wallboxChargingActive);
+      this.wallboxOutletService?.getCharacteristic(this.platform.Characteristic.On)
+        .updateValue(this.states.wallboxPluggedIn);
+      this.wallboxOutletService?.getCharacteristic(this.platform.Characteristic.OutletInUse)
+        .updateValue(this.states.wallboxChargingActive);
     }
 
-    // ── Electric DHW ──────────────────────────────────────────────────────────
+    // Electric DHW
     if (this.hasElectricDHW) {
-      const dhwTemp    = get('heating.dhw.sensors.temperature.hotWaterStorage') ||
-                         get('heating.dhw.temperature.main');
-      const dhwTarget  = get('heating.dhw.temperature.main');
-      const dhwRod     = get('heating.dhw.heating.rod.status') ||
-                         get('heating.dhw.operating.modes.electricBoost');
+      const dhwTemp   = get('heating.dhw.sensors.temperature.hotWaterStorage') ||
+                        get('heating.dhw.temperature.main');
+      const dhwTarget = get('heating.dhw.temperature.main');
+      const dhwRod    = get('heating.dhw.heating.rod.status') ||
+                        get('heating.dhw.operating.modes.electricBoost');
 
-      this.platform.log.debug(`[EnergyAccessory] ElecDHW: temp feature=${dhwTemp?.feature ?? 'not found'} raw=${JSON.stringify(dhwTemp?.properties)}`);
-      this.platform.log.debug(`[EnergyAccessory] ElecDHW: target feature=${dhwTarget?.feature ?? 'not found'} raw=${JSON.stringify(dhwTarget?.properties)}`);
-      this.platform.log.debug(`[EnergyAccessory] ElecDHW: rod/boost feature=${dhwRod?.feature ?? 'not found'} raw=${JSON.stringify(dhwRod?.properties)}`);
       if (dhwTemp) {
         this.states.electricDHWCurrentTemp = dhwTemp.properties?.value?.value ?? 20;
-        this.platform.log.info(`[EnergyAccessory] ElecDHW → currentTemp=${this.states.electricDHWCurrentTemp}°C`);
       }
       if (dhwTarget) {
         this.states.electricDHWTargetTemp = dhwTarget.properties?.value?.value ?? 55;
-        this.platform.log.info(`[EnergyAccessory] ElecDHW → targetTemp=${this.states.electricDHWTargetTemp}°C`);
       }
       if (dhwRod) {
-        const rodActive = dhwRod.properties?.status?.value === 'on' ||
-                          dhwRod.properties?.value?.value === 'electricBoost' ||
-                          dhwRod.properties?.active?.value === true;
-        this.states.electricDHWActive = rodActive;
+        const rodActive =
+          dhwRod.properties?.status?.value === 'on' ||
+          dhwRod.properties?.value?.value === 'electricBoost' ||
+          dhwRod.properties?.active?.value === true;
+        this.states.electricDHWActive       = rodActive;
         this.states.electricDHWHeatingState = rodActive ? 1 : 0;
-        this.platform.log.info(`[EnergyAccessory] ElecDHW → active=${rodActive} heatingState=${this.states.electricDHWHeatingState}`);
+        this.platform.log.info(`${tag} ElecDHW → active=${rodActive} temp=${this.states.electricDHWCurrentTemp}°C`);
       }
 
       if (this.electricDHWService) {
-        this.electricDHWService
-          .getCharacteristic(this.platform.Characteristic.Active)
+        this.electricDHWService.getCharacteristic(this.platform.Characteristic.Active)
           .updateValue(
             this.states.electricDHWActive
               ? this.platform.Characteristic.Active.ACTIVE
               : this.platform.Characteristic.Active.INACTIVE,
           );
-        this.electricDHWService
-          .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+        this.electricDHWService.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
           .updateValue(this.states.electricDHWCurrentTemp);
-        this.electricDHWService
-          .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+        this.electricDHWService.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
           .updateValue(this.states.electricDHWTargetTemp);
       }
-    }
-
-    // 📊 History logging — CSV
-    if (this.historyLogger) {
-      this.historyLogger.appendCsvRow({
-        timestamp: new Date().toISOString(),
-        accessory: 'energy',
-        pv_production_w:      this.hasPV      ? this.states.pvProductionW      : undefined,
-        pv_daily_kwh:         this.hasPV      ? this.states.pvDailyYieldKwh    : undefined,
-        battery_level:        this.hasBattery ? this.states.batteryLevelPercent : undefined,
-        battery_charging_w:   this.hasBattery ? this.states.batteryChargingW    : undefined,
-        battery_discharging_w:this.hasBattery ? this.states.batteryDischargingW : undefined,
-        grid_feedin_w:        this.hasBattery ? this.states.gridFeedInW         : undefined,
-        grid_draw_w:          this.hasBattery ? this.states.gridDrawW           : undefined,
-        wallbox_charging:     this.hasWallbox ? this.states.wallboxChargingActive : undefined,
-        wallbox_power_w:      this.hasWallbox ? this.states.wallboxChargingPowerW : undefined,
-      });
     }
   }
 
@@ -656,20 +872,17 @@ export class ViessmannEnergyAccessory {
 
   private async setWallboxCharging(enable: boolean): Promise<void> {
     try {
-      const command = enable ? 'start' : 'stop';
       const success = await this.platform.viessmannAPI.executeCommand(
         this.installation.id,
         this.gateway.serial,
         this.device.id,
         'charging.ev',
-        command,
+        enable ? 'start' : 'stop',
         {},
       );
       if (success) {
         this.states.wallboxChargingActive = enable;
-        this.platform.log.info(
-          `[EnergyAccessory] Wallbox charging ${enable ? 'started' : 'stopped'}`,
-        );
+        this.platform.log.info(`[EnergyAccessory] Wallbox charging ${enable ? 'started' : 'stopped'}`);
       }
     } catch (error) {
       this.platform.log.error('[EnergyAccessory] Failed to set wallbox charging:', error);
@@ -678,20 +891,17 @@ export class ViessmannEnergyAccessory {
 
   private async setElectricDHWActive(active: boolean): Promise<void> {
     try {
-      const mode = active ? 'electricBoost' : 'off';
       const success = await this.platform.viessmannAPI.executeCommand(
         this.installation.id,
         this.gateway.serial,
         this.device.id,
         'heating.dhw.operating.modes.active',
         'setMode',
-        { mode },
+        { mode: active ? 'electricBoost' : 'off' },
       );
       if (success) {
         this.states.electricDHWActive = active;
-        this.platform.log.info(
-          `[EnergyAccessory] Electric DHW ${active ? 'activated (electricBoost)' : 'deactivated'}`,
-        );
+        this.platform.log.info(`[EnergyAccessory] Electric DHW ${active ? 'activated' : 'deactivated'}`);
       }
     } catch (error) {
       this.platform.log.error('[EnergyAccessory] Failed to set electric DHW active:', error);
@@ -708,9 +918,7 @@ export class ViessmannEnergyAccessory {
       );
       if (success) {
         this.states.electricDHWTargetTemp = temperature;
-        this.platform.log.info(
-          `[EnergyAccessory] Electric DHW target temperature set to ${temperature}°C`,
-        );
+        this.platform.log.info(`[EnergyAccessory] Electric DHW temp set to ${temperature}°C`);
       }
     } catch (error) {
       this.platform.log.error('[EnergyAccessory] Failed to set electric DHW temperature:', error);

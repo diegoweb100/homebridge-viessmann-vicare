@@ -19,6 +19,8 @@ export interface ViessmannDevice {
   modelId: string;
   status: string;
   gatewaySerial: string;
+  roles: string[];       // e.g. ["type:boiler", "type:E3"] or ["type:heatpump"]
+  brand?: string;
 }
 
 export interface ViessmannFeature {
@@ -132,6 +134,8 @@ export class ViessmannAPIEndpoints {
       modelId: device.modelId,
       status: device.status,
       gatewaySerial: device.gatewaySerial,
+      roles: Array.isArray(device.roles) ? device.roles : [],
+      brand: device.brand,
     }));
   }
 
