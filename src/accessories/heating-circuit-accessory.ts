@@ -287,14 +287,17 @@ export class ViessmannHeatingCircuitAccessory {
       
       if (hasAnyMethod) {
         this.availableQuickSelections.push('extendedHeating');
-        // Initial state: comfort.active OR programs.active === comfortFeatureSuffix.
-        // NOTE: forcedLastFromSchedule.active is NOT used — it is True during normal
-        // schedule transitions and does not indicate Extended Heating is active.
-        const comfortActive  = comfortProgram.properties?.active?.value || false;
-        const activeProg     = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
+        // Initial state: OR of all three signals (same logic as update cycle).
+        const comfortActive   = comfortProgram.properties?.active?.value || false;
+        const forcedActive    = forcedProgram?.properties?.active?.value  || false;
+        const activeProg      = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
         const activeIsComfort = activeProg?.properties?.value?.value === this.comfortFeatureSuffix;
-        this.states.ExtendedHeatingActive = comfortActive || activeIsComfort;
-        this.platform.log.debug(`HC${this.circuitNumber} ExtendedHeating initial: comfort.active=${comfortActive} programs.active=${activeProg?.properties?.value?.value} → ${this.states.ExtendedHeatingActive}`);
+        this.states.ExtendedHeatingActive = comfortActive || forcedActive || activeIsComfort;
+        this.platform.log.debug(
+          `HC${this.circuitNumber} ExtendedHeating initial:` +
+          ` comfort=${comfortActive} forced=${forcedActive} active=${activeProg?.properties?.value?.value}` +
+          ` → ${this.states.ExtendedHeatingActive}`,
+        );
         
         const activateExecutable = hasActivate?.isExecutable || false;
         const deactivateExecutable = hasDeactivate?.isExecutable || false;
@@ -1014,23 +1017,41 @@ private setupTemperatureProgramServices() {
         }
       } else {
         // DEACTIVATING Extended Heating
-        // Try comfort.deactivate first (clean method)
-        const deactivateCmd = comfortProgram.commands?.['deactivate'];
-        if (deactivateCmd?.isExecutable) {
-          const success = await this.executeComfortCommand('deactivate', comfortProgram, false);
+        // Strategy: try all deactivation methods in order of likelihood to work.
+        // On Vitodens: forcedLastFromSchedule is the real mechanism → try it first.
+        // On other devices: comfort.deactivate may work directly.
+        const circuitPfx = `heating.circuits.${this.circuitNumber}`;
+        const forcedProgramNow = features.find(f => f.feature === `${circuitPfx}.operating.programs.forcedLastFromSchedule`);
+        let deactivated = false;
+
+        // Method 1: forcedLastFromSchedule.deactivate (Vitodens and others using this mechanism)
+        if (!deactivated && forcedProgramNow?.commands?.deactivate?.isExecutable) {
+          const success = await this.platform.viessmannAPI.executeCommand(
+            this.installation.id,
+            this.gateway.serial,
+            this.device.id,
+            `${circuitPfx}.operating.programs.forcedLastFromSchedule`,
+            'deactivate',
+            {},
+          );
           if (success) {
-            this.states.ExtendedHeatingActive = false;
-            this.platform.log.info(`Heating circuit ${this.circuitNumber} extended heating deactivated`);
-            return;
+            deactivated = true;
+            this.platform.log.info(`HC${this.circuitNumber} extended heating deactivated via forcedLastFromSchedule`);
           }
         }
 
-        // Fallback: setTemperature back to normal program temperature
-        // This works even when deactivate is not executable — reduces comfort temp
-        // back to normal level which effectively cancels the boost.
-        const setTempCmd = comfortProgram.commands?.['setTemperature'];
-        if (setTempCmd?.isExecutable) {
-          const normalProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.normal`);
+        // Method 2: comfort.deactivate (devices where comfort is the primary mechanism)
+        if (!deactivated && comfortProgram.commands?.deactivate?.isExecutable) {
+          const success = await this.executeComfortCommand('deactivate', comfortProgram, false);
+          if (success) {
+            deactivated = true;
+            this.platform.log.info(`HC${this.circuitNumber} extended heating deactivated via comfort.deactivate`);
+          }
+        }
+
+        // Method 3: comfort.setTemperature back to normal level
+        if (!deactivated && comfortProgram.commands?.setTemperature?.isExecutable) {
+          const normalProgram = features.find(f => f.feature === `${circuitPfx}.operating.programs.normal`);
           const normalTemp = normalProgram?.properties?.temperature?.value
                           ?? this.programTemperatures.normal
                           ?? 20;
@@ -1038,24 +1059,20 @@ private setupTemperatureProgramServices() {
             this.installation.id,
             this.gateway.serial,
             this.device.id,
-            `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`,
+            `${circuitPfx}.operating.programs.${this.comfortFeatureSuffix}`,
             'setTemperature',
             { targetTemperature: normalTemp },
           );
           if (success) {
-            this.states.ExtendedHeatingActive = false;
-            this.platform.log.info(`Heating circuit ${this.circuitNumber} extended heating cancelled via setTemperature → ${normalTemp}°C`);
-            return;
+            deactivated = true;
+            this.platform.log.info(`HC${this.circuitNumber} extended heating cancelled via setTemperature → ${normalTemp}°C`);
           }
         }
 
-        // Final fallback via tryAlternativeExtendedHeating
-        const success = await this.tryAlternativeExtendedHeating(false, comfortProgram, features);
-        if (success) {
+        if (deactivated) {
           this.states.ExtendedHeatingActive = false;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} extended heating deactivated using alternative method`);
         } else {
-          throw new Error('Failed to deactivate extended heating mode');
+          throw new Error('Failed to deactivate extended heating — no executable command found');
         }
       }
     } catch (error) {
@@ -1861,22 +1878,31 @@ private setupTemperatureProgramServices() {
       }
     }
 
-    // Extended heating state: read from programs.active === comfortFeatureSuffix OR comfort.active.
-    // NOTE: forcedLastFromSchedule.active is NOT a reliable indicator — it is also True during
-    // normal schedule transitions (e.g. maintaining 'normal' outside active slots).
-    // The authoritative source is programs.active value or comfort.active property.
-    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`);
-    const activeProg     = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
-    const comfortActive  = comfortProgram?.properties?.active?.value ?? false;
+    // Extended heating state — three signals in OR, all verified via live API:
+    //
+    // Vitodens (Ciriè, confirmed):
+    //   programs.active stays 'normal', comfort.active stays False
+    //   forcedLastFromSchedule.active = True when ON, False when OFF  ← real indicator here
+    //
+    // Vitocal gen3 / other devices:
+    //   programs.active may change to comfortFeatureSuffix
+    //   comfort.active may become True
+    //
+    // Using OR of all three signals covers all known device behaviours without assumptions.
+    const comfortProgram  = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`);
+    const forcedProgram   = features.find(f => f.feature === `${circuitPrefix}.operating.programs.forcedLastFromSchedule`);
+    const activeProg      = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
+    const comfortActive   = comfortProgram?.properties?.active?.value  ?? false;
+    const forcedActive    = forcedProgram?.properties?.active?.value   ?? false;
     const activeIsComfort = activeProg?.properties?.value?.value === this.comfortFeatureSuffix;
-    const extendedActive = comfortActive || activeIsComfort;
+    const extendedActive  = comfortActive || forcedActive || activeIsComfort;
     if (extendedActive !== this.states.ExtendedHeatingActive) {
       this.states.ExtendedHeatingActive = extendedActive;
       anyProgramStateChanged = true;
-      if (!extendedActive) {
-      }
       this.platform.log.debug(
-        `HC${this.circuitNumber} ExtendedHeating: comfort.active=${comfortActive} activeProgram=${activeProg?.properties?.value?.value} → ${extendedActive}`,
+        `HC${this.circuitNumber} ExtendedHeating:` +
+        ` comfort=${comfortActive} forced=${forcedActive} active=${activeProg?.properties?.value?.value}` +
+        ` → ${extendedActive}`,
       );
       if (extendedActive) {
         this.states.HolidayActive = false;
