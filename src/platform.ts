@@ -708,6 +708,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+      existingAccessory.context.device = device;
+      existingAccessory.context.installation = installation;
+      existingAccessory.context.gateway = gateway;
       new ViessmannBoilerAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new accessory:', displayName);
@@ -744,6 +747,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+      existingAccessory.context.device = device;
+      existingAccessory.context.installation = installation;
+      existingAccessory.context.gateway = gateway;
       new ViessmannDHWAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new accessory:', displayName);
@@ -785,6 +791,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
       if (existingAccessory) {
         this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+        existingAccessory.context.device = device;
+        existingAccessory.context.installation = installation;
+        existingAccessory.context.gateway = gateway;
         new ViessmannHeatingCircuitAccessory(this, existingAccessory, installation, gateway, device, circuitNumber);
       } else {
         this.log.info('Adding new accessory:', displayName);
@@ -856,6 +865,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing energy accessory from cache:', existingAccessory.displayName);
+      existingAccessory.context.device = device;
+      existingAccessory.context.installation = installation;
+      existingAccessory.context.gateway = gateway;
       new ViessmannEnergyAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new energy accessory:', displayName);
@@ -955,7 +967,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             this.log.debug(`📡 "${accessory.displayName}" — updateHandler dispatched`);
           } else {
             handlersSkipped++;
-            this.log.warn(`⚠️ "${accessory.displayName}" — updateHandler not set (accessory still initializing?)`);
+            this.log.debug(`⚙️ "${accessory.displayName}" — updateHandler not set, skipping`);
           }
 
         } catch (error) {

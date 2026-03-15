@@ -167,16 +167,17 @@ export class ViessmannEnergyAccessory {
     }
   }
 
-  // ── Full feature dump (always logged at INFO) ─────────────────────────────
+  // ── Full feature dump (debug only) ────────────────────────────────────────
 
   private logAllFeatures(features: any[]): void {
+    if (!this.platform.config.debug) return;
     const tag = '[EnergyAccessory]';
     const deviceLabel = `device=${this.device.id} model=${this.device.modelId ?? '?'} roles=${JSON.stringify(this.device.roles ?? [])}`;
 
-    this.platform.log.info(`${tag} ════════════════════════════════════════════════`);
-    this.platform.log.info(`${tag} FULL FEATURE DUMP — ${deviceLabel}`);
-    this.platform.log.info(`${tag} Total features: ${features.length}`);
-    this.platform.log.info(`${tag} ────────────────────────────────────────────────`);
+    this.platform.log.debug(`${tag} ════════════════════════════════════════════════`);
+    this.platform.log.debug(`${tag} FULL FEATURE DUMP — ${deviceLabel}`);
+    this.platform.log.debug(`${tag} Total features: ${features.length}`);
+    this.platform.log.debug(`${tag} ────────────────────────────────────────────────`);
 
     // Sort features alphabetically for readability
     const sorted = [...features].sort((a, b) => a.feature.localeCompare(b.feature));
@@ -188,18 +189,18 @@ export class ViessmannEnergyAccessory {
       const ready     = f.isReady   ? '✓' : '✗';
       const propVals  = JSON.stringify(f.properties ?? {});
 
-      this.platform.log.info(
+      this.platform.log.debug(
         `${tag}   [${enabled}${ready}] ${f.feature}`,
       );
-      this.platform.log.info(
+      this.platform.log.debug(
         `${tag}        props=(${propKeys}) values=${propVals.substring(0, 120)}`,
       );
       if (cmdKeys !== '—') {
-        this.platform.log.info(`${tag}        commands=(${cmdKeys})`);
+        this.platform.log.debug(`${tag}        commands=(${cmdKeys})`);
       }
     }
 
-    this.platform.log.info(`${tag} ════════════════════════════════════════════════`);
+    this.platform.log.debug(`${tag} ════════════════════════════════════════════════`);
   }
 
   // ── Capability detection ──────────────────────────────────────────────────
@@ -246,12 +247,19 @@ export class ViessmannEnergyAccessory {
         names.some(n => n === 'heating.dhw.operating.modes.electricBoost');
     }
 
-    this.platform.log.info(`${tag} ── Capability result:`);
-    this.platform.log.info(`${tag}    isHeatPump   : ${this.isHeatPump}`);
-    this.platform.log.info(`${tag}    PV/Solar     : ${this.hasPV}`);
-    this.platform.log.info(`${tag}    Battery      : ${this.hasBattery}`);
-    this.platform.log.info(`${tag}    Wallbox/EV   : ${this.hasWallbox}`);
-    this.platform.log.info(`${tag}    Electric DHW : ${this.hasElectricDHW}`);
+    const caps = [
+      this.isHeatPump     ? 'HeatPump' : null,
+      this.hasPV          ? 'PV'       : null,
+      this.hasBattery     ? 'Battery'  : null,
+      this.hasWallbox     ? 'Wallbox'  : null,
+      this.hasElectricDHW ? 'ElecDHW'  : null,
+    ].filter(Boolean).join(', ') || 'none';
+    this.platform.log.info(`${tag} Capabilities detected: ${caps}`);
+    this.platform.log.debug(`${tag}    isHeatPump   : ${this.isHeatPump}`);
+    this.platform.log.debug(`${tag}    PV/Solar     : ${this.hasPV}`);
+    this.platform.log.debug(`${tag}    Battery      : ${this.hasBattery}`);
+    this.platform.log.debug(`${tag}    Wallbox/EV   : ${this.hasWallbox}`);
+    this.platform.log.debug(`${tag}    Electric DHW : ${this.hasElectricDHW}`);
   }
 
   /**
@@ -303,10 +311,10 @@ export class ViessmannEnergyAccessory {
       'heating.compressor.0.cop',
     );
 
-    this.platform.log.info(`${tag} Resolved paths:`);
+    this.platform.log.debug(`${tag} Resolved paths:`);
     for (const [key, val] of Object.entries(this.hpPaths)) {
-      const status = val ? `✓ ${val}` : '✗ not found (will log raw features above)';
-      this.platform.log.info(`${tag}   ${key.padEnd(18)}: ${status}`);
+      const status = val ? `✓ ${val}` : '✗ not found';
+      this.platform.log.debug(`${tag}   ${key.padEnd(18)}: ${status}`);
     }
   }
 

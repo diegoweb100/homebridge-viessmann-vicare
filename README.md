@@ -1033,6 +1033,18 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.40] - 2026-03-15
+#### Fixed
+- **Critical: Accessories not updating after Homebridge restart** — when restoring accessories from cache, `device`, `installation`, and `gateway` were not written to `accessory.context`. The update loop silently skipped all accessories on every subsequent restart, showing `0 device(s) fetched, 0/0 accessories updated`. All four restore-from-cache paths (Boiler, DHW, Heating Circuit, Energy/Heat Pump) are now fixed.
+
+#### Changed
+- **Full feature dump** — moved from `INFO` to `DEBUG` level; only visible when `debug: true` is set in plugin config.
+- **Capability detail log** — resolved HP paths and capability breakdown moved to `DEBUG`; single compact `INFO` line now summarises detected capabilities (e.g. `Capabilities detected: HeatPump`).
+- **`updateHandler not set` warning** — downgraded from `WARN` to `DEBUG`. Per-device spam eliminated; update cycle summary still shows the count when non-zero.
+
+#### Notes
+- Users upgrading from ≤ v2.0.38 with a heat pump may see ghost "Heat Pump" accessories in Homebridge cache. Remove via Homebridge UI → Settings → Remove Single Accessory.
+
 ### [2.0.39] - 2026-03-11
 #### Fixed
 - **Critical: Heat pump device detection** — `isHeatPumpDevice()` was incorrectly matching ALL Viessmann gen3 devices because `type:E3` is a gen3 architecture marker present on every device (TCU gateway, TRVs, room sensors, repeaters, VitoCharge, HEMS, wallbox, etc.). Detection now requires `type:heatpump` (exact role) or modelId containing `vitocal`. This was causing spurious "Adding new energy accessory: … Heat Pump" log entries for every device.

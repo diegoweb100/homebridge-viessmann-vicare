@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.39
+# Complete Setup Guide - v2.0.40
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.39 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.40 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.39",
+    "plugin_version": "2.0.40",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1227,6 +1227,14 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.40 (2026-03-15)
+**Critical bug fix + log noise reduction:**
+- **Fixed: accessories not updating after restart** — all four restore-from-cache paths (Boiler, DHW, HC, Energy) were missing `context.device/installation/gateway` assignment. This caused `updateAllDevices` to skip every accessory silently on every restart after the first, showing `0 device(s) fetched`. Affected all users.
+- Full feature dump moved to `DEBUG` level (only shown when `debug: true`).
+- Capability detail and resolved HP paths moved to `DEBUG`; single compact `INFO` line shows detected capabilities.
+- `updateHandler not set` per-device warning downgraded to `DEBUG`; update cycle summary count retained.
+- **Note:** Users upgrading from ≤v2.0.38 with a heat pump may have ghost "Heat Pump" accessories in cache — remove via Homebridge UI → Settings → Remove Single Accessory.
 
 ### v2.0.39 (2026-03-11)
 **Critical fix** — Heat pump device detection overhaul:
