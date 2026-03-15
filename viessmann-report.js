@@ -99,18 +99,32 @@ const lastVBR  = validBurnerRows[validBurnerRows.length-1] || null;
 const deltaStarts = (firstVBR && lastVBR) ? Math.max(0, parseInt(lastVBR.burner_starts) - parseInt(firstVBR.burner_starts)) : null;
 const deltaHours  = (firstVBR && lastVBR) ? Math.max(0, parseFloat(lastVBR.burner_hours)  - parseFloat(firstVBR.burner_hours))  : null;
 
-// Starts/hour from delta — precise (firmware counter, not CSV edges)
-const sph = (deltaStarts !== null && deltaHours !== null && deltaHours > 0)
-  ? (deltaStarts / deltaHours).toFixed(1)
+// Starts per wall-clock hour (NOT per runtime hour):
+//   sph = deltaStarts / period_hours  →  e.g. 353 starts / 130h = 2.7/h
+//   NOT deltaStarts / deltaHours (353/36 = 9.8 would mean starts per burner-running hour)
+// Avg cycle duration = deltaHours(runtime) * 60 / deltaStarts  →  6.1 min
+// Runtime % = deltaHours / period_hours * 100  →  28%
+const periodHours = (firstVBR && lastVBR)
+  ? Math.max(1, (new Date(lastVBR.timestamp) - new Date(firstVBR.timestamp)) / 3600000)
+  : null;
+const sph = (deltaStarts !== null && periodHours !== null && periodHours > 0)
+  ? (deltaStarts / periodHours).toFixed(1)
   : null;
 const avgCycleDurReal = (deltaStarts !== null && deltaHours !== null && deltaStarts > 0)
   ? (deltaHours * 60 / deltaStarts).toFixed(1)
   : null;
+const burnerRuntimePct = (deltaHours !== null && periodHours !== null && periodHours > 0)
+  ? (deltaHours / periodHours * 100).toFixed(0)
+  : null;
 const realCycleCount = deltaStarts;
 const realAvgDur     = avgCycleDurReal;
 
-const effCls   = sph ? (parseFloat(sph) < 3 ? 'good' : parseFloat(sph) < 6 ? 'warn' : 'bad') : 'neutral';
-const effLabel = sph ? (parseFloat(sph) < 3 ? 'Normal' : parseFloat(sph) < 6 ? 'High' : 'Severe') : 'N/A';
+// Thresholds for wall-clock starts/hour:
+//   < 2/h = normal (long cycles, low demand)
+//   2–4/h = acceptable
+//   > 4/h = high cycling concern
+const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : parseFloat(sph) < 4 ? 'warn' : 'bad') : 'neutral';
+const effLabel = sph ? (parseFloat(sph) < 2 ? 'Normal' : parseFloat(sph) < 4 ? 'High' : 'Severe') : 'N/A';
 
 // --- Flow temperature stats (from hc0 rows) ---
 const avgFlow  = avg(hcRows, 'flow_temp');
@@ -404,8 +418,8 @@ const inefficientOp = avgModNum !== null && avgCycleDurNum !== null && avgModNum
 const insights = [];
 if (shortCycling || excessiveCycling)
   insights.push({ type:'warn', text: shortCycling
-    ? `Short cycling detected — avg cycle ${realAvgDur ?? avgCycleDur} min (ideal > 10 min). With ${cyclesPerHour} starts/hour, the boiler is starting too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.`
-    : `High cycling rate — ${cyclesPerHour} starts/hour from API counter. Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.` });
+    ? `Short cycling detected — avg cycle ${realAvgDur ?? avgCycleDur} min (ideal > 6 min). With ${cyclesPerHour} starts/hour (wall-clock), the boiler is cycling too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.`
+    : `High cycling rate — ${cyclesPerHour} starts/hour (wall-clock). Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.` });
 if (inefficientOp)
   insights.push({ type:'warn', text: `Boiler running at low modulation (avg ${avgMod}%) with short cycles. Consider lowering the heating curve to reduce cycling.` });
 if (highFlowTemp)
@@ -436,16 +450,18 @@ if (roomTemps.length >= 10) {
 let cyclingScore = null, cyclingSeverity = null, cyclingSeverityCls = 'neutral';
 if (cyclesPerHour && avgCycleDurNum && avgCycleDurNum > 0) {
   // Score uses real API counter data — not CSV edge count
-  cyclingScore = (parseFloat(cyclesPerHour) * (10 / avgCycleDurNum)).toFixed(1);
+  // cyclingScore: starts/hour × (6 / avgCycleDur) — normalized to 6-min reference cycle
+  // sph is wall-clock starts/hour; avgCycleDurNum is actual avg duration
+  cyclingScore = (parseFloat(cyclesPerHour) * (6 / Math.max(1, avgCycleDurNum))).toFixed(1);
   const sc2 = parseFloat(cyclingScore);
-  if (sc2 < 2)      { cyclingSeverity = 'Good';       cyclingSeverityCls = 'good'; }
-  else if (sc2 < 5) { cyclingSeverity = 'Moderate';   cyclingSeverityCls = 'warn'; }
-  else if (sc2 < 10){ cyclingSeverity = 'High';        cyclingSeverityCls = 'warn'; }
+  if (sc2 < 1.5)    { cyclingSeverity = 'Good';       cyclingSeverityCls = 'good'; }
+  else if (sc2 < 3) { cyclingSeverity = 'Moderate';   cyclingSeverityCls = 'warn'; }
+  else if (sc2 < 6) { cyclingSeverity = 'High';        cyclingSeverityCls = 'warn'; }
   else              { cyclingSeverity = 'Severe';      cyclingSeverityCls = 'bad';  }
-  if (sc2 >= 10)
-    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — severe. The boiler starts ${cyclesPerHour} times/hour with avg cycle duration ${avgCycleDurNum.toFixed(1)} min. Check minimum burner runtime, system pressure, and pump speed. A technician should calibrate minimum modulation.` });
-  else if (sc2 >= 5)
-    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — high. Boiler starts ${cyclesPerHour} times/hour (avg ${avgCycleDurNum.toFixed(1)} min/cycle). Consider increasing heating curve or requesting minimum modulation calibration.` });
+  if (sc2 >= 6)
+    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — severe. Boiler starts ${cyclesPerHour} times/hour with avg cycle ${avgCycleDurNum.toFixed(1)} min. Technician calibration of minimum modulation recommended.` });
+  else if (sc2 >= 3)
+    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — high. Boiler starts ${cyclesPerHour} times/hour (avg cycle ${avgCycleDurNum.toFixed(1)} min). Consider requesting minimum modulation calibration.` });
 }
 
 // ── Min modulation check ─────────────────────────────────────────────────────
@@ -896,11 +912,11 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Cycle performance (from API counters — precise)</div>
   <div class="grid" style="margin-bottom:6px">
     ${realCycleCount !== null ? sc('Cycles in period', realCycleCount, '', badge(effCls, effLabel)) : ''}
-    ${sph ? sc('Starts/hour', sph, '/h', badge(effCls, parseFloat(sph)<3?'Normal':parseFloat(sph)<6?'High':'Severe')) : ''}
-    ${realAvgDur ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<5?'warn':parseFloat(realAvgDur)<10?'warn':'good', parseFloat(realAvgDur)<5?'Short cycling':parseFloat(realAvgDur)<10?'Check':'OK')) : ''}
+    ${sph ? sc('Starts/hour', sph, '/h', badge(effCls, parseFloat(sph)<2?'Normal':parseFloat(sph)<4?'High':'Severe')) : ''}
+    ${realAvgDur ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<3?'bad':parseFloat(realAvgDur)<6?'warn':'good', parseFloat(realAvgDur)<3?'Very short':parseFloat(realAvgDur)<6?'Short':'OK')) : ''}
+    ${burnerRuntimePct ? sc('Burner runtime', burnerRuntimePct, '%', badge(parseFloat(burnerRuntimePct)<15?'good':parseFloat(burnerRuntimePct)<40?'warn':'bad', parseFloat(burnerRuntimePct)<15?'Low demand':parseFloat(burnerRuntimePct)<40?'Normal':'High')) : ''}
     ${burnerStarts ? sc('Lifetime starts', burnerStarts) : ''}
     ${burnerHours ? sc('Lifetime hours', burnerHours, 'h') : ''}
-    ${sc('Burner active', burnerOnPct, '% samples')}
   </div>
   <p class="note" style="margin-bottom:14px">⚡ Cycle count uses <strong>API firmware counters</strong> (burner_starts delta) — captures all ignitions regardless of 15-min CSV sample rate. CSV edge detection would miss ~97% of cycles at this cycle frequency.</p>
 
