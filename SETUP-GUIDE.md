@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.40
+# Complete Setup Guide - v2.0.41
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.40 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.41 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.40",
+    "plugin_version": "2.0.41",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1227,6 +1227,13 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.41 (2026-03-15)
+**Fix duplicate Boiler accessory + gas forecast + error code translations:**
+- **Fixed: duplicate "Boiler 2" on heat pump installations** — `setupBoilerAccessory` was matching `heating.boiler.serial` present on VitoCharge and other gen3 devices. Filter now requires actual burner operation features. Fixes accessory naming confusion on Windows installs with Vitocal 250A.
+- **Report: Gas forecast** — new section projecting 30-day and annual gas consumption via linear regression on CSV history. Cost estimate in € with `--gasPriceEur` parameter (default 0.90 €/m³). Trend indicator (rising/stable/falling).
+- **Report: Device messages** — new section with 80+ Viessmann S./F./I. code translations (English). Reads `viessmann-messages-<ID>.json` when available.
+- **`--gasPriceEur <price>`** new CLI parameter for `viessmann-report.js`.
 
 ### v2.0.40 (2026-03-15)
 **Critical bug fix + log noise reduction:**

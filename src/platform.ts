@@ -690,9 +690,13 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     device: ViessmannDevice,
     features: ViessmannFeature[]
   ) {
-    const boilerFeatures = features.filter(f => 
-      f.feature.includes('heating.boiler') || 
-      f.feature.includes('heating.burners')
+    // Require actual burner/boiler operation features — not just heating.boiler.serial
+    // which is also present on VitoCharge and other gen3 devices as a system identifier.
+    const boilerFeatures = features.filter(f =>
+      f.feature.startsWith('heating.burners') ||
+      f.feature === 'heating.boiler.temperature.current' ||
+      f.feature === 'heating.boiler.sensors.temperature.commonSupply' ||
+      f.feature === 'heating.boiler.pumps.internal',
     );
 
     if (boilerFeatures.length === 0) {

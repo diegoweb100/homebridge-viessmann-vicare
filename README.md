@@ -1033,6 +1033,15 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.41] - 2026-03-15
+#### Fixed
+- **Duplicate Boiler accessory on heat pump installations** — `setupBoilerAccessory` was matching `heating.boiler.serial` which is present on VitoCharge and other gen3 devices as a system identifier. Filter now requires actual burner/boiler operation features (`heating.burners.*`, `heating.boiler.temperature.current`, etc.). Fixes "Boiler 2" / "Energy 2" confusion reported on Windows installations with Vitocal 250A.
+
+#### Added — `viessmann-report.js`
+- **Gas forecast section** — projects next-30-day and annual gas consumption using linear regression on historical CSV data. Shows cost estimate in € with configurable tariff via `--gasPriceEur` (default: 0.90 €/m³). Includes trend indicator (rising/stable/falling).
+- **Device messages section** — reads `viessmann-messages-<ID>.json` (written by plugin, future) and displays S./F./I. codes with English translations from Viessmann service documentation (80+ codes covered).
+- **`--gasPriceEur`** CLI parameter for gas cost calculation.
+
 ### [2.0.40] - 2026-03-15
 #### Fixed
 - **Critical: Accessories not updating after Homebridge restart** — when restoring accessories from cache, `device`, `installation`, and `gateway` were not written to `accessory.context`. The update loop silently skipped all accessories on every subsequent restart, showing `0 device(s) fetched, 0/0 accessories updated`. All four restore-from-cache paths (Boiler, DHW, Heating Circuit, Energy/Heat Pump) are now fixed.

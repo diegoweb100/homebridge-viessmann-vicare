@@ -581,6 +581,165 @@ const ovOutsideHum = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outsid
 const ovMod      = overviewTimes.map(ts => interpolate(boilerRows,ts, 'modulation'));
 const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAS FORECAST
+// Uses gasPerDay (already computed above) to project monthly/annual consumption.
+// Strategy: linear regression on last N days → extrapolate to 30/365 days.
+// ─────────────────────────────────────────────────────────────────────────────
+let gasForecast = null;
+if (gasDays.length >= 3) {
+  // Use all available days; total = heating + dhw
+  const totalPerDay = gasDays.map(d => gasPerDay[d].heating + gasPerDay[d].dhw);
+  const n = totalPerDay.length;
+  // Simple linear regression: y = a + b*x  (x = day index)
+  const xMean = (n - 1) / 2;
+  const yMean = totalPerDay.reduce((s, v) => s + v, 0) / n;
+  let num = 0, den = 0;
+  totalPerDay.forEach((y, i) => { num += (i - xMean) * (y - yMean); den += (i - xMean) ** 2; });
+  const slope = den !== 0 ? num / den : 0;
+  const intercept = yMean - slope * xMean;
+  // Project from today (index = n-1) forward
+  const projectDay = (offset) => Math.max(0, intercept + slope * (n - 1 + offset));
+  // Monthly: sum of next 30 days
+  let monthSum = 0;
+  for (let i = 1; i <= 30; i++) monthSum += projectDay(i);
+  // Annual: sum of next 365 days (approximated as 30-day avg × 12 with seasonal note)
+  // For simplicity: annualise the period avg × 365 (more stable than long regression)
+  const periodAvgPerDay = yMean;
+  const annualEst = periodAvgPerDay * 365;
+  // Cost estimate (€): use --gasPriceEur param or env (default 0.90 €/m³ — Italian average)
+  const GAS_PRICE = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
+  gasForecast = {
+    avgPerDay:    yMean.toFixed(2),
+    trend:        slope > 0.05 ? 'rising' : slope < -0.05 ? 'falling' : 'stable',
+    trendSlope:   slope.toFixed(3),
+    month30:      monthSum.toFixed(1),
+    annualEst:    annualEst.toFixed(0),
+    costMonth:    (monthSum * GAS_PRICE).toFixed(2),
+    costAnnual:   (annualEst * GAS_PRICE).toFixed(2),
+    gasPrice:     GAS_PRICE.toFixed(2),
+    daysUsed:     n,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VIESSMANN STATUS / ERROR CODE TRANSLATIONS
+// Source: Viessmann service documentation + vieventlog error_codes.go
+// ─────────────────────────────────────────────────────────────────────────────
+const VIESSMANN_CODES = {
+  // ── Status codes (S.) ──
+  'S.0':   { en: 'Standby',                         de: 'Bereitschaft' },
+  'S.1':   { en: 'DHW heating',                     de: 'Warmwasserbereitung' },
+  'S.2':   { en: 'Central heating',                 de: 'Heizbetrieb' },
+  'S.3':   { en: 'Burner on',                       de: 'Brenner ein' },
+  'S.4':   { en: 'Burner off',                      de: 'Brenner aus' },
+  'S.5':   { en: 'Fan pre-purge',                   de: 'Lüfter Vorspülung' },
+  'S.6':   { en: 'Ignition',                        de: 'Zündung' },
+  'S.7':   { en: 'Flame detected',                  de: 'Flamme erkannt' },
+  'S.8':   { en: 'Burner post-purge',               de: 'Lüfter Nachspülung' },
+  'S.9':   { en: 'Cooling mode',                    de: 'Kühlbetrieb' },
+  'S.10':  { en: 'Frost protection active',         de: 'Frostschutz aktiv' },
+  'S.12':  { en: 'Circulation pump active',         de: 'Umwälzpumpe aktiv' },
+  'S.17':  { en: 'Flue gas test',                   de: 'Abgastest' },
+  'S.19':  { en: 'Chimney sweep mode',              de: 'Schornsteinfegerbetrieb' },
+  'S.20':  { en: 'Boiler protection (overtemp)',    de: 'Kesselschutz (Übertemperatur)' },
+  'S.22':  { en: 'External demand active',          de: 'Externe Anforderung aktiv' },
+  'S.24':  { en: 'Pump overrun',                    de: 'Pumpennachlauf' },
+  'S.31':  { en: 'Summer eco mode',                 de: 'Sommer-Eco-Betrieb' },
+  'S.32':  { en: 'Heating circuit standby',         de: 'Heizkreis Standby' },
+  'S.40':  { en: 'Heat pump heating',               de: 'Wärmepumpe Heizbetrieb' },
+  'S.41':  { en: 'Heat pump DHW',                   de: 'Wärmepumpe Warmwasser' },
+  'S.42':  { en: 'Heat pump defrost',               de: 'Wärmepumpe Abtauung' },
+  'S.43':  { en: 'Heat pump cooling',               de: 'Wärmepumpe Kühlung' },
+  'S.44':  { en: 'Compressor starting',             de: 'Verdichter startet' },
+  'S.45':  { en: 'Compressor running',              de: 'Verdichter läuft' },
+  'S.46':  { en: 'Compressor stopping',             de: 'Verdichter stoppt' },
+  'S.100': { en: 'Heating mode',                    de: 'Heizbetrieb' },
+  'S.109': { en: 'Heating circuit active',          de: 'Heizkreis aktiv' },
+  'S.111': { en: 'Normal heating program',          de: 'Normalbetrieb Heizung' },
+  'S.112': { en: 'Reduced heating program',         de: 'Absenkbetrieb Heizung' },
+  'S.113': { en: 'Comfort heating program',         de: 'Komfortbetrieb Heizung' },
+  'S.114': { en: 'DHW demand',                      de: 'Warmwasseranforderung' },
+  'S.118': { en: 'Primary circuit active',          de: 'Primärkreis aktiv' },
+  'S.119': { en: 'Secondary circuit active',        de: 'Sekundärkreis aktiv' },
+  'S.120': { en: 'Circulation pump running',        de: 'Umwälzpumpe läuft' },
+  'S.123': { en: 'Heat pump standby',               de: 'Wärmepumpe Bereitschaft' },
+  'S.124': { en: 'Heat pump grid lock',             de: 'Wärmepumpe Netzsperrzeit' },
+  'S.125': { en: 'Heat pump demand pending',        de: 'Wärmepumpe Anforderung ausstehend' },
+  'S.126': { en: 'Heat pump frost protection',      de: 'Wärmepumpe Frostschutz' },
+  'S.130': { en: 'Defrost active',                  de: 'Abtauung aktiv' },
+  'S.131': { en: 'Defrost completed',               de: 'Abtauung abgeschlossen' },
+  'S.134': { en: 'Heat pump heating active',        de: 'Wärmepumpe Heizbetrieb aktiv' },
+  'S.140': { en: 'Smart grid active',               de: 'Smart Grid aktiv' },
+  'S.200': { en: 'Legionella protection',           de: 'Legionellenschutz' },
+  'S.201': { en: 'DHW efficient mode',              de: 'Warmwasser Effizienzbetrieb' },
+  'S.202': { en: 'DHW comfort mode',                de: 'Warmwasser Komfortbetrieb' },
+  // ── Info codes (I.) ──
+  'I.0':   { en: 'System OK',                       de: 'System OK' },
+  'I.1':   { en: 'Maintenance due',                 de: 'Wartung fällig' },
+  'I.2':   { en: 'Filter replacement due',          de: 'Filterwechsel fällig' },
+  'I.10':  { en: 'External temperature sensor fault', de: 'Außentemperaturfühler Fehler' },
+  'I.11':  { en: 'Return temperature sensor fault', de: 'Rücklauftemperaturfühler Fehler' },
+  'I.12':  { en: 'DHW sensor fault',                de: 'Warmwasserfühler Fehler' },
+  'I.20':  { en: 'Low water pressure warning',      de: 'Niederdruck Warnung' },
+  'I.100': { en: 'System info',                     de: 'Systeminformation' },
+  'I.113': { en: 'Heating curve optimisation info', de: 'Heizkurvenoptimierung Info' },
+  'I.114': { en: 'Energy balance info',             de: 'Energiebilanz Info' },
+  'I.115': { en: 'Runtime statistics info',         de: 'Laufzeitstatistik Info' },
+  // ── Fault codes (F.) ──
+  'F.0':   { en: 'No fault',                        de: 'Kein Fehler' },
+  'F.1':   { en: 'Burner fault — no ignition',      de: 'Brennerstörung — keine Zündung' },
+  'F.2':   { en: 'Flame signal lost',               de: 'Flammensignal verloren' },
+  'F.3':   { en: 'Ignition fault',                  de: 'Zündfehler' },
+  'F.4':   { en: 'Safety chain open',               de: 'Sicherheitskette offen' },
+  'F.5':   { en: 'Gas valve fault',                 de: 'Gasventil Fehler' },
+  'F.7':   { en: 'Flue gas sensor fault',           de: 'Abgastemperaturfühler Fehler' },
+  'F.9':   { en: 'Supply sensor fault',             de: 'Vorlauftemperaturfühler Fehler' },
+  'F.10':  { en: 'External sensor fault',           de: 'Außenfühler Fehler' },
+  'F.11':  { en: 'Return sensor fault',             de: 'Rücklauftemperaturfühler Fehler' },
+  'F.12':  { en: 'DHW sensor fault',                de: 'Warmwasserfühler Fehler' },
+  'F.20':  { en: 'Safety temperature limiter',      de: 'Sicherheitstemperaturbegrenzer' },
+  'F.22':  { en: 'Low water pressure fault',        de: 'Wassermangel' },
+  'F.23':  { en: 'Pump fault — overtemp',           de: 'Pumpe Fehler — Übertemperatur' },
+  'F.24':  { en: 'Pump circulation fault',          de: 'Pumpe Zirkulationsfehler' },
+  'F.28':  { en: 'Ignition fault (gas)',            de: 'Zündstörung (Gas)' },
+  'F.29':  { en: 'Flame fault after ignition',      de: 'Flammenfehler nach Zündung' },
+  'F.30':  { en: 'STB safety shutdown',             de: 'STB Sicherheitsabschaltung' },
+  'F.31':  { en: 'Boiler overtemperature',          de: 'Kesselübertemperatur' },
+  'F.32':  { en: 'Flue overtemperature',            de: 'Abgasübertemperatur' },
+  'F.33':  { en: 'Draft fault',                     de: 'Zugfehler' },
+  'F.36':  { en: 'Fan fault',                       de: 'Lüfter Fehler' },
+  'F.40':  { en: 'Compressor fault',                de: 'Verdichter Fehler' },
+  'F.41':  { en: 'Refrigerant circuit fault',       de: 'Kältemittelkreis Fehler' },
+  'F.42':  { en: 'Defrost fault',                   de: 'Abtaufehler' },
+  'F.50':  { en: 'Communication fault gateway',     de: 'Kommunikationsfehler Gateway' },
+  'F.51':  { en: 'Communication fault controller', de: 'Kommunikationsfehler Regler' },
+  'F.52':  { en: 'Bus fault',                       de: 'Busfehler' },
+  'F.60':  { en: 'Expansion vessel fault',          de: 'Ausdehnungsgefäß Fehler' },
+  'F.73':  { en: 'Water pressure too high',         de: 'Wasserdruck zu hoch' },
+  'F.74':  { en: 'Water pressure too low',          de: 'Wasserdruck zu niedrig' },
+  'F.75':  { en: 'Pump speed sensor fault',         de: 'Pumpendrehzahlsensor Fehler' },
+};
+
+function translateCode(code) {
+  if (!code) return null;
+  const entry = VIESSMANN_CODES[code];
+  if (entry) return entry.en;
+  // Partial match fallback (e.g. S.134 → try S.13 → S.1)
+  const parts = code.split('.');
+  if (parts.length === 2) {
+    const shorter = parts[0] + '.' + parts[1].slice(0, -1);
+    if (VIESSMANN_CODES[shorter]) return VIESSMANN_CODES[shorter].en + ' (variant)';
+  }
+  return null;
+}
+
+// Extract device messages from the latest API data snapshot (if available via CSV extension)
+// For now we show the codes from the last row that has error_code-like fields
+// (future: read from a separate messages JSON file written by the plugin)
+const lastBoiler = boilerRows.length ? boilerRows[boilerRows.length - 1] : null;
+
 const sc = (l,v,u='',badge='') => `<div class="sc"><div class="sl">${l}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
 const badge = (cls,txt) => `<span class="badge badge-${cls}">${txt}</span>`;
 const genAt = new Date().toLocaleString('en-GB');
@@ -721,6 +880,18 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   ${dhwRows.length >= 2 ? `<div class="ch-tall"><canvas id="cDhw"></canvas></div>` : ''}
 </div>
 
+${gasForecast ? `
+<div class="box">
+  <h2>⛽ Gas Forecast</h2>
+  <p class="note" style="margin-bottom:14px">Projection based on last ${gasForecast.daysUsed} day(s) of data · gas price: €${gasForecast.gasPrice}/m³ · trend: <strong>${gasForecast.trend === 'rising' ? '↑ Rising' : gasForecast.trend === 'falling' ? '↓ Falling' : '→ Stable'}</strong></p>
+  <div class="grid">
+    ${sc('Avg consumption/day', gasForecast.avgPerDay, ' m³')}
+    ${sc('Projected next 30 days', gasForecast.month30, ' m³', badge(gasForecast.trend === 'rising' ? 'warn' : 'good', '≈ €' + gasForecast.costMonth))}
+    ${sc('Annual estimate', gasForecast.annualEst, ' m³', badge('neutral', '≈ €' + gasForecast.costAnnual))}
+  </div>
+  <p class="note" style="margin-top:10px">⚠️ Annual estimate uses period average × 365 — add more days for seasonal accuracy. Use <code>--gasPriceEur</code> to set your tariff.</p>
+</div>` : ''}
+
 ${energyRows.length >= 1 ? `
 <div class="box">
   <h2>Energy System</h2>
@@ -736,6 +907,49 @@ ${energyRows.length >= 1 ? `
   ${hasBattery && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cBatt"></canvas></div>` : ''}
   ${hasWallbox && energyRows.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cWallbox"></canvas></div>` : ''}
 </div>` : ''}
+
+</div>
+
+<div class="box" id="device-messages">
+  <h2>🔔 Device Messages</h2>
+  <p class="note" style="margin-bottom:12px">Status, info and fault codes reported by the device. Translated from Viessmann service documentation.</p>
+  <div id="msg-list">
+${(() => {
+  // Read messages from viessmann-messages-<ID>.json if available (written by plugin)
+  const msgFile = INSTALLATION_ID
+    ? require('path').join(HB_PATH, 'viessmann-messages-' + INSTALLATION_ID + '.json')
+    : require('path').join(HB_PATH, 'viessmann-messages.json');
+  let messages = [];
+  try {
+    if (require('fs').existsSync(msgFile)) {
+      messages = JSON.parse(require('fs').readFileSync(msgFile, 'utf8'));
+    }
+  } catch(_) {}
+
+  if (!messages.length) {
+    return `<p class="note">No messages file found yet. Messages will appear here once the plugin writes <code>viessmann-messages-${INSTALLATION_ID || ''}.json</code>.</p>`;
+  }
+
+  return messages.slice(0, 20).map(m => {
+    const code = m.errorCode || m.code || '';
+    const desc = translateCode(code);
+    const ts = m.timestamp ? new Date(m.timestamp).toLocaleString('en-GB') : '';
+    const type = code.startsWith('F.') ? 'fault' : code.startsWith('I.') ? 'info' : 'status';
+    const bg   = type === 'fault' ? '#fff3e0' : type === 'info' ? '#e8f4fd' : '#f1f8f1';
+    const br   = type === 'fault' ? '#ffb74d' : type === 'info' ? '#90caf9' : '#a5d6a7';
+    const icon = type === 'fault' ? '⚠️' : type === 'info' ? 'ℹ️' : '✅';
+    return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 12px;background:${bg};border-left:3px solid ${br};border-radius:4px;margin-bottom:6px;font-size:13px">
+      <span style="flex-shrink:0">${icon}</span>
+      <div style="flex:1">
+        <strong>${code}</strong>${desc ? ` — ${desc}` : ' — (unknown code)'}
+        ${ts ? `<span style="color:#888;font-size:11px;margin-left:8px">${ts}</span>` : ''}
+        ${m.busAddress ? `<span style="color:#aaa;font-size:11px;margin-left:8px">bus: ${m.busAddress}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+})()}
+  </div>
+</div>
 
 </div>
 <footer>homebridge-viessmann-vicare &nbsp;|&nbsp; ${CSV_FILE}</footer>
