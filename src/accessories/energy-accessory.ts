@@ -686,10 +686,27 @@ export class ViessmannEnergyAccessory {
       const f = get(this.hpPaths.compressorMod);
       if (f) {
         // heating.compressors.0.speed.current → value in revolutionsPerSecond
-        // Normalize to 0–100 percent: assume max ~50 rps for Vitocal 250A
+        // Normalize to 0–100%: use config.maxCompressorRps (default 50 rps for Vitocal 250A).
+        // Set maxCompressorRps in plugin config if modulation shows >100% or compressed values.
+        const maxRps = this.platform.config.maxCompressorRps ?? 50;
         const rps = f.properties?.value?.value ?? 0;
-        this.states.hpModulation = rps > 0 ? Math.min(100, Math.round((rps / 50) * 100)) : 0;
-        this.platform.log.debug(`${tag}[HP] compressor speed=${rps}rps modulation=${this.states.hpModulation}%`);
+        this.states.hpModulation = rps > 0 ? Math.min(100, Math.round((rps / maxRps) * 100)) : 0;
+
+        // Log setpoint alongside current for calibration visibility
+        const fSetpoint = get('heating.compressors.0.speed.setpoint');
+        const setpointRps = fSetpoint?.properties?.value?.value ?? null;
+        this.platform.log.debug(
+          `${tag}[HP] compressor current=${rps}rps setpoint=${setpointRps ?? '?'}rps` +
+          ` → modulation=${this.states.hpModulation}% (maxRps=${maxRps})`,
+        );
+
+        // Warn if measured rps exceeds configured max — modulation is capped but likely wrong
+        if (rps > maxRps) {
+          this.platform.log.warn(
+            `[HP] Compressor speed ${rps}rps exceeds maxCompressorRps=${maxRps}. ` +
+            `Modulation capped at 100%. Set "maxCompressorRps": ${Math.ceil(rps * 1.2)} in plugin config to fix.`,
+          );
+        }
       }
     }
 

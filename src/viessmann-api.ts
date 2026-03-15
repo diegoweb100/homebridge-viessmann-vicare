@@ -50,6 +50,11 @@ export interface ViessmannPlatformConfig extends AuthConfig {
   // 🆕 Boiler nominal power for heat demand estimation (kW, default 24)
   nominalPowerKw?: number;
 
+  // 🆕 Heat pump compressor max speed for modulation normalisation (rps, default 50)
+  // Vitocal 250A typical max: 50 rps. Set to actual max if HomeKit shows >100% or compressed values.
+  // The plugin logs a warning if measured rps exceeds this value.
+  maxCompressorRps?: number;
+
   // 🆕 Progressive post-command confirmation retry
   postCommandRetry?: {
     delays?: number[];      // ms between each confirmation attempt (default: [5000,15000,30000,60000])

@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.41
+# Complete Setup Guide - v2.0.42
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.41 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.42 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.41",
+    "plugin_version": "2.0.42",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1227,6 +1227,22 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.42 (2026-03-15)
+**HC program fix + messages JSON + maxCompressorRps + gas forecast threshold:**
+- **Fixed: HC program names on heat pump** — `normalHeating`, `reducedEnergySaving` etc. now correctly mapped to `normal`/`reduced`/`comfort`. Previously ignored, leaving program switches stale.
+- **Fixed: gas forecast annual threshold** — requires 14+ days before showing annual estimate. Fewer days shows "Need N days" badge.
+- **Added: `maxCompressorRps` config option** — normalises heat pump compressor speed to 0–100% modulation. Default 50 rps. Warning logged if exceeded with suggested value. Add to config: `"maxCompressorRps": 60`.
+- **Added: compressor setpoint in debug log** — shows `current=Xrps setpoint=Yrps → modulation=Z% (maxRps=50)`.
+- **Added: device messages JSON** — plugin writes `viessmann-messages-<ID>.json` on every update cycle. Powers the Device Messages section in `viessmann-report.js`.
+
+**Config example for heat pump users:**
+```json
+{
+  "platform": "ViessmannPlatform",
+  "maxCompressorRps": 50
+}
+```
 
 ### v2.0.41 (2026-03-15)
 **Fix duplicate Boiler accessory + gas forecast + error code translations:**

@@ -1033,6 +1033,16 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.42] - 2026-03-15
+#### Fixed
+- **HC program names on heat pump installations** — Vitocal 250A returns `normalHeating`, `reducedEnergySaving`, `comfortHeating` etc. instead of plain `normal`/`reduced`/`comfort`. These were silently ignored, leaving `currentProgram` stale. A normalisation map now converts all HP program variants to the canonical set used by HomeKit switches.
+- **Gas forecast annual estimate threshold** — minimum 14 days of gas data required before showing annual projection. With fewer days the estimate was unreliable. Report now shows a "Need N days" badge and a clear message when threshold not met.
+
+#### Added
+- **`maxCompressorRps` config option** — configures the maximum compressor speed (rps) used to normalise heat pump modulation to 0–100% in HomeKit. Default: 50 rps (Vitocal 250A). If measured rps exceeds this value the plugin logs a warning with a suggested corrected value. Set in Homebridge config: `"maxCompressorRps": 60`.
+- **Compressor setpoint logging** — debug log now shows both `current` and `setpoint` rps alongside the normalised modulation % for calibration visibility.
+- **Device messages JSON** — plugin now writes `viessmann-messages-<installationId>.json` to Homebridge storage on every update cycle. Contains S./F./I. codes with timestamps from `device.messages.status/info/service.raw` features. Used by the `viessmann-report.js` Device Messages section.
+
 ### [2.0.41] - 2026-03-15
 #### Fixed
 - **Duplicate Boiler accessory on heat pump installations** — `setupBoilerAccessory` was matching `heating.boiler.serial` which is present on VitoCharge and other gen3 devices as a system identifier. Filter now requires actual burner/boiler operation features (`heating.burners.*`, `heating.boiler.temperature.current`, etc.). Fixes "Boiler 2" / "Energy 2" confusion reported on Windows installations with Vitocal 250A.

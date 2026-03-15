@@ -610,16 +610,22 @@ if (gasDays.length >= 3) {
   const annualEst = periodAvgPerDay * 365;
   // Cost estimate (€): use --gasPriceEur param or env (default 0.90 €/m³ — Italian average)
   const GAS_PRICE = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
+  // Annual estimate requires at least 14 days to avoid misleading projections
+  // from short atypical periods (e.g. unusually cold/warm week).
+  const ANNUAL_MIN_DAYS = 14;
+  const hasEnoughForAnnual = n >= ANNUAL_MIN_DAYS;
   gasForecast = {
-    avgPerDay:    yMean.toFixed(2),
-    trend:        slope > 0.05 ? 'rising' : slope < -0.05 ? 'falling' : 'stable',
-    trendSlope:   slope.toFixed(3),
-    month30:      monthSum.toFixed(1),
-    annualEst:    annualEst.toFixed(0),
-    costMonth:    (monthSum * GAS_PRICE).toFixed(2),
-    costAnnual:   (annualEst * GAS_PRICE).toFixed(2),
-    gasPrice:     GAS_PRICE.toFixed(2),
-    daysUsed:     n,
+    avgPerDay:         yMean.toFixed(2),
+    trend:             slope > 0.05 ? 'rising' : slope < -0.05 ? 'falling' : 'stable',
+    trendSlope:        slope.toFixed(3),
+    month30:           monthSum.toFixed(1),
+    annualEst:         hasEnoughForAnnual ? annualEst.toFixed(0) : null,
+    costMonth:         (monthSum * GAS_PRICE).toFixed(2),
+    costAnnual:        hasEnoughForAnnual ? (annualEst * GAS_PRICE).toFixed(2) : null,
+    gasPrice:          GAS_PRICE.toFixed(2),
+    daysUsed:          n,
+    annualMinDays:     ANNUAL_MIN_DAYS,
+    hasEnoughForAnnual,
   };
 }
 
@@ -887,9 +893,16 @@ ${gasForecast ? `
   <div class="grid">
     ${sc('Avg consumption/day', gasForecast.avgPerDay, ' m³')}
     ${sc('Projected next 30 days', gasForecast.month30, ' m³', badge(gasForecast.trend === 'rising' ? 'warn' : 'good', '≈ €' + gasForecast.costMonth))}
-    ${sc('Annual estimate', gasForecast.annualEst, ' m³', badge('neutral', '≈ €' + gasForecast.costAnnual))}
+    ${gasForecast.hasEnoughForAnnual
+      ? sc('Annual estimate', gasForecast.annualEst, ' m³', badge('neutral', '≈ €' + gasForecast.costAnnual))
+      : sc('Annual estimate', 'N/A', '', badge('neutral', 'Need ' + gasForecast.annualMinDays + ' days (have ' + gasForecast.daysUsed + ')'))}
   </div>
-  <p class="note" style="margin-top:10px">⚠️ Annual estimate uses period average × 365 — add more days for seasonal accuracy. Use <code>--gasPriceEur</code> to set your tariff.</p>
+  <p class="note" style="margin-top:10px">
+    ${gasForecast.hasEnoughForAnnual
+      ? '⚠️ Annual estimate uses period average × 365 — seasonal variations not accounted for.'
+      : `ℹ️ Annual estimate requires at least ${gasForecast.annualMinDays} days of gas data (currently ${gasForecast.daysUsed}). Run with <code>--days ${gasForecast.annualMinDays}</code> or more.`}
+    Use <code>--gasPriceEur</code> to set your tariff.
+  </p>
 </div>` : ''}
 
 ${energyRows.length >= 1 ? `

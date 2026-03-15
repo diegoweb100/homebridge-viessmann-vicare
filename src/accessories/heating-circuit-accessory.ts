@@ -1704,8 +1704,22 @@ private setupTemperatureProgramServices() {
     // Read active program directly from API (operating.programs.active) — authoritative source
     const activeProgramFeature = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
     let activeProgram = activeProgramFeature?.properties?.value?.value as string || this.currentProgram;
-    // Normalize: API can return 'forcedLastFromSchedule' or other values not in our set
-    if (!['comfort', 'normal', 'reduced'].includes(activeProgram)) {
+    // Normalize: heat pump devices return 'normalHeating', 'reducedHeating', 'comfortHeating',
+    // 'normalEnergySaving', 'reducedEnergySaving', 'comfortEnergySaving' instead of plain
+    // 'normal', 'reduced', 'comfort'. Map them to our canonical set.
+    const programNormMap: Record<string, string> = {
+      normalHeating:          'normal',
+      normalEnergySaving:     'normal',
+      reducedHeating:         'reduced',
+      reducedEnergySaving:    'reduced',
+      comfortHeating:         'comfort',
+      comfortEnergySaving:    'comfort',
+      forcedLastFromSchedule: 'normal',  // treat as normal when forced from schedule
+    };
+    if (programNormMap[activeProgram]) {
+      this.platform.log.debug(`HC${this.circuitNumber} program "${activeProgram}" → normalised to "${programNormMap[activeProgram]}"`);
+      activeProgram = programNormMap[activeProgram];
+    } else if (!['comfort', 'normal', 'reduced'].includes(activeProgram)) {
       this.platform.log.debug(`HC${this.circuitNumber} active program "${activeProgram}" not in known set — keeping ${this.currentProgram}`);
       activeProgram = this.currentProgram;
     }
