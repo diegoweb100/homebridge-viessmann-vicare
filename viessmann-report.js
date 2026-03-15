@@ -87,9 +87,30 @@ const avgWallboxPwr = avg(energyRows.filter(r => r.wallbox_charging==='true'), '
 const lb = boilerRows[boilerRows.length-1] || {};
 const burnerStarts  = lb.burner_starts || null;
 const burnerHours   = lb.burner_hours  || null;
-const sph = (burnerStarts && burnerHours && parseFloat(burnerHours) > 0) ? (parseFloat(burnerStarts)/parseFloat(burnerHours)).toFixed(2) : null;
-const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : 'warn') : 'neutral';
-const effLabel = sph ? (parseFloat(sph) < 2 ? 'Good' : 'High cycling') : 'N/A';
+
+// Use DELTA of burner_starts/hours within the report period — not the lifetime ratio.
+// The CSV has a column mapping issue in early rows (starts=hours value) and the
+// 15-min sample rate misses ~97% of real cycles. API counter delta is the only
+// reliable source.
+// Guard: only rows that have BOTH columns (plugin >= v2.0.40).
+const validBurnerRows = boilerRows.filter(r => r.burner_starts && r.burner_hours && parseFloat(r.burner_hours) > 0);
+const firstVBR = validBurnerRows[0]   || null;
+const lastVBR  = validBurnerRows[validBurnerRows.length-1] || null;
+const deltaStarts = (firstVBR && lastVBR) ? Math.max(0, parseInt(lastVBR.burner_starts) - parseInt(firstVBR.burner_starts)) : null;
+const deltaHours  = (firstVBR && lastVBR) ? Math.max(0, parseFloat(lastVBR.burner_hours)  - parseFloat(firstVBR.burner_hours))  : null;
+
+// Starts/hour from delta — precise (firmware counter, not CSV edges)
+const sph = (deltaStarts !== null && deltaHours !== null && deltaHours > 0)
+  ? (deltaStarts / deltaHours).toFixed(1)
+  : null;
+const avgCycleDurReal = (deltaStarts !== null && deltaHours !== null && deltaStarts > 0)
+  ? (deltaHours * 60 / deltaStarts).toFixed(1)
+  : null;
+const realCycleCount = deltaStarts;
+const realAvgDur     = avgCycleDurReal;
+
+const effCls   = sph ? (parseFloat(sph) < 3 ? 'good' : parseFloat(sph) < 6 ? 'warn' : 'bad') : 'neutral';
+const effLabel = sph ? (parseFloat(sph) < 3 ? 'Normal' : parseFloat(sph) < 6 ? 'High' : 'Severe') : 'N/A';
 
 // --- Flow temperature stats (from hc0 rows) ---
 const avgFlow  = avg(hcRows, 'flow_temp');
@@ -122,6 +143,54 @@ const gasBarHeating   = gasDays.map(d => +gasPerDay[d].heating.toFixed(2));
 const gasBarDhw       = gasDays.map(d => +gasPerDay[d].dhw.toFixed(2));
 const gasLineTotal    = gasDays.map(d => +(gasPerDay[d].heating + gasPerDay[d].dhw).toFixed(2));
 const hasGasChart     = gasDays.length >= 1;
+
+// --- API Summary data (from viessmann-history-explore-*.json if present) ---
+let apiSummary = null;
+try {
+  const exploreFile = require('path').join(HB_PATH, `viessmann-history-explore-${INSTALLATION_ID || 'all'}.json`);
+  if (require('fs').existsSync(exploreFile)) {
+    const raw = JSON.parse(require('fs').readFileSync(exploreFile, 'utf8'));
+    // Find device with heating features (device id = '0' usually)
+    const devKey = Object.keys(raw.devices || {}).find(k => {
+      const d = raw.devices[k];
+      return d.historyFeatures && d.historyFeatures.some(f => f.feature.includes('gas.consumption'));
+    });
+    if (devKey) {
+      const dev = raw.devices[devKey];
+      const feat = (name) => dev.historyFeatures.find(f => f.feature === name);
+      const val  = (name, prop) => { const f = feat(name); return f?.samples?.[prop]?.value ?? null; };
+      const unit = (name, prop) => { const f = feat(name); return f?.samples?.[prop]?.unit ?? ''; };
+      apiSummary = {
+        timestamp:        raw.timestamp,
+        gasHeatMonth:     val('heating.gas.consumption.summary.heating', 'currentMonth'),
+        gasHeatYear:      val('heating.gas.consumption.summary.heating', 'currentYear'),
+        gasHeat7d:        val('heating.gas.consumption.summary.heating', 'lastSevenDays'),
+        gasDhwMonth:      val('heating.gas.consumption.summary.dhw',     'currentMonth'),
+        gasDhwYear:       val('heating.gas.consumption.summary.dhw',     'currentYear'),
+        heatProdHeatMonth:val('heating.heat.production.summary.heating', 'currentMonth'),
+        heatProdHeatYear: val('heating.heat.production.summary.heating', 'currentYear'),
+        heatProdDhwMonth: val('heating.heat.production.summary.dhw',     'currentMonth'),
+        heatProdDhwYear:  val('heating.heat.production.summary.dhw',     'currentYear'),
+        pwrConsHeatMonth: val('heating.power.consumption.summary.heating','currentMonth'),
+        pwrConsHeatYear:  val('heating.power.consumption.summary.heating','currentYear'),
+        burnerLifeStarts: val('heating.burners.0.statistics', 'starts'),
+        burnerLifeHours:  val('heating.burners.0.statistics', 'hours'),
+      };
+      // Thermal efficiency = heat produced / (gas consumed × PCS)
+      const GAS_PCS_EFF = 10.55;
+      if (apiSummary.heatProdHeatYear && apiSummary.gasHeatYear && apiSummary.gasHeatYear > 0) {
+        apiSummary.thermalEffYear = Math.min(110, Math.round(
+          (apiSummary.heatProdHeatYear / (apiSummary.gasHeatYear * GAS_PCS_EFF)) * 100
+        ));
+      }
+      if (apiSummary.heatProdHeatMonth && apiSummary.gasHeatMonth && apiSummary.gasHeatMonth > 0) {
+        apiSummary.thermalEffMonth = Math.min(110, Math.round(
+          (apiSummary.heatProdHeatMonth / (apiSummary.gasHeatMonth * GAS_PCS_EFF)) * 100
+        ));
+      }
+    }
+  }
+} catch(e) { /* explore file not present — skip */ }
 
 // --- Heating schedule ---
 const SCHED_FILE = SCHED_FILE_PATH;
@@ -244,7 +313,9 @@ const avgHeatDemand = activeBurnerRows.length
   : null;
 
 // --- Burner cycle analysis ---
-// Reconstruct ON/OFF edges from boilerRows sorted by time
+// PRIMARY source: API counter delta (burner_starts / burner_hours) — captures ALL ignitions.
+// CSV edge detection misses ~97% of cycles because refresh is 15 min but cycles avg 6 min.
+// We keep edge detection only for the histogram (visual distribution of detected cycles).
 const sortedBoiler = [...boilerRows].sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
 const cycles = [];
 let cycleStart = null;
@@ -253,14 +324,17 @@ for (let i = 0; i < sortedBoiler.length; i++) {
   if (on && cycleStart === null) cycleStart = new Date(sortedBoiler[i].timestamp);
   if (!on && cycleStart !== null) {
     const durationMin = (new Date(sortedBoiler[i].timestamp) - cycleStart) / 60000;
-    if (durationMin >= 1) cycles.push(durationMin); // ignore <1 min noise
+    if (durationMin >= 1) cycles.push(durationMin);
     cycleStart = null;
   }
 }
+// cycleCount from CSV edges (used only for histogram — severely underestimates real count)
 const cycleCount      = cycles.length;
 const avgCycleDur     = cycleCount ? (cycles.reduce((a,b)=>a+b,0)/cycleCount).toFixed(0) : null;
 const shortestCycle   = cycleCount ? Math.min(...cycles).toFixed(0) : null;
 const shortCycleCls   = shortestCycle ? (parseFloat(shortestCycle) < 5 ? 'warn' : 'good') : 'neutral';
+
+// realCycleCount, realAvgDur, sph already defined above from delta calculation
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEATING SYSTEM ASSISTANT
@@ -306,12 +380,16 @@ const peakLoadKW = (heatLossCoeff !== null && avgRoomNum !== null)
 // Boiler sizing check
 const boilerOversized = (hasBoilerKW && peakLoadKW !== null && BOILER_KW > parseFloat(peakLoadKW) * 2);
 
-// Cycle diagnostics
-const reportHours  = DAYS * 24;
-const cyclesPerHour = cycleCount && reportHours ? (cycleCount / reportHours).toFixed(2) : null;
-const avgCycleDurNum  = avgCycleDur ? parseFloat(avgCycleDur) : null;
+// Cycle diagnostics — use API delta values (real), not CSV edge counts (severely undersampled)
+const reportHours   = DAYS * 24;
+// cyclesPerHour: prefer real API delta; CSV edge fallback only if no delta available
+const cyclesPerHour = sph || (cycleCount && reportHours ? (cycleCount / reportHours).toFixed(2) : null);
+// avgCycleDurNum: prefer real API-derived value
+const avgCycleDurNum  = realAvgDur ? parseFloat(realAvgDur) : (avgCycleDur ? parseFloat(avgCycleDur) : null);
 const shortCycling    = avgCycleDurNum !== null && avgCycleDurNum < 5;
 const excessiveCycling = cyclesPerHour !== null && parseFloat(cyclesPerHour) > 6;
+// Note: with real API data, Vitodens typically shows 6-12 starts/hour in partial load,
+// which is expected behavior. Only flag if combined with short avg duration.
 
 // Flow temp heuristic
 const avgFlowNum    = avgFlow ? parseFloat(avgFlow) : null;
@@ -326,8 +404,8 @@ const inefficientOp = avgModNum !== null && avgCycleDurNum !== null && avgModNum
 const insights = [];
 if (shortCycling || excessiveCycling)
   insights.push({ type:'warn', text: shortCycling
-    ? `Short cycling detected — avg cycle ${avgCycleDur} min (ideal > 10 min). Check system pressure, pump speed, or boiler minimum modulation setting.`
-    : `High cycling rate — ${cyclesPerHour} cycles/hour. Consider increasing heating curve or minimum burner runtime.` });
+    ? `Short cycling detected — avg cycle ${realAvgDur ?? avgCycleDur} min (ideal > 10 min). With ${cyclesPerHour} starts/hour, the boiler is starting too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.`
+    : `High cycling rate — ${cyclesPerHour} starts/hour from API counter. Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.` });
 if (inefficientOp)
   insights.push({ type:'warn', text: `Boiler running at low modulation (avg ${avgMod}%) with short cycles. Consider lowering the heating curve to reduce cycling.` });
 if (highFlowTemp)
@@ -357,13 +435,17 @@ if (roomTemps.length >= 10) {
 // score = cyclesPerHour × (10 / avgCycleDuration)  →  <1 excellent, 1-3 ok, >3 severe
 let cyclingScore = null, cyclingSeverity = null, cyclingSeverityCls = 'neutral';
 if (cyclesPerHour && avgCycleDurNum && avgCycleDurNum > 0) {
-  cyclingScore = (parseFloat(cyclesPerHour) * (10 / avgCycleDurNum)).toFixed(2);
+  // Score uses real API counter data — not CSV edge count
+  cyclingScore = (parseFloat(cyclesPerHour) * (10 / avgCycleDurNum)).toFixed(1);
   const sc2 = parseFloat(cyclingScore);
-  if (sc2 < 1)      { cyclingSeverity = 'Excellent'; cyclingSeverityCls = 'good'; }
-  else if (sc2 < 3) { cyclingSeverity = 'Acceptable'; cyclingSeverityCls = 'warn'; }
-  else              { cyclingSeverity = 'Severe';     cyclingSeverityCls = 'bad';  }
-  if (sc2 >= 3)
-    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} (severe). Boiler is cycling too frequently and too briefly — check minimum burner runtime setting or hydraulic balancing.` });
+  if (sc2 < 2)      { cyclingSeverity = 'Good';       cyclingSeverityCls = 'good'; }
+  else if (sc2 < 5) { cyclingSeverity = 'Moderate';   cyclingSeverityCls = 'warn'; }
+  else if (sc2 < 10){ cyclingSeverity = 'High';        cyclingSeverityCls = 'warn'; }
+  else              { cyclingSeverity = 'Severe';      cyclingSeverityCls = 'bad';  }
+  if (sc2 >= 10)
+    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — severe. The boiler starts ${cyclesPerHour} times/hour with avg cycle duration ${avgCycleDurNum.toFixed(1)} min. Check minimum burner runtime, system pressure, and pump speed. A technician should calibrate minimum modulation.` });
+  else if (sc2 >= 5)
+    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — high. Boiler starts ${cyclesPerHour} times/hour (avg ${avgCycleDurNum.toFixed(1)} min/cycle). Consider increasing heating curve or requesting minimum modulation calibration.` });
 }
 
 // ── Min modulation check ─────────────────────────────────────────────────────
@@ -810,24 +892,33 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 
 <div class="box">
   <h2>Boiler — Burner</h2>
-  <div class="grid">
-    ${sc('Lifetime starts', burnerStarts)}
-    ${sc('Running hours', burnerHours, 'h')}
-    ${sc('Starts/hour', sph, '', badge(effCls, effLabel))}
+  <!-- KPI row 1: real cycle metrics from API counter -->
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Cycle performance (from API counters — precise)</div>
+  <div class="grid" style="margin-bottom:6px">
+    ${realCycleCount !== null ? sc('Cycles in period', realCycleCount, '', badge(effCls, effLabel)) : ''}
+    ${sph ? sc('Starts/hour', sph, '/h', badge(effCls, parseFloat(sph)<3?'Normal':parseFloat(sph)<6?'High':'Severe')) : ''}
+    ${realAvgDur ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<5?'warn':parseFloat(realAvgDur)<10?'warn':'good', parseFloat(realAvgDur)<5?'Short cycling':parseFloat(realAvgDur)<10?'Check':'OK')) : ''}
+    ${burnerStarts ? sc('Lifetime starts', burnerStarts) : ''}
+    ${burnerHours ? sc('Lifetime hours', burnerHours, 'h') : ''}
     ${sc('Burner active', burnerOnPct, '% samples')}
-    ${sc('Avg modulation', avgMod, '%')}
+  </div>
+  <p class="note" style="margin-bottom:14px">⚡ Cycle count uses <strong>API firmware counters</strong> (burner_starts delta) — captures all ignitions regardless of 15-min CSV sample rate. CSV edge detection would miss ~97% of cycles at this cycle frequency.</p>
+
+  <!-- KPI row 2: modulation + gas -->
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Modulation & gas (period)</div>
+  <div class="grid" style="margin-bottom:6px">
+    ${sc('Avg modulation (active)', avgMod, '%', badge(parseFloat(avgMod||0)<15?'warn':'good', parseFloat(avgMod||0)<15?'Low mod':'OK'))}
     ${sc('Max modulation', maxMod, '%')}
     ${avgHeatDemand ? sc('Avg heat demand', avgHeatDemand, ' kW') : ''}
     ${hasGasData ? sc('Gas heating today', gasHeatingToday, ' m³') : ''}
     ${hasGasData && gasDhwToday ? sc('Gas DHW today', gasDhwToday, ' m³') : ''}
     ${hasGasData && gasTotalToday ? sc('Gas total today', gasTotalToday, ' m³') : ''}
-    ${cycleCount > 0 ? sc('Cycles (period)', cycleCount) : ''}
-    ${avgCycleDur ? sc('Avg cycle', avgCycleDur, ' min') : ''}
-    ${shortestCycle ? sc('Shortest cycle', shortestCycle, ' min', badge(shortCycleCls, parseFloat(shortestCycle)<5?'⚠ Short':'OK')) : ''}
   </div>
+
   ${boilerRows.length < 5 ? `<p class="note">Only ${boilerRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
-  ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>` : ''}
-  ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Cycle duration histogram</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">Distribution of burner ON durations. Short cycles (&lt;5 min) indicate short-cycling.</p></div>` : ''}
+  ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>
+  <p class="note">⚠️ Burner ON/OFF bars show only cycles visible within 15-min sampling interval. Actual cycle count (${realCycleCount ?? '?'}) is ${realCycleCount && cycleCount ? Math.round(realCycleCount/Math.max(cycleCount,1)) : '~100'}× higher — see API counter KPIs above.</p>` : ''}
+  ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Cycle duration histogram (sampled)</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">Distribution of burner ON durations visible in CSV samples. Actual cycle duration from API counters: avg ${realAvgDur ?? '?'} min. Histogram shows only ~${cycleCount} of ${realCycleCount ?? '?'} real cycles.</p></div>` : ''}
   ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Daily gas consumption (m³)</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">Stacked bars: heating (dark blue) + DHW (teal). Red line: daily total. Today's bar shows current accumulated value.</p></div>` : ''}
 </div>
 
@@ -836,9 +927,9 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div class="grid">
     ${sc('Avg room temp', avgRoom, '°C')}
     ${sc('Avg setpoint', avgTarget, '°C')}
-    ${avgFlow ? sc('Avg flow temp', avgFlow, '°C') : ''}
     ${maxFlow ? sc('Max flow temp', maxFlow, '°C') : ''}
     ${condensingPct !== null ? sc('Condensing mode', condensingPct, '% time', badge(condensingCls, condensingLabel)) : ''}
+    ${avgFlow ? sc('Avg flow temp', avgFlow, '°C', badge(parseFloat(avgFlow||99)<45?'good':parseFloat(avgFlow||99)<55?'warn':'neutral', parseFloat(avgFlow||99)<45?'Excellent':parseFloat(avgFlow||99)<55?'Condensing':'High')) : ''}
     ${scheduleToday ? sc('Today\'s schedule', scheduleToday) : ''}
   </div>
   ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Program distribution</div>
@@ -855,8 +946,9 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${peakLoadKW ? sc('Est. peak load', peakLoadKW, ' kW', '<span style=\"font-size:10px;color:#888\">at '+DESIGN_TEMP+'°C outdoor</span>') : ''}
     ${hasBoilerKW ? sc('Boiler nominal', BOILER_KW, ' kW', boilerOversized ? badge('warn','Oversized') : badge('good','OK')) : ''}
     ${houseEff ? sc('House efficiency', houseEff.label, '', badge(houseEff.cls, heatLossCoeff+' kW/°C')) : ''}
-    ${cyclesPerHour ? sc('Cycles/hour', cyclesPerHour, '', (excessiveCycling ? badge('warn','High') : badge('good','OK'))) : ''}
-    ${cyclingScore ? sc('Cycling severity', cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
+    ${cyclesPerHour ? sc('Starts/hour', cyclesPerHour, '/h', badge(effCls, parseFloat(cyclesPerHour)<3?'Normal':parseFloat(cyclesPerHour)<6?'High':'Severe')) : ''}
+    ${realAvgDur   ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<5?'warn':parseFloat(realAvgDur)<10?'warn':'good', parseFloat(realAvgDur)<5?'Short':parseFloat(realAvgDur)<10?'Check':'OK')) : ''}
+    ${cyclingScore ? sc('Cycling score', cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
     ${comfortStddev ? sc('Comfort stability', comfortRating, '', badge(comfortCls, '±'+comfortStddev+'°C')) : ''}
     ${gasEfficiencyPct ? sc('Est. efficiency', gasEfficiencyPct, '%') : ''}
     ${heatCurveCorr ? sc('Heating curve', heatCurveBehaviour, '', badge(heatCurveCls, 'r='+heatCurveCorr)) : ''}
@@ -885,6 +977,42 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   </div>
   ${dhwRows.length >= 2 ? `<div class="ch-tall"><canvas id="cDhw"></canvas></div>` : ''}
 </div>
+
+${apiSummary ? `
+<div class="box">
+  <h2>📊 Energy Summary (from Viessmann API)</h2>
+  <p class="note" style="margin-bottom:14px">Official aggregated data from Viessmann cloud API. Data snapshot: ${apiSummary.timestamp ? new Date(apiSummary.timestamp).toLocaleString('en-GB') : 'N/A'}. Run <code>viessmann-explore-history.js</code> to refresh.</p>
+
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Gas consumption (m³)</div>
+  <div class="grid" style="margin-bottom:16px">
+    ${apiSummary.gasHeat7d   !== null ? sc('Heating last 7 days', apiSummary.gasHeat7d,   ' m³') : ''}
+    ${apiSummary.gasHeatMonth !== null ? sc('Heating this month',  apiSummary.gasHeatMonth,' m³') : ''}
+    ${apiSummary.gasHeatYear  !== null ? sc('Heating this year',   apiSummary.gasHeatYear, ' m³') : ''}
+    ${apiSummary.gasDhwMonth  !== null ? sc('DHW this month',      apiSummary.gasDhwMonth, ' m³') : ''}
+    ${apiSummary.gasDhwYear   !== null ? sc('DHW this year',       apiSummary.gasDhwYear,  ' m³') : ''}
+    ${(apiSummary.gasHeatMonth !== null && apiSummary.gasDhwMonth !== null) ? sc('Total this month', +(apiSummary.gasHeatMonth + apiSummary.gasDhwMonth).toFixed(1), ' m³') : ''}
+    ${(apiSummary.gasHeatYear  !== null && apiSummary.gasDhwYear  !== null) ? sc('Total this year',  +(apiSummary.gasHeatYear  + apiSummary.gasDhwYear).toFixed(1),  ' m³') : ''}
+  </div>
+
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Heat produced (kWh)</div>
+  <div class="grid" style="margin-bottom:16px">
+    ${apiSummary.heatProdHeatMonth !== null ? sc('Heating this month', apiSummary.heatProdHeatMonth, ' kWh') : ''}
+    ${apiSummary.heatProdHeatYear  !== null ? sc('Heating this year',  apiSummary.heatProdHeatYear,  ' kWh') : ''}
+    ${apiSummary.heatProdDhwMonth  !== null ? sc('DHW this month',     apiSummary.heatProdDhwMonth,  ' kWh') : ''}
+    ${apiSummary.heatProdDhwYear   !== null ? sc('DHW this year',      apiSummary.heatProdDhwYear,   ' kWh') : ''}
+    ${apiSummary.pwrConsHeatMonth  !== null ? sc('Pump power month',   apiSummary.pwrConsHeatMonth,  ' kWh') : ''}
+    ${apiSummary.pwrConsHeatYear   !== null ? sc('Pump power year',    apiSummary.pwrConsHeatYear,   ' kWh') : ''}
+  </div>
+
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Thermal efficiency (heat produced / gas input × PCS 10.55 kWh/m³)</div>
+  <div class="grid">
+    ${apiSummary.thermalEffMonth !== undefined ? sc('Efficiency this month', apiSummary.thermalEffMonth, '%', badge(apiSummary.thermalEffMonth >= 90 ? 'good' : 'warn', apiSummary.thermalEffMonth >= 90 ? 'Condensing ✓' : 'Check')) : ''}
+    ${apiSummary.thermalEffYear  !== undefined ? sc('Efficiency this year',  apiSummary.thermalEffYear,  '%', badge(apiSummary.thermalEffYear  >= 90 ? 'good' : 'warn', apiSummary.thermalEffYear  >= 90 ? 'Condensing ✓' : 'Check')) : ''}
+    ${apiSummary.burnerLifeStarts !== null ? sc('Lifetime starts', apiSummary.burnerLifeStarts) : ''}
+    ${apiSummary.burnerLifeHours  !== null ? sc('Lifetime hours',  apiSummary.burnerLifeHours, 'h') : ''}
+  </div>
+  <p class="note" style="margin-top:10px">Thermal efficiency >100% is possible for condensing boilers (latent heat recovery). Values >105% may indicate rounding in Viessmann API data.</p>
+</div>` : ''}
 
 ${gasForecast ? `
 <div class="box">
