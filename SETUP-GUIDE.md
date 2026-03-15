@@ -1238,7 +1238,7 @@ sudo systemctl restart homebridge
 
 ### v2.0.42 (2026-03-15)
 **HC program fix + messages JSON + maxCompressorRps + gas forecast threshold:**
-- **Fixed: Extended Heating always OFF on heat pump** — `programs.comfort` feature doesn't exist on Vitocal gen3 (uses `programs.comfortHeating`). Plugin now auto-resolves the correct name at setup. Fixes HomeKit showing OFF while ViCare shows ON.
+- **Fixed: Extended Heating HomeKit OFF / ViCare ON** — `forcedLastFromSchedule.active` is always True (schedule artifact), not an Extended Heating indicator. State now uses `comfort.active OR programs.active===comfortFeature`. Deactivation uses `setTemperature` fallback when `deactivate` not executable.
 - **Fixed: HC program names on heat pump** — `normalHeating`, `reducedEnergySaving` etc. now correctly mapped to `normal`/`reduced`/`comfort`. Previously ignored, leaving program switches stale.
 - **Fixed: gas forecast annual threshold** — requires 14+ days before showing annual estimate. Fewer days shows "Need N days" badge.
 - **Added: `maxCompressorRps` config option** — normalises heat pump compressor speed to 0–100% modulation. Default 50 rps. Warning logged if exceeded with suggested value. Add to config: `"maxCompressorRps": 60`.

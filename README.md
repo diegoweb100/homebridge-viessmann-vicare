@@ -1035,6 +1035,7 @@ For issues and questions:
 
 ### [2.0.43] - 2026-03-15
 #### Fixed
+- **Extended Heating state: HomeKit OFF while ViCare ON** — confirmed via live API: `forcedLastFromSchedule.active=True` is a schedule management artifact (always present), not an Extended Heating indicator. State now reads `comfort.active OR (programs.active === comfortFeatureSuffix)`. Deactivation uses `comfort.setTemperature` as fallback when `deactivate` is not executable (Vitodens).
 - **Extended Heating / comfort program: API-driven feature discovery** — removed hardcoded candidate list `['comfort', 'comfortHeating']`. Plugin now discovers the comfort program by scanning actual device features for any enabled `programs.*` that has an `activate` command, excluding known non-comfort programs. Works for Vitodens (`programs.comfort`), Vitocal gen3 (`programs.comfortHeating`), and any future device model without code changes.
 - **HC active program normalisation: pattern-based** — replaced fixed `programNormMap` with `startsWith` pattern matching (`comfort*` → `comfort`, `normal*` → `normal`, `reduced*` → `reduced`). Handles any future variants from new device models automatically.
 - **Device messages: per-device file** — `writeDeviceMessages` now writes `viessmann-messages-<installationId>-<deviceId>.json` (previously single file per installation, causing overwrite when multiple devices present, e.g. Vitocal + VitoCharge). Report aggregates all matching files.
