@@ -26,6 +26,8 @@ export class ViessmannHeatingCircuitAccessory {
   private isCircuitEnabled = false;
   private currentMode = 'standby';
   private currentProgram = 'normal'; // Track which temperature program is active
+  // Resolved comfort program feature suffix: 'comfort' (Vitodens) or 'comfortHeating' (Vitocal gen3)
+  private comfortFeatureSuffix = 'comfort';
 
   // 🆕 Command confirmation state
   private pendingModeUntil = 0;
@@ -237,7 +239,36 @@ export class ViessmannHeatingCircuitAccessory {
     }
 
     // Enhanced analysis for extended heating (comfort program activation)
-    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.comfort`);
+    // Feature name varies by device model:
+    //   Vitodens (gen2):  programs.comfort
+    //   Vitocal (gen3):   programs.comfortHeating
+    //   Future devices:   unknown
+    // Strategy: discover from actual features — find any enabled programs.* that has an
+    // 'activate' command, excluding known non-comfort program names.
+    const NON_COMFORT_PROGRAMS = new Set([
+      'normal', 'normalHeating', 'normalEnergySaving',
+      'reduced', 'reducedHeating', 'reducedEnergySaving',
+      'standby', 'fixed', 'frostprotection', 'summerEco',
+      'holidayAtHome', 'holiday', 'forcedLastFromSchedule',
+      'normalCooling', 'reducedCooling', 'comfortCooling',
+      'normalCoolingEnergySaving', 'reducedCoolingEnergySaving', 'comfortCoolingEnergySaving',
+      'comfortEnergySaving', // cooling-only variant, not heating comfort
+    ]);
+    const programsPrefix = `${circuitPrefix}.operating.programs.`;
+    const discoveredComfort = features.find(f =>
+      f.feature.startsWith(programsPrefix) &&
+      f.isEnabled === true &&
+      f.commands?.activate !== undefined &&
+      !NON_COMFORT_PROGRAMS.has(f.feature.slice(programsPrefix.length)),
+    );
+    if (discoveredComfort) {
+      const suffix = discoveredComfort.feature.slice(programsPrefix.length);
+      this.comfortFeatureSuffix = suffix;
+      this.platform.log.debug(`HC${this.circuitNumber} comfort feature discovered: programs.${suffix}`);
+    } else {
+      this.platform.log.debug(`HC${this.circuitNumber} no comfort program with activate command found`);
+    }
+    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`);
     if (comfortProgram?.isEnabled === true) {
       const hasActivate = comfortProgram.commands?.activate;
       const hasDeactivate = comfortProgram.commands?.deactivate;
@@ -679,10 +710,12 @@ private setupTemperatureProgramServices() {
 
   private async changeTemperatureProgram(newProgram: 'reduced' | 'normal' | 'comfort') {
     try {
-      const programMap = {
+      // Map canonical program names to actual API feature suffixes for this device.
+      // Vitocal gen3 uses 'comfortHeating' instead of 'comfort'.
+      const programMap: Record<string, string> = {
         'reduced': 'reduced',
-        'normal': 'normal', 
-        'comfort': 'comfort'
+        'normal': 'normal',
+        'comfort': this.comfortFeatureSuffix,
       };
       
       const targetTemperature = this.programTemperatures[newProgram];
@@ -923,7 +956,7 @@ private setupTemperatureProgramServices() {
         this.device.id
       );
       
-      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.comfort`);
+      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`);
       if (!comfortProgram) {
         this.platform.log.warn(`Comfort program not found for circuit ${this.circuitNumber}`);
         this.restoreExtendedHeatingState();
@@ -1048,7 +1081,7 @@ private setupTemperatureProgramServices() {
           this.installation.id,
           this.gateway.serial,
           this.device.id,
-          `${circuitPrefix}.operating.programs.comfort`,
+          `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`,
           'setTemperature',
           { targetTemperature: boostTemp }
         );
@@ -1116,7 +1149,7 @@ private setupTemperatureProgramServices() {
           this.installation.id,
           this.gateway.serial,
           this.device.id,
-          `${circuitPrefix}.operating.programs.comfort`,
+          `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`,
           'setTemperature',
           { targetTemperature: normalTemp }
         );
@@ -1147,7 +1180,7 @@ private setupTemperatureProgramServices() {
       this.installation.id,
       this.gateway.serial,
       this.device.id,
-      `heating.circuits.${this.circuitNumber}.operating.programs.comfort`,
+      `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`,
       commandName,
       commandParams
     );
@@ -1291,7 +1324,7 @@ private setupTemperatureProgramServices() {
         this.device.id
       );
       
-      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.comfort`);
+      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`);
       if (comfortProgram?.commands?.deactivate?.isExecutable) {
         await this.executeComfortCommand('deactivate', comfortProgram, false);
       } else {
@@ -1707,18 +1740,23 @@ private setupTemperatureProgramServices() {
     // Normalize: heat pump devices return 'normalHeating', 'reducedHeating', 'comfortHeating',
     // 'normalEnergySaving', 'reducedEnergySaving', 'comfortEnergySaving' instead of plain
     // 'normal', 'reduced', 'comfort'. Map them to our canonical set.
-    const programNormMap: Record<string, string> = {
-      normalHeating:          'normal',
-      normalEnergySaving:     'normal',
-      reducedHeating:         'reduced',
-      reducedEnergySaving:    'reduced',
-      comfortHeating:         'comfort',
-      comfortEnergySaving:    'comfort',
-      forcedLastFromSchedule: 'normal',  // treat as normal when forced from schedule
-    };
-    if (programNormMap[activeProgram]) {
-      this.platform.log.debug(`HC${this.circuitNumber} program "${activeProgram}" → normalised to "${programNormMap[activeProgram]}"`);
-      activeProgram = programNormMap[activeProgram];
+    // Vitocal gen3 returns compound program names — normalise to canonical set.
+    // Note: 'forcedLastFromSchedule' appears as a separate feature (active=true/false),
+    // NOT as a value of programs.active — so it is intentionally excluded here.
+    // Pattern-based normalisation — works for any current or future device variant
+    // (normalHeating, normalEnergySaving, normalV2... all start with 'normal' → 'normal').
+    // Fixed map would break on unknown future variants from new device models.
+    function normaliseProgramName(name: string): string | null {
+      const l = name.toLowerCase();
+      if (l.startsWith('comfort')) return 'comfort';
+      if (l.startsWith('normal'))  return 'normal';
+      if (l.startsWith('reduced')) return 'reduced';
+      return null;
+    }
+    const normalised = normaliseProgramName(activeProgram);
+    if (normalised && normalised !== activeProgram) {
+      this.platform.log.debug(`HC${this.circuitNumber} program "${activeProgram}" → normalised to "${normalised}"`);
+      activeProgram = normalised;
     } else if (!['comfort', 'normal', 'reduced'].includes(activeProgram)) {
       this.platform.log.debug(`HC${this.circuitNumber} active program "${activeProgram}" not in known set — keeping ${this.currentProgram}`);
       activeProgram = this.currentProgram;
@@ -1799,7 +1837,7 @@ private setupTemperatureProgramServices() {
       }
     }
 
-    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.comfort`);
+    const comfortProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`);
     if (comfortProgram?.properties?.active?.value !== undefined) {
       const newState = comfortProgram.properties.active.value;
       if (newState !== this.states.ExtendedHeatingActive) {

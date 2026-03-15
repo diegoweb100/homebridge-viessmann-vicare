@@ -693,7 +693,12 @@ export class ViessmannEnergyAccessory {
         this.states.hpModulation = rps > 0 ? Math.min(100, Math.round((rps / maxRps) * 100)) : 0;
 
         // Log setpoint alongside current for calibration visibility
-        const fSetpoint = get('heating.compressors.0.speed.setpoint');
+        // Derive setpoint path from the resolved compressorMod path (e.g. heating.compressors.0.speed.current
+        // → heating.compressors.0.speed.setpoint) instead of hardcoding device index.
+        const setpointPath = this.hpPaths.compressorMod
+          ? this.hpPaths.compressorMod.replace(/\.current$/, '.setpoint')
+          : '';
+        const fSetpoint = setpointPath ? get(setpointPath) : null;
         const setpointRps = fSetpoint?.properties?.value?.value ?? null;
         this.platform.log.debug(
           `${tag}[HP] compressor current=${rps}rps setpoint=${setpointRps ?? '?'}rps` +

@@ -1033,8 +1033,17 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.43] - 2026-03-15
+#### Fixed
+- **Extended Heating / comfort program: API-driven feature discovery** — removed hardcoded candidate list `['comfort', 'comfortHeating']`. Plugin now discovers the comfort program by scanning actual device features for any enabled `programs.*` that has an `activate` command, excluding known non-comfort programs. Works for Vitodens (`programs.comfort`), Vitocal gen3 (`programs.comfortHeating`), and any future device model without code changes.
+- **HC active program normalisation: pattern-based** — replaced fixed `programNormMap` with `startsWith` pattern matching (`comfort*` → `comfort`, `normal*` → `normal`, `reduced*` → `reduced`). Handles any future variants from new device models automatically.
+- **Device messages: per-device file** — `writeDeviceMessages` now writes `viessmann-messages-<installationId>-<deviceId>.json` (previously single file per installation, causing overwrite when multiple devices present, e.g. Vitocal + VitoCharge). Report aggregates all matching files.
+- **Device messages written at startup** — `setupDeviceAccessories` now calls `writeDeviceMessages` so the file exists immediately on startup, not only after the first update cycle.
+- **Compressor setpoint path: dynamic** — `heating.compressors.0.speed.setpoint` was hardcoded. Now derived from resolved `hpPaths.compressorMod` by replacing `.current` with `.setpoint` — correct for any device/compressor index.
+
 ### [2.0.42] - 2026-03-15
 #### Fixed
+- **Extended Heating always OFF on heat pump installations** — the entire Extended Heating (comfort boost) feature was conditioned on `programs.comfort` existing in the device features. Vitocal gen3 uses `programs.comfortHeating` instead. The plugin now resolves the correct feature name once at setup (`comfortFeatureSuffix`), trying `comfort` first then `comfortHeating`. All API calls — setup detection, update cycle state reading, activate/deactivate commands, temperature changes — use the resolved name. Fixes HomeKit showing OFF while ViCare app shows ON.
 - **HC program names on heat pump installations** — Vitocal 250A returns `normalHeating`, `reducedEnergySaving`, `comfortHeating` etc. instead of plain `normal`/`reduced`/`comfort`. These were silently ignored, leaving `currentProgram` stale. A normalisation map now converts all HP program variants to the canonical set used by HomeKit switches.
 - **Gas forecast annual estimate threshold** — minimum 14 days of gas data required before showing annual projection. With fewer days the estimate was unreliable. Report now shows a "Need N days" badge and a clear message when threshold not met.
 

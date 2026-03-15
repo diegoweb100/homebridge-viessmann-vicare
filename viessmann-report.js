@@ -928,19 +928,30 @@ ${energyRows.length >= 1 ? `
   <p class="note" style="margin-bottom:12px">Status, info and fault codes reported by the device. Translated from Viessmann service documentation.</p>
   <div id="msg-list">
 ${(() => {
-  // Read messages from viessmann-messages-<ID>.json if available (written by plugin)
-  const msgFile = INSTALLATION_ID
-    ? require('path').join(HB_PATH, 'viessmann-messages-' + INSTALLATION_ID + '.json')
-    : require('path').join(HB_PATH, 'viessmann-messages.json');
+  // Read messages from viessmann-messages-<installationId>-<deviceId>.json files.
+  // Multiple files exist when an installation has multiple devices (e.g. Vitocal + VitoCharge).
+  // Aggregate all matching files and merge, sorted newest-first.
+  const _fs = require('fs');
+  const _path = require('path');
   let messages = [];
   try {
-    if (require('fs').existsSync(msgFile)) {
-      messages = JSON.parse(require('fs').readFileSync(msgFile, 'utf8'));
+    const pattern = INSTALLATION_ID
+      ? `viessmann-messages-${INSTALLATION_ID}-`
+      : 'viessmann-messages-';
+    const allFiles = _fs.readdirSync(HB_PATH)
+      .filter(f => f.startsWith(pattern) && f.endsWith('.json'));
+    for (const fname of allFiles) {
+      try {
+        const entries = JSON.parse(_fs.readFileSync(_path.join(HB_PATH, fname), 'utf8'));
+        messages.push(...entries);
+      } catch(_) {}
     }
+    // Sort merged messages newest-first
+    messages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   } catch(_) {}
 
   if (!messages.length) {
-    return `<p class="note">No messages file found yet. Messages will appear here once the plugin writes <code>viessmann-messages-${INSTALLATION_ID || ''}.json</code>.</p>`;
+    return `<p class="note">No messages file found yet. Messages will appear here once the plugin writes <code>viessmann-messages-${INSTALLATION_ID || 'ID'}-DEVICEID.json</code> (one file per device per installation).</p>`;
   }
 
   return messages.slice(0, 20).map(m => {
