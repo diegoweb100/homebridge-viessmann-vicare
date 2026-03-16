@@ -1033,6 +1033,13 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.50] - 2026-03-16
+- feat: Report web server (viessmann-report-server.js) — configurable port, auto-detect installations, all params from UI
+- feat: reportServerPort + reportServerPath in plugin config and Homebridge UI
+- feat: CSV — 9 new columns: event_type, burner_starts/hours_today (delta), gas/heat monthly, heat production day/month
+- fix: Burner on/off events written to CSV immediately (not only at 15-min snapshot)
+- fix: Statistics read before burner state change detection — event row has accurate starts/hours
+
 ### [2.0.49] - 2026-03-16
 - fix: battery standby state now correctly shows 0W (not discharge)
 - fix: PV daily yield unit-aware conversion (wattHour vs kilowattHour)

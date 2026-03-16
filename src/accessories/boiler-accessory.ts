@@ -28,6 +28,13 @@ export class ViessmannBoilerAccessory {
   private pendingExpectedTemp: number | undefined = undefined;
   private pendingPreviousTemp: number | undefined = undefined;
 
+  // Daily delta tracking for burner starts/hours — reference values reset at midnight
+  private dailyRef = {
+    date: '',          // 'YYYY-MM-DD' of the reference — reset when date changes
+    startsRef: 0,      // BurnerStarts value at midnight
+    hoursRef: 0,       // BurnerHours value at midnight
+  };
+
   private states = {
     CurrentTemperature: 20,
     HeatingThresholdTemperature: 20,
@@ -43,7 +50,12 @@ export class ViessmannBoilerAccessory {
     GasConsumptionToday: 0,
     GasConsumptionThisMonth: 0,
     GasConsumptionThisYear: 0,
-    GasConsumptionDhwToday: 0,   // heating.gas.consumption.summary.dhw.currentDay
+    GasConsumptionDhwToday: 0,    // heating.gas.consumption.summary.dhw.currentDay
+    GasConsumptionDhwThisMonth: 0,
+    HeatProductionHeatingToday: 0,   // heating.heat.production.summary.heating.currentDay (kWh)
+    HeatProductionHeatingThisMonth: 0,
+    HeatProductionDhwToday: 0,       // heating.heat.production.summary.dhw.currentDay (kWh)
+    HeatProductionDhwThisMonth: 0,
     PowerConsumptionToday: 0,
     PowerConsumptionThisMonth: 0,
     PowerConsumptionThisYear: 0,
@@ -835,6 +847,15 @@ export class ViessmannBoilerAccessory {
       }
     }
 
+    // Update burner statistics FIRST — so the event row written on state change has current values
+    const statisticsFeature = features.find(f => f.feature === 'heating.burners.0.statistics');
+    if (statisticsFeature?.properties?.hours?.value !== undefined) {
+      this.states.BurnerHours = statisticsFeature.properties.hours.value;
+    }
+    if (statisticsFeature?.properties?.starts?.value !== undefined) {
+      this.states.BurnerStarts = statisticsFeature.properties.starts.value;
+    }
+
     // Update burner status
     const burnerFeature = features.find(f => f.feature === 'heating.burners.0');
     if (burnerFeature?.properties?.active?.value !== undefined) {
@@ -868,6 +889,25 @@ export class ViessmannBoilerAccessory {
         }
         
         this.platform.log.debug(`Boiler burner ${newBurnerState ? 'activated' : 'deactivated'}`);
+
+        // 📊 Write immediate event row to CSV — captures on/off transitions
+        // that would otherwise be invisible at 15-min snapshot granularity
+        if (this.historyLogger) {
+          const startsToday = this.states.BurnerStarts - this.dailyRef.startsRef;
+          const hoursToday  = this.states.BurnerHours  - this.dailyRef.hoursRef;
+          this.historyLogger.appendCsvRow({
+            timestamp:            new Date().toISOString(),
+            accessory:            'boiler',
+            event_type:           newBurnerState ? 'burner_on' : 'burner_off',
+            burner_active:        newBurnerState,
+            modulation:           this.states.Modulation,
+            outside_temp:         this.states.OutsideTemperature || undefined,
+            burner_starts:        this.states.BurnerStarts,
+            burner_hours:         this.states.BurnerHours,
+            burner_starts_today:  startsToday >= 0 ? startsToday : undefined,
+            burner_hours_today:   hoursToday  >= 0 ? hoursToday  : undefined,
+          });
+        }
       }
     }
 
@@ -886,15 +926,6 @@ export class ViessmannBoilerAccessory {
         
         this.platform.log.debug(`Boiler modulation: ${newModulation}%`);
       }
-    }
-
-    // Update burner statistics
-    const statisticsFeature = features.find(f => f.feature === 'heating.burners.0.statistics');
-    if (statisticsFeature?.properties?.hours?.value !== undefined) {
-      this.states.BurnerHours = statisticsFeature.properties.hours.value;
-    }
-    if (statisticsFeature?.properties?.starts?.value !== undefined) {
-      this.states.BurnerStarts = statisticsFeature.properties.starts.value;
     }
 
     // 🆕 NEW: Update diagnostic information
@@ -998,6 +1029,43 @@ export class ViessmannBoilerAccessory {
       );
       
       this.platform.log.debug(`Power consumption ${hasActiveConsumption ? 'DETECTED' : 'IDLE'}: ${this.states.PowerConsumptionToday} kWh`);
+    }
+
+    // Update heat production (heating) — available on Vitodens gen3 and heat pumps
+    const heatHeatingFeature = features.find(f => f.feature === 'heating.heat.production.summary.heating');
+    if (heatHeatingFeature?.properties) {
+      if (heatHeatingFeature.properties.currentDay?.value !== undefined) {
+        this.states.HeatProductionHeatingToday = heatHeatingFeature.properties.currentDay.value;
+      }
+      if (heatHeatingFeature.properties.currentMonth?.value !== undefined) {
+        this.states.HeatProductionHeatingThisMonth = heatHeatingFeature.properties.currentMonth.value;
+      }
+    }
+
+    // Update heat production (DHW)
+    const heatDhwFeature = features.find(f => f.feature === 'heating.heat.production.summary.dhw');
+    if (heatDhwFeature?.properties) {
+      if (heatDhwFeature.properties.currentDay?.value !== undefined) {
+        this.states.HeatProductionDhwToday = heatDhwFeature.properties.currentDay.value;
+      }
+      if (heatDhwFeature.properties.currentMonth?.value !== undefined) {
+        this.states.HeatProductionDhwThisMonth = heatDhwFeature.properties.currentMonth.value;
+      }
+    }
+
+    // Update DHW gas consumption monthly figure
+    if (gasDhwFeature?.properties?.currentMonth?.value !== undefined) {
+      this.states.GasConsumptionDhwThisMonth = gasDhwFeature.properties.currentMonth.value;
+    }
+
+    // Update daily delta for burner starts/hours (reset reference at midnight)
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (this.dailyRef.date !== todayStr) {
+      // New day — set reference to current cumulative values
+      this.dailyRef.date     = todayStr;
+      this.dailyRef.startsRef = this.states.BurnerStarts;
+      this.dailyRef.hoursRef  = this.states.BurnerHours;
+      this.platform.log.debug(`Boiler daily reference reset: starts=${this.dailyRef.startsRef} hours=${this.dailyRef.hoursRef}`);
     }
 
     // Update water pressure
@@ -1136,20 +1204,31 @@ export class ViessmannBoilerAccessory {
       this.platform.log.debug(statusLine);
     }
 
-    // 📊 History logging — FakeGato energy + CSV
+    // 📊 History logging — FakeGato energy + CSV snapshot
     if (this.historyLogger) {
       this.historyLogger.addEnergyEntry({ power: this.states.Modulation });
+      const startsToday = this.states.BurnerStarts - this.dailyRef.startsRef;
+      const hoursToday  = this.states.BurnerHours  - this.dailyRef.hoursRef;
       this.historyLogger.appendCsvRow({
-        timestamp: new Date().toISOString(),
-        accessory: 'boiler',
-        burner_active: this.states.BurnerActive,
-        modulation: this.states.Modulation,
-        outside_temp: this.states.OutsideTemperature || undefined,
-        outside_humidity: this.states.OutsideHumidity,
-        burner_starts: this.states.BurnerStarts,
-        burner_hours: this.states.BurnerHours,
-        gas_heating_day_m3: this.states.GasConsumptionToday || undefined,
-        gas_dhw_day_m3: this.states.GasConsumptionDhwToday || undefined,
+        timestamp:                  new Date().toISOString(),
+        accessory:                  'boiler',
+        event_type:                 'snapshot',
+        burner_active:              this.states.BurnerActive,
+        modulation:                 this.states.Modulation,
+        outside_temp:               this.states.OutsideTemperature || undefined,
+        outside_humidity:           this.states.OutsideHumidity,
+        burner_starts:              this.states.BurnerStarts,
+        burner_hours:               this.states.BurnerHours,
+        burner_starts_today:        startsToday >= 0 ? startsToday : undefined,
+        burner_hours_today:         hoursToday  >= 0 ? hoursToday  : undefined,
+        gas_heating_day_m3:         this.states.GasConsumptionToday         || undefined,
+        gas_dhw_day_m3:             this.states.GasConsumptionDhwToday       || undefined,
+        gas_heating_month_m3:       this.states.GasConsumptionThisMonth      || undefined,
+        gas_dhw_month_m3:           this.states.GasConsumptionDhwThisMonth   || undefined,
+        heat_heating_day_kwh:       this.states.HeatProductionHeatingToday   || undefined,
+        heat_dhw_day_kwh:           this.states.HeatProductionDhwToday       || undefined,
+        heat_heating_month_kwh:     this.states.HeatProductionHeatingThisMonth || undefined,
+        heat_dhw_month_kwh:         this.states.HeatProductionDhwThisMonth   || undefined,
       });
     }
   }

@@ -11,7 +11,6 @@ import {
 } from 'homebridge';
 
 import * as path from 'path';
-import * as fs from 'fs';
 import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
 // Export types from viessmann-api-endpoints for accessories
 export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
@@ -86,6 +85,30 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       
       // Initialize health monitoring
       this.startHealthMonitoring();
+
+      // Start report web server if configured
+      const reportPort = this.config.reportServerPort ?? 0;
+      if (reportPort > 0) {
+        try {
+          const reportServerPath = this.config.reportServerPath
+            ?? this.api.user.storagePath();
+          const reportScript = require('path').join(__dirname, '..', 'viessmann-report-server.js');
+          const args = ['--port', String(reportPort), '--path', reportServerPath];
+          const { execFile } = require('child_process');
+          // Run as detached child so it survives plugin reload
+          const child = execFile(process.execPath, [reportScript, ...args], {
+            detached: false,
+            stdio: 'inherit',
+          });
+          child.on('error', (err: Error) => {
+            this.log.warn(`[Viessmann] Report server failed to start: ${err.message}`);
+          });
+          this.log.info(`[Viessmann] Report server started on http://0.0.0.0:${reportPort}`);
+          this.log.info(`[Viessmann] Open in browser: http://localhost:${reportPort}`);
+        } catch (e) {
+          this.log.warn(`[Viessmann] Could not start report server: ${(e as Error).message}`);
+        }
+      }
     });
 
     this.api.on(APIEvent.SHUTDOWN, () => {
@@ -680,10 +703,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Energy / Heat Pump accessory (PV, battery, wallbox, electric DHW, Wärmepumpe)
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
-      // Write initial device messages on setup — so viessmann-report.js has data
-      // even before the first updateAllDevices cycle runs.
-      this.writeDeviceMessages(features, installation.id, device.id);
-
     } catch (error) {
       this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
     }
@@ -695,13 +714,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     device: ViessmannDevice,
     features: ViessmannFeature[]
   ) {
-    // Require actual burner/boiler operation features — not just heating.boiler.serial
-    // which is also present on VitoCharge and other gen3 devices as a system identifier.
-    const boilerFeatures = features.filter(f =>
-      f.feature.startsWith('heating.burners') ||
-      f.feature === 'heating.boiler.temperature.current' ||
-      f.feature === 'heating.boiler.sensors.temperature.commonSupply' ||
-      f.feature === 'heating.boiler.pumps.internal',
+    const boilerFeatures = features.filter(f => 
+      f.feature.includes('heating.boiler') || 
+      f.feature.includes('heating.burners')
     );
 
     if (boilerFeatures.length === 0) {
@@ -717,9 +732,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-      existingAccessory.context.device = device;
-      existingAccessory.context.installation = installation;
-      existingAccessory.context.gateway = gateway;
       new ViessmannBoilerAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new accessory:', displayName);
@@ -756,9 +768,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-      existingAccessory.context.device = device;
-      existingAccessory.context.installation = installation;
-      existingAccessory.context.gateway = gateway;
       new ViessmannDHWAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new accessory:', displayName);
@@ -800,9 +809,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
       if (existingAccessory) {
         this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-        existingAccessory.context.device = device;
-        existingAccessory.context.installation = installation;
-        existingAccessory.context.gateway = gateway;
         new ViessmannHeatingCircuitAccessory(this, existingAccessory, installation, gateway, device, circuitNumber);
       } else {
         this.log.info('Adding new accessory:', displayName);
@@ -874,9 +880,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     if (existingAccessory) {
       this.log.info('Restoring existing energy accessory from cache:', existingAccessory.displayName);
-      existingAccessory.context.device = device;
-      existingAccessory.context.installation = installation;
-      existingAccessory.context.gateway = gateway;
       new ViessmannEnergyAccessory(this, existingAccessory, installation, gateway, device);
     } else {
       this.log.info('Adding new energy accessory:', displayName);
@@ -960,15 +963,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             successfulDevices++;
             this.log.debug(`✅ Fetched ${features.length} features for device ${accessory.context.device.id}`);
 
-            // Write device messages JSON (S./F./I. codes) for viessmann-report.js
-            // Pass both installationId and deviceId — multiple devices per installation
-            // (e.g. Vitocal + VitoCharge) each get their own messages file.
-            this.writeDeviceMessages(
-              features,
-              accessory.context.installation.id,
-              accessory.context.device.id,
-            );
-
             // Small delay between distinct device API calls only
             if (this.config.enableRateLimitProtection !== false) {
               await this.sleep(500);
@@ -985,7 +979,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             this.log.debug(`📡 "${accessory.displayName}" — updateHandler dispatched`);
           } else {
             handlersSkipped++;
-            this.log.debug(`⚙️ "${accessory.displayName}" — updateHandler not set, skipping`);
+            this.log.warn(`⚠️ "${accessory.displayName}" — updateHandler not set (accessory still initializing?)`);
           }
 
         } catch (error) {
@@ -1015,63 +1009,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       this.adjustRefreshInterval(true);
     } finally {
       this.isUpdating = false;
-    }
-  }
-
-  /**
-   * Extracts device.messages.status/info/service entries from features and
-   * writes them to viessmann-messages-<installationId>-<deviceId>.json for viessmann-report.js.
-   * One file per device — multiple devices per installation each get their own file.
-   * Called once per unique device per update cycle (deduplicated via deviceFeatureCache).
-   */
-  private writeDeviceMessages(features: any[], installationId: number, deviceId: string): void {
-    try {
-      const messageFeatures = [
-        'device.messages.status.raw',
-        'device.messages.info.raw',
-        'device.messages.service.raw',
-      ];
-
-      const messages: {
-        errorCode: string;
-        timestamp: string;
-        type: string;
-        busAddress?: string;
-        busType?: string;
-      }[] = [];
-
-      for (const featureName of messageFeatures) {
-        const feature = features.find(f => f.feature === featureName);
-        const entries = feature?.properties?.entries?.value;
-        if (!Array.isArray(entries)) continue;
-
-        const type = featureName.includes('status') ? 'status'
-                   : featureName.includes('info')   ? 'info'
-                   : 'service';
-
-        for (const entry of entries) {
-          if (entry?.errorCode) {
-            messages.push({
-              errorCode:  entry.errorCode,
-              timestamp:  entry.timestamp || new Date().toISOString(),
-              type,
-              busAddress: entry.busAddress,
-              busType:    entry.busType,
-            });
-          }
-        }
-      }
-
-      // Sort by timestamp descending (newest first)
-      messages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-      const storagePath = this.api.user.storagePath();
-      // One file per device — avoids overwrite when multiple devices share an installation
-      const msgFile = path.join(storagePath, `viessmann-messages-${installationId}-${deviceId}.json`);
-      fs.writeFileSync(msgFile, JSON.stringify(messages, null, 2), 'utf8');
-      this.log.debug(`📋 Device messages written: ${messages.length} entries → ${msgFile}`);
-    } catch (e) {
-      this.log.debug(`📋 writeDeviceMessages failed: ${e}`);
     }
   }
 

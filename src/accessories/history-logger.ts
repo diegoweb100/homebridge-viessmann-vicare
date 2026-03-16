@@ -34,6 +34,8 @@ export interface EnergyEntry {
 export interface CsvRow {
   timestamp: string;
   accessory: string;
+  // 'event' = immediate burner state change; 'snapshot' = regular 15-min poll (default)
+  event_type?: string;
   burner_active?: boolean;
   modulation?: number;
   room_temp?: number;
@@ -44,11 +46,19 @@ export interface CsvRow {
   dhw_target?: number;
   program?: string;
   mode?: string;
-  burner_starts?: number;
-  burner_hours?: number;
-  flow_temp?: number;           // heating.circuits.N.sensors.temperature.supply
-  gas_heating_day_m3?: number;  // heating.gas.consumption.summary.heating.currentDay
-  gas_dhw_day_m3?: number;      // heating.gas.consumption.summary.dhw.currentDay
+  burner_starts?: number;        // lifetime cumulative — use delta columns for daily analysis
+  burner_hours?: number;         // lifetime cumulative
+  burner_starts_today?: number;  // delta since midnight reference — precise daily count
+  burner_hours_today?: number;   // delta since midnight reference — precise daily hours
+  flow_temp?: number;            // heating.circuits.N.sensors.temperature.supply
+  gas_heating_day_m3?: number;   // heating.gas.consumption.summary.heating.currentDay
+  gas_dhw_day_m3?: number;       // heating.gas.consumption.summary.dhw.currentDay
+  gas_heating_month_m3?: number; // heating.gas.consumption.summary.heating.currentMonth
+  gas_dhw_month_m3?: number;     // heating.gas.consumption.summary.dhw.currentMonth
+  heat_heating_day_kwh?: number; // heating.heat.production.summary.heating.currentDay
+  heat_dhw_day_kwh?: number;     // heating.heat.production.summary.dhw.currentDay
+  heat_heating_month_kwh?: number;
+  heat_dhw_month_kwh?: number;
   // Energy accessory fields
   pv_production_w?: number;
   pv_daily_kwh?: number;
@@ -61,7 +71,24 @@ export interface CsvRow {
   wallbox_power_w?: number;
 }
 
-const CSV_HEADER = 'timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w\n';
+const CSV_COLUMNS = [
+  'timestamp', 'accessory', 'event_type',
+  'burner_active', 'modulation',
+  'room_temp', 'target_temp', 'outside_temp', 'outside_humidity',
+  'dhw_temp', 'dhw_target', 'program', 'mode',
+  'burner_starts', 'burner_hours', 'burner_starts_today', 'burner_hours_today',
+  'flow_temp',
+  'gas_heating_day_m3', 'gas_dhw_day_m3',
+  'gas_heating_month_m3', 'gas_dhw_month_m3',
+  'heat_heating_day_kwh', 'heat_dhw_day_kwh',
+  'heat_heating_month_kwh', 'heat_dhw_month_kwh',
+  'pv_production_w', 'pv_daily_kwh',
+  'battery_level', 'battery_charging_w', 'battery_discharging_w',
+  'grid_feedin_w', 'grid_draw_w',
+  'wallbox_charging', 'wallbox_power_w',
+] as const;
+
+const CSV_HEADER = CSV_COLUMNS.join(',') + '\n';
 
 export class ViessmannHistoryLogger {
   private fakeGatoService: any = null;
@@ -141,34 +168,10 @@ export class ViessmannHistoryLogger {
       if (!exists) {
         fs.writeFileSync(this.csvPath, CSV_HEADER, 'utf8');
       }
-      const line = [
-        row.timestamp,
-        row.accessory,
-        row.burner_active ?? '',
-        row.modulation ?? '',
-        row.room_temp ?? '',
-        row.target_temp ?? '',
-        row.outside_temp ?? '',
-        row.outside_humidity ?? '',
-        row.dhw_temp ?? '',
-        row.dhw_target ?? '',
-        row.program ?? '',
-        row.mode ?? '',
-        row.burner_starts ?? '',
-        row.burner_hours ?? '',
-        row.flow_temp ?? '',
-        row.gas_heating_day_m3 ?? '',
-        row.gas_dhw_day_m3 ?? '',
-        row.pv_production_w ?? '',
-        row.pv_daily_kwh ?? '',
-        row.battery_level ?? '',
-        row.battery_charging_w ?? '',
-        row.battery_discharging_w ?? '',
-        row.grid_feedin_w ?? '',
-        row.grid_draw_w ?? '',
-        row.wallbox_charging ?? '',
-        row.wallbox_power_w ?? '',
-      ].join(',') + '\n';
+      const line = CSV_COLUMNS.map(col => {
+        const val = (row as any)[col];
+        return val === undefined || val === null ? '' : val;
+      }).join(',') + '\n';
       fs.appendFileSync(this.csvPath, line, 'utf8');
     } catch (e) {
       this.platform.log.debug(`📊 ${this.logName}: CSV append failed: ${e}`);
