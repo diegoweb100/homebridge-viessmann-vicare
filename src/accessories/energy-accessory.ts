@@ -219,6 +219,8 @@ export class ViessmannEnergyAccessory {
       const roles = this.device.roles ?? [];
       const hasPVRole = roles.some(r => r === 'type:photovoltaic;integrated' || r.startsWith('type:photovoltaic'));
       const hasBatteryRole = roles.some(r => r === 'type:ess' || r.startsWith('type:ess;'));
+      // Also detect from feature names (VitoCharge ESS uses ess.* prefix)
+      const hasBatteryFeatures = names.some(n => n === 'ess.stateOfCharge' || n === 'ess.power');
       const hasWallboxRole = roles.some(r => r === 'type:accessory;vehicleChargingStation' || r === 'interface:battery;vehicleChargingStation');
 
       this.hasPV =
@@ -227,16 +229,19 @@ export class ViessmannEnergyAccessory {
         names.some(n => n.startsWith('heating.solar.power')) ||
         names.some(n => n === 'heating.solar') ||
         names.some(n => n.startsWith('photovoltaic.')) ||
-        names.some(n => n.startsWith('pcc.'));
+        names.some(n => n.startsWith('pcc.')) ||
+        names.some(n => n === 'ess.inverter.ac.power');
 
       this.hasBattery =
         hasBatteryRole ||
+        hasBatteryFeatures ||
         names.some(n => n.startsWith('heating.powerStorage')) ||
         names.some(n => n.startsWith('heating.battery')) ||
         names.some(n => n.startsWith('ess.'));
 
       this.hasWallbox =
         hasWallboxRole ||
+        names.some(n => n.startsWith('vcs.')) ||
         names.some(n => n.startsWith('charging.ev')) ||
         names.some(n => n.startsWith('heating.ev')) ||
         names.some(n => n.startsWith('vcs.'));
@@ -801,19 +806,42 @@ export class ViessmannEnergyAccessory {
 
     // PV
     if (this.hasPV) {
-      const pvCurrent = get('heating.photovoltaic.production.current') ||
+      // PV current production — priority order:
+      //   1. photovoltaic.production.current  (VitoCharge gen3, unit=kilowatt → ×1000)
+      //   2. ess.inverter.ac.power            (VitoCharge, activePower prop, unit=watt)
+      //   3. heating.photovoltaic.*           (older/standalone PV devices)
+      const pvCurrent = get('photovoltaic.production.current') ||
+                        get('ess.inverter.ac.power') ||
+                        get('heating.photovoltaic.production.current') ||
                         get('heating.solar.power.production');
-      const pvDaily   = get('heating.photovoltaic.production.day') ||
-                        get('heating.solar.power.production.day');
+      // PV daily yield — priority order:
+      //   1. photovoltaic.production.cumulated  (currentDay prop, unit=wattHour)
+      //   2. heating.photovoltaic.production.day (older devices)
+      //   3. pcc.transfer.feedIn.total           (lifetime cumulated, fallback only)
+      const pvDaily   = get('photovoltaic.production.cumulated') ||
+                        get('heating.photovoltaic.production.day') ||
+                        get('heating.solar.power.production.day') ||
+                        get('pcc.transfer.feedIn.total');
 
       if (pvCurrent) {
-        this.states.pvProductionW       = pvCurrent.properties?.value?.value ?? 0;
+        // ess.inverter.ac.power uses 'activePower' property (watt)
+        // photovoltaic.production.current uses 'value' property (kilowatt → ×1000)
+        // pcc.ac.active.power uses 'phaseOne/phaseTwo' properties (watt, can be negative)
+        const rawW   = pvCurrent.properties?.activePower?.value   // ess.inverter.ac.power
+                    ?? pvCurrent.properties?.value?.value;         // photovoltaic.* or others
+        const unit   = pvCurrent.properties?.value?.unit ?? pvCurrent.properties?.activePower?.unit ?? '';
+        const watt   = unit === 'kilowatt' ? (rawW ?? 0) * 1000 : (rawW ?? 0);
+        this.states.pvProductionW       = Math.max(0, watt);  // PV can't be negative
         this.states.pvProductionPercent = Math.min(100, Math.round(this.states.pvProductionW / 100));
         this.states.pvActive            = this.states.pvProductionW > 10;
-        this.platform.log.info(`${tag} PV → ${this.states.pvProductionW}W (${this.states.pvProductionPercent}%)`);
+        this.platform.log.info(`${tag} PV → ${this.states.pvProductionW}W (unit=${unit}) (${this.states.pvProductionPercent}%)`);
       }
       if (pvDaily) {
-        this.states.pvDailyYieldKwh = pvDaily.properties?.value?.value ?? 0;
+        // photovoltaic.production.cumulated has currentDay in wattHour
+        // pcc.transfer.feedIn.total has value in wattHour (lifetime cumulated — less useful but fallback)
+        const dailyWh = pvDaily.properties?.currentDay?.value  // photovoltaic.production.cumulated
+                     ?? pvDaily.properties?.value?.value;       // pcc.transfer.feedIn.total
+        this.states.pvDailyYieldKwh = (dailyWh ?? 0) / 1000;
         this.platform.log.debug(`${tag} PV → dailyYield=${this.states.pvDailyYieldKwh}kWh`);
       }
 
@@ -825,20 +853,34 @@ export class ViessmannEnergyAccessory {
 
     // Battery
     if (this.hasBattery) {
-      const battLevel    = get('heating.powerStorage.charging.level') || get('heating.battery.level');
-      const battCharging = get('heating.powerStorage.charging.power') || get('heating.battery.charging.power');
-      const battDischarge= get('heating.powerStorage.discharging.power') || get('heating.battery.discharging.power');
+      // VitoCharge (ESS) uses ess.* prefix; older devices use heating.powerStorage.*
+      // VitoCharge (ESS): level=ess.stateOfCharge, power=ess.power, state=ess.operationState
+      // Legacy devices: heating.powerStorage.*
+      const battLevel     = get('ess.stateOfCharge') ||
+                            get('heating.powerStorage.charging.level') ||
+                            get('heating.battery.level');
+      const battPower     = get('ess.power') ||
+                            get('heating.powerStorage.charging.power') ||
+                            get('heating.battery.charging.power');
+      const battOpState   = get('ess.operationState');  // "charge" | "discharge" | "standby"
+      const battDischarge = get('heating.powerStorage.discharging.power') ||
+                            get('heating.battery.discharging.power');
 
       if (battLevel) {
         this.states.batteryLevelPercent = Math.round(battLevel.properties?.value?.value ?? 0);
         this.states.batteryStatusLow    = this.states.batteryLevelPercent < 15;
         this.platform.log.info(`${tag} Battery → ${this.states.batteryLevelPercent}% low=${this.states.batteryStatusLow}`);
       }
-      if (battCharging) {
-        this.states.batteryChargingW = battCharging.properties?.value?.value ?? 0;
-        this.states.batteryCharging  = this.states.batteryChargingW > 0;
-      }
-      if (battDischarge) {
+      if (battPower) {
+        const powerW = battPower.properties?.value?.value ?? 0;
+        // ess.operationState tells us charge vs discharge direction
+        const opState = battOpState?.properties?.value?.value ?? '';
+        const isCharging = opState === 'charge' || (opState === '' && powerW > 0);
+        this.states.batteryChargingW    = isCharging ? powerW : 0;
+        this.states.batteryDischargingW = !isCharging ? powerW : 0;
+        this.states.batteryCharging     = isCharging && powerW > 0;
+        this.platform.log.debug(`${tag} Battery power=${powerW}W state="${opState}" charging=${this.states.batteryCharging}`);
+      } else if (battDischarge) {
         this.states.batteryDischargingW = battDischarge.properties?.value?.value ?? 0;
       }
 
@@ -862,13 +904,22 @@ export class ViessmannEnergyAccessory {
 
     // Wallbox
     if (this.hasWallbox) {
-      const evStatus  = get('charging.ev.status') || get('heating.ev.status');
-      const evPower   = get('charging.ev.power')  || get('heating.ev.charging.power');
-      const evSession = get('charging.ev.session.charged') || get('heating.ev.session.energy');
+      // eebus wallbox uses vcs.* prefix (Viessmann Charging Station)
+      // older/other devices use charging.ev.* or heating.ev.*
+      const evStatus  = get('vcs.session') ||
+                        get('charging.ev.status') ||
+                        get('heating.ev.status');
+      const evPower   = get('vcs.session.charging') ||
+                        get('charging.ev.power') ||
+                        get('heating.ev.charging.power');
+      const evSession = get('charging.ev.session.charged') ||
+                        get('heating.ev.session.energy');
 
       if (evStatus) {
-        const status = evStatus.properties?.status?.value ?? '';
-        this.states.wallboxPluggedIn      = ['plugged', 'charging', 'connected'].includes(status.toLowerCase());
+        // vcs.session uses 'status' property; charging.ev.status uses 'value' property
+        const status = evStatus.properties?.status?.value ??
+                       evStatus.properties?.value?.value ?? '';
+        this.states.wallboxPluggedIn      = ['plugged', 'charging', 'connected', 'waitingforcharging'].includes(status.toLowerCase());
         this.states.wallboxChargingActive = status.toLowerCase() === 'charging';
         this.platform.log.info(`${tag} Wallbox → status="${status}" pluggedIn=${this.states.wallboxPluggedIn} charging=${this.states.wallboxChargingActive}`);
       }

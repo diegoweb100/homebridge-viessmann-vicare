@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.47
+# Complete Setup Guide - v2.0.48
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.47 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.48 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.47",
+    "plugin_version": "2.0.48",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1228,6 +1228,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.48 (2026-03-16)
+- fix: VitoCharge ESS battery/PV paths, eebus wallbox vcs.* paths, PV unit conversion
+
 ### v2.0.47 (2026-03-15)
 **Multi-device robustness + API-driven feature discovery:**
 - **Comfort program discovery: API-driven** — scans actual device features instead of hardcoded name list. Supports Vitodens, Vitocal gen3, and future devices automatically.
@@ -1235,6 +1238,15 @@ sudo systemctl restart homebridge
 - **Device messages: per-device file** — `viessmann-messages-<installationId>-<deviceId>.json`, one per device. Report aggregates all files.
 - **Device messages written at startup** — available immediately, not only after first update cycle.
 - **Compressor setpoint path: dynamic** — derived from resolved `hpPaths.compressorMod`, no hardcoded device index.
+
+### v2.0.48 (2026-03-15)
+*(published separately)*
+
+### v2.0.48 (2026-03-16)
+- fix: VitoCharge ESS battery/PV paths, eebus wallbox vcs.* paths, PV unit conversion
+
+### v2.0.47 (2026-03-15)
+*(published separately)*
 
 ### v2.0.46 (2026-03-15)
 *(published separately)*

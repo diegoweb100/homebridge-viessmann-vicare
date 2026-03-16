@@ -1033,6 +1033,10 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.48] - 2026-03-16
+- fix: VitoCharge ESS battery/PV paths; eebus wallbox vcs.* paths
+- fix: PV kilowatt→watt conversion; activePower property; daily yield from cumulated
+
 ### [2.0.47] - 2026-03-15
 #### Fixed
 - **Extended Heating state: HomeKit OFF while ViCare ON** — confirmed via live API: `forcedLastFromSchedule.active=True` is a schedule management artifact (always present), not an Extended Heating indicator. State now reads `comfort.active OR (programs.active === comfortFeatureSuffix)`. Deactivation uses `comfort.setTemperature` as fallback when `deactivate` is not executable (Vitodens).
@@ -1041,6 +1045,16 @@ For issues and questions:
 - **Device messages: per-device file** — `writeDeviceMessages` now writes `viessmann-messages-<installationId>-<deviceId>.json` (previously single file per installation, causing overwrite when multiple devices present, e.g. Vitocal + VitoCharge). Report aggregates all matching files.
 - **Device messages written at startup** — `setupDeviceAccessories` now calls `writeDeviceMessages` so the file exists immediately on startup, not only after the first update cycle.
 - **Compressor setpoint path: dynamic** — `heating.compressors.0.speed.setpoint` was hardcoded. Now derived from resolved `hpPaths.compressorMod` by replacing `.current` with `.setpoint` — correct for any device/compressor index.
+
+### [2.0.48] - 2026-03-15
+*(published separately)*
+
+### [2.0.48] - 2026-03-16
+- fix: VitoCharge ESS battery/PV paths; eebus wallbox vcs.* paths
+- fix: PV kilowatt→watt conversion; activePower property; daily yield from cumulated
+
+### [2.0.47] - 2026-03-15
+*(published separately)*
 
 ### [2.0.46] - 2026-03-15
 *(published separately)*
