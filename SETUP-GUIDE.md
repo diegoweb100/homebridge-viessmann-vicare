@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.50
+# Complete Setup Guide - v2.0.51
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.51 (2026-03-16)
+- fix: viessmann-report-server.js missing from npm package
 
 ### v2.0.50 (2026-03-16)
 - feat: Report web server on configurable port; all params from browser UI

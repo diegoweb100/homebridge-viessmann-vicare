@@ -1033,6 +1033,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.51] - 2026-03-16
+- fix: viessmann-report-server.js missing from npm package (added to files field)
+
 ### [2.0.50] - 2026-03-16
 - feat: Report web server (viessmann-report-server.js) — configurable port, auto-detect installations, all params from UI
 - feat: reportServerPort + reportServerPath in plugin config and Homebridge UI
