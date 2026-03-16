@@ -1033,6 +1033,11 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.49] - 2026-03-16
+- fix: battery standby state now correctly shows 0W (not discharge)
+- fix: PV daily yield unit-aware conversion (wattHour vs kilowattHour)
+- fix: COP service comment corrected (×20 not ×10)
+
 ### [2.0.48] - 2026-03-16
 - fix: VitoCharge ESS battery/PV paths; eebus wallbox vcs.* paths
 - fix: PV kilowatt→watt conversion; activePower property; daily yield from cumulated
@@ -1048,6 +1053,11 @@ For issues and questions:
 
 ### [2.0.48] - 2026-03-15
 *(published separately)*
+
+### [2.0.49] - 2026-03-16
+- fix: battery standby state now correctly shows 0W (not discharge)
+- fix: PV daily yield unit-aware conversion (wattHour vs kilowattHour)
+- fix: COP service comment corrected (×20 not ×10)
 
 ### [2.0.48] - 2026-03-16
 - fix: VitoCharge ESS battery/PV paths; eebus wallbox vcs.* paths

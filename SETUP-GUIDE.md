@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.48
+# Complete Setup Guide - v2.0.49
 
 ## Overview
 
@@ -1157,7 +1157,7 @@ When reporting issues, include:
 
 ```json
 {
-    "plugin_version": "2.0.48",
+    "plugin_version": "2.0.49",
     "homebridge_version": "1.8.x",
     "node_version": "18.x.x",
     "heating_system": "Viessmann Model",
@@ -1228,6 +1228,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.49 (2026-03-16)
+- fix: battery standby=0W; PV daily unit-aware; COP comment
+
 ### v2.0.48 (2026-03-16)
 - fix: VitoCharge ESS battery/PV paths, eebus wallbox vcs.* paths, PV unit conversion
 
@@ -1241,6 +1244,9 @@ sudo systemctl restart homebridge
 
 ### v2.0.48 (2026-03-15)
 *(published separately)*
+
+### v2.0.49 (2026-03-16)
+- fix: battery standby=0W; PV daily unit-aware; COP comment
 
 ### v2.0.48 (2026-03-16)
 - fix: VitoCharge ESS battery/PV paths, eebus wallbox vcs.* paths, PV unit conversion

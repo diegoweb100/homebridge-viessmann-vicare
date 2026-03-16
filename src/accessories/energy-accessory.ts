@@ -32,7 +32,7 @@ export class ViessmannEnergyAccessory {
 
   // Heat pump
   private heatpumpService?: Service;         // HeaterCooler — main HP on/off + temperature
-  private heatpumpCOPService?: Service;       // Lightbulb — Brightness = COP × 10 (0-100)
+  private heatpumpCOPService?: Service;       // Lightbulb — Brightness = COP × 20 (COP 5 = 100%)
 
   // PV / Solar
   private pvProductionService?: Service;
@@ -243,8 +243,7 @@ export class ViessmannEnergyAccessory {
         hasWallboxRole ||
         names.some(n => n.startsWith('vcs.')) ||
         names.some(n => n.startsWith('charging.ev')) ||
-        names.some(n => n.startsWith('heating.ev')) ||
-        names.some(n => n.startsWith('vcs.'));
+        names.some(n => n.startsWith('heating.ev'));
 
       this.hasElectricDHW =
         names.some(n => n.startsWith('heating.dhw.heating.rod')) ||
@@ -338,7 +337,7 @@ export class ViessmannEnergyAccessory {
     if (!this.isHeatPump && !this.hasPV && !this.hasBattery && !this.hasWallbox && !this.hasElectricDHW) {
       this.platform.log.warn(
         `[EnergyAccessory] No known features detected for device ${this.device.id}. ` +
-        'Review the FULL FEATURE DUMP above and report to the plugin maintainer.',
+        'Enable "debug": true in plugin config to see the full feature dump, then report to the plugin maintainer.',
       );
     }
   }
@@ -837,12 +836,17 @@ export class ViessmannEnergyAccessory {
         this.platform.log.info(`${tag} PV → ${this.states.pvProductionW}W (unit=${unit}) (${this.states.pvProductionPercent}%)`);
       }
       if (pvDaily) {
-        // photovoltaic.production.cumulated has currentDay in wattHour
-        // pcc.transfer.feedIn.total has value in wattHour (lifetime cumulated — less useful but fallback)
-        const dailyWh = pvDaily.properties?.currentDay?.value  // photovoltaic.production.cumulated
-                     ?? pvDaily.properties?.value?.value;       // pcc.transfer.feedIn.total
-        this.states.pvDailyYieldKwh = (dailyWh ?? 0) / 1000;
-        this.platform.log.debug(`${tag} PV → dailyYield=${this.states.pvDailyYieldKwh}kWh`);
+        // photovoltaic.production.cumulated → currentDay prop, unit=wattHour
+        // heating.photovoltaic.production.day → value prop, unit may be wattHour or kilowattHour
+        // pcc.transfer.feedIn.total → value prop, unit=wattHour (lifetime cumulated, fallback)
+        const dailyRaw  = pvDaily.properties?.currentDay?.value
+                       ?? pvDaily.properties?.value?.value ?? 0;
+        const dailyUnit = pvDaily.properties?.currentDay?.unit
+                       ?? pvDaily.properties?.value?.unit ?? 'wattHour';
+        this.states.pvDailyYieldKwh = dailyUnit === 'kilowattHour'
+          ? dailyRaw
+          : dailyRaw / 1000;
+        this.platform.log.debug(`${tag} PV → dailyYield=${this.states.pvDailyYieldKwh}kWh (raw=${dailyRaw} unit=${dailyUnit})`);
       }
 
       this.pvProductionService?.getCharacteristic(this.platform.Characteristic.On)
@@ -872,14 +876,16 @@ export class ViessmannEnergyAccessory {
         this.platform.log.info(`${tag} Battery → ${this.states.batteryLevelPercent}% low=${this.states.batteryStatusLow}`);
       }
       if (battPower) {
-        const powerW = battPower.properties?.value?.value ?? 0;
+        const powerW  = battPower.properties?.value?.value ?? 0;
         // ess.operationState tells us charge vs discharge direction
+        // 'standby' = neither charging nor discharging → treat as 0W
         const opState = battOpState?.properties?.value?.value ?? '';
-        const isCharging = opState === 'charge' || (opState === '' && powerW > 0);
-        this.states.batteryChargingW    = isCharging ? powerW : 0;
-        this.states.batteryDischargingW = !isCharging ? powerW : 0;
-        this.states.batteryCharging     = isCharging && powerW > 0;
-        this.platform.log.debug(`${tag} Battery power=${powerW}W state="${opState}" charging=${this.states.batteryCharging}`);
+        const effectiveW  = opState === 'standby' ? 0 : powerW;
+        const isCharging  = opState === 'charge' || (opState === '' && effectiveW > 0);
+        this.states.batteryChargingW    = isCharging ? effectiveW : 0;
+        this.states.batteryDischargingW = (!isCharging && opState !== 'standby') ? effectiveW : 0;
+        this.states.batteryCharging     = isCharging && effectiveW > 0;
+        this.platform.log.debug(`${tag} Battery power=${powerW}W effectiveW=${effectiveW}W state="${opState}" charging=${this.states.batteryCharging}`);
       } else if (battDischarge) {
         this.states.batteryDischargingW = battDischarge.properties?.value?.value ?? 0;
       }
