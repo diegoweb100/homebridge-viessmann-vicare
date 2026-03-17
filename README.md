@@ -1033,6 +1033,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.54] - 2026-03-17
+- fix: viessmann-explore-history.js added to npm package files (was missing since initial release)
+
 ### [2.0.53] - 2026-03-17
 - feat: viessmann-sync-events.js — fetches burner ON/OFF events from API events-history with second-precision timestamps
 - fix: Device Messages section now correctly inside max-width container

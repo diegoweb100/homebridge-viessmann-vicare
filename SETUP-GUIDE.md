@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.53
+# Complete Setup Guide - v2.0.54
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.54 (2026-03-17)
+- fix: viessmann-explore-history.js now included in npm package
 
 ### v2.0.53 (2026-03-17)
 - feat: new script viessmann-sync-events.js for precise burner event history from API
