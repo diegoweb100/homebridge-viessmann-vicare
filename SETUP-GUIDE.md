@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.52
+# Complete Setup Guide - v2.0.53
 
 ## Overview
 
@@ -1227,6 +1227,10 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.53 (2026-03-17)
+- feat: new script viessmann-sync-events.js for precise burner event history from API
+- fix: Device Messages layout fixed (inside wrap container)
 
 ### v2.0.52 (2026-03-17)
 - feat: 3 new report sections — hourly heatmap, daily efficiency chart, energy flow

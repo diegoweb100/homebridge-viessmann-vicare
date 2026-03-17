@@ -1213,8 +1213,6 @@ ${energyRows.length >= 1 ? `
   ${hasWallbox && energyRows.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cWallbox"></canvas></div>` : ''}
 </div>` : ''}
 
-</div>
-
 <div class="box" id="device-messages">
   <h2>🔔 Device Messages</h2>
   <p class="note" style="margin-bottom:12px">Status, info and fault codes reported by the device. Translated from Viessmann service documentation.</p>

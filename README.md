@@ -1033,6 +1033,11 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.53] - 2026-03-17
+- feat: viessmann-sync-events.js — fetches burner ON/OFF events from API events-history with second-precision timestamps
+- fix: Device Messages section now correctly inside max-width container
+- fix: viessmann-sync-events.js added to npm package files
+
 ### [2.0.52] - 2026-03-17
 - feat: hourly burner heatmap in report (24-cell grid, runtime %, outdoor temp on hover)
 - feat: daily thermal efficiency chart from CSV (heat_heating_day_kwh / gas × 10.55)
