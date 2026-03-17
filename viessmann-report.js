@@ -998,6 +998,8 @@ const html = `<!DOCTYPE html>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Viessmann Report ${today}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"><\/script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#2d2d2d}
@@ -1044,6 +1046,9 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 .eff-day .eff-lbl{font-size:9px;color:#aaa;margin-top:2px}
 /* Energy flow legend */
 .flow-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:#666}
+.zoom-reset{position:absolute;top:8px;right:8px;font-size:11px;padding:3px 8px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;color:#555;z-index:10;}
+.zoom-reset:hover{background:#f5f5f5;border-color:#aaa;}
+.chart-wrap{position:relative;}
 .flow-legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
 </style>
 </head>
@@ -1159,14 +1164,14 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   ${scatterData.length >= 10 ? `
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
-    <div class="ch-tall"><canvas id="cScatter"></canvas></div>
-    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}</p>
+    <div class="chart-wrap"><div class="ch-tall"><canvas id="cScatter"></canvas></div><button class="zoom-reset" onclick="resetZoom('cScatter')">⟳ Reset zoom</button></div>
+    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''} <em>Scroll to zoom · Drag to pan · Double-click to reset.</em></p>
   </div>` : ''}
   ${hasCurve && corrPairs2.length >= 5 ? `
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">🌡️ Flow Temperature vs Outdoor — Actual vs Heating Curve</div>
-    <div class="ch-tall"><canvas id="cFlowCurve"></canvas></div>
-    <p class="note">Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT}). Gap between dots and curve indicates deviation from the set curve.</p>
+    <div class="chart-wrap"><div class="ch-tall"><canvas id="cFlowCurve"></canvas></div><button class="zoom-reset" onclick="resetZoom('cFlowCurve')">⟳ Reset zoom</button></div>
+    <p class="note">Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT}). Gap between dots and curve indicates deviation from the set curve. <em>Scroll to zoom · Drag to pan · Double-click to reset.</em></p>
   </div>` : ''}
 </div>
 
@@ -1322,6 +1327,17 @@ ${(() => {
 Chart.defaults.font.family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
 Chart.defaults.font.size=11;Chart.defaults.color='#888';
 
+// Hide all reset zoom buttons initially
+document.querySelectorAll('.zoom-reset').forEach(b=>b.style.display='none');
+
+// Global reset zoom helper
+function resetZoom(canvasId){
+  const c=document.getElementById(canvasId);
+  if(!c)return;
+  const ch=Chart.getChart(c);
+  if(ch){ch.resetZoom();c.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','none');}
+}
+
 function mk(id,labels,datasets,yLbl){
   const c=document.getElementById(id); if(!c)return;
   new Chart(c,{type:'line',data:{labels,datasets},options:{
@@ -1447,9 +1463,18 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
       scales:{
         x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
         y:{title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}}
+      },
+      plugins:{
+        zoom:{
+          zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'xy',
+               onZoomComplete:({chart})=>{chart.canvas.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','block')}},
+          pan:{enabled:true,mode:'xy'},
+          limits:{x:{min:'original',max:'original'},y:{min:'original',max:'original'}}
+        }
       }
     }
   });
+  c.canvas.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
 })();
 `:``}
 ${hasCurve && corrPairs2.length >= 5 ? `
@@ -1514,9 +1539,18 @@ ${hasCurve && corrPairs2.length >= 5 ? `
       scales:{
         x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
         y:{title:{display:true,text:'Flow temperature (°C)'},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
+      },
+      plugins:{
+        zoom:{
+          zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'xy',
+               onZoomComplete:({chart})=>{chart.canvas.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','block')}},
+          pan:{enabled:true,mode:'xy'},
+          limits:{x:{min:'original',max:'original'},y:{min:'original',max:'original'}}
+        }
       }
     }
   });
+  c.canvas.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
 })();
 ` : ''}
 

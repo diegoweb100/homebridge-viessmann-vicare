@@ -1033,6 +1033,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.57] - 2026-03-17
+- feat: zoom & pan on Heat Demand and Flow Temperature scatter charts (scroll wheel, pinch, drag, double-click reset)
+
 ### [2.0.56] - 2026-03-17
 - feat: new chart "Flow Temperature vs Outdoor — Actual vs Heating Curve" (separate from heat demand scatter)
 - fix: removed heating curve from heat demand scatter (incompatible units on same axis)
