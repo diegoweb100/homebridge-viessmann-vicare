@@ -1160,7 +1160,13 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
     <div class="ch-tall"><canvas id="cScatter"></canvas></div>
-    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}${hasCurve ? ' Orange line = heating curve (slope='+CURVE_SLOPE+', shift='+CURVE_SHIFT+').' : ''}</p>
+    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}</p>
+  </div>` : ''}
+  ${hasCurve && corrPairs2.length >= 5 ? `
+  <div style="margin-top:18px">
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">🌡️ Flow Temperature vs Outdoor — Actual vs Heating Curve</div>
+    <div class="ch-tall"><canvas id="cFlowCurve"></canvas></div>
+    <p class="note">Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT}). Gap between dots and curve indicates deviation from the set curve.</p>
   </div>` : ''}
 </div>
 
@@ -1418,52 +1424,101 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
   }];
   if(reg){
     datasets.push({
-      label:'Trend (heat demand)',
+      label:'Trend',
       data:reg.line,
       type:'line',
       borderColor:'#ef5350',
       backgroundColor:'transparent',
       borderWidth:2,
       pointRadius:0,
-      tension:0,
-      yAxisID:'yLeft'
+      tension:0
     });
   }
-  ${hasCurve ? `
-  datasets.push({
-    label:'Heating curve (slope=${CURVE_SLOPE}, shift='+${JSON.stringify(CURVE_SHIFT)}+')',
-    data:${JSON.stringify(heatingCurveLine)},
-    type:'line',
-    borderColor:'#f57c00',
-    backgroundColor:'transparent',
-    borderWidth:2.5,
-    borderDash:[7,4],
-    pointRadius:0,
-    tension:0,
-    yAxisID:'yRight'
-  });` : ''}
   new Chart(c,{
     type:'scatter',
     data:{datasets},
     options:{
       responsive:true,
       maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
       plugins:{
-        legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
-        tooltip:{callbacks:{label:p=>p.dataset.yAxisID==='yRight'
-          ? 'flow temp: '+p.parsed.y+'°C'
-          : 'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
+        legend:{display:true,position:'top'},
+        tooltip:{callbacks:{label:p=>'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
       },
       scales:{
         x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
-        yLeft:{type:'linear',position:'left',title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}},
-        yRight:{type:'linear',position:'right',title:{display:${hasCurve ? 'true' : 'false'},text:'Flow temp (°C)'},grid:{drawOnChartArea:false},display:${hasCurve ? 'true' : 'false'}}
+        y:{title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}}
       }
     }
   });
 })();
 `:``}
+${hasCurve && corrPairs2.length >= 5 ? `
+// ── Flow temp vs outdoor + heating curve ───────────────────────────────
+(function(){
+  const c=document.getElementById('cFlowCurve'); if(!c)return;
+  // Real data points: x=outdoor, y=flow_temp (burner-active samples)
+  const pts=${JSON.stringify(
+    (() => {
+      const raw = corrPairs2.length > 400
+        ? corrPairs2.filter((_,i) => i % Math.ceil(corrPairs2.length/400) === 0)
+        : corrPairs2;
+      return raw.map(p => ({ x: p[0], y: p[1] }));
+    })()
+  )};
+  const curve=${JSON.stringify(heatingCurveLine)};
+  new Chart(c,{
+    type:'scatter',
+    data:{datasets:[
+      {
+        label:'Actual flow temp (°C)',
+        data:pts,
+        backgroundColor:'rgba(78,154,241,0.4)',
+        pointRadius:3,
+        pointHoverRadius:5,
+        type:'scatter'
+      },
+      {
+        label:'Heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT})',
+        data:curve,
+        type:'line',
+        borderColor:'#f57c00',
+        backgroundColor:'transparent',
+        borderWidth:2.5,
+        borderDash:[7,4],
+        pointRadius:0,
+        tension:0
+      },
+      {
+        label:'Condensing limit (55°C)',
+        data:[{x:-30,y:55},{x:30,y:55}],
+        type:'line',
+        borderColor:'rgba(67,160,71,0.7)',
+        backgroundColor:'rgba(67,160,71,0.07)',
+        borderWidth:1.5,
+        borderDash:[4,3],
+        pointRadius:0,
+        tension:0,
+        fill:'+1'
+      }
+    ]},
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
+        tooltip:{callbacks:{label:p=>p.dataset.type==='scatter'
+          ? 'outdoor: '+p.parsed.x+'°C  flow: '+p.parsed.y+'°C'
+          : 'curve: '+p.parsed.y+'°C at '+p.parsed.x+'°C outdoor'}}
+      },
+      scales:{
+        x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:'Flow temperature (°C)'},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
+      }
+    }
+  });
+})();
+` : ''}
 
 // ── Hourly heatmap ──────────────────────────────────────────────────────
 (function(){

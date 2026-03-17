@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.54
+# Complete Setup Guide - v2.0.56
 
 ## Overview
 
@@ -1227,6 +1227,18 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.56 (2026-03-17)
+- feat: dedicated flow temp vs outdoor chart with heating curve overlay
+- fix: scatter chart single Y axis restored
+
+### v2.0.56 (2026-03-17)
+- fix: scatter chart restored to single axis (heat demand only)
+- feat: dedicated Flow Temp vs Outdoor chart with theoretical curve overlay
+
+### v2.0.55 (2026-03-17)
+- feat: heating curve overlay in scatter chart — auto-read from explore JSON, no manual config needed
+- feat: viessmann-explore-history.js now saves heating curve parameters per circuit
 
 ### v2.0.54 (2026-03-17)
 - fix: viessmann-explore-history.js now included in npm package

@@ -1033,6 +1033,15 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.56] - 2026-03-17
+- feat: new chart "Flow Temperature vs Outdoor — Actual vs Heating Curve" (separate from heat demand scatter)
+- fix: removed heating curve from heat demand scatter (incompatible units on same axis)
+- fix: scatter chart restored to single Y axis
+
+### [2.0.56] - 2026-03-17
+- fix: heating curve moved to dedicated "Flow Temperature vs Outdoor" chart (scatter chart restored to single Y axis)
+- feat: flow temp chart shows actual flow temp points + theoretical heating curve + 55°C condensing limit line
+
 ### [2.0.55] - 2026-03-17
 - feat: heating curve overlay on Heat Demand vs Outdoor Temperature scatter chart (non-linear, fitted from ViCare app data)
 - feat: heating curve slope/shift auto-read from viessmann-history-explore JSON per installation/circuit
