@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.57
+# Complete Setup Guide - v2.0.58
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.58 (2026-03-17)
+- fix: crash in scatter charts zoom (c.canvas.addEventListener → c.addEventListener)
 
 ### v2.0.57 (2026-03-17)
 - feat: interactive zoom/pan on scatter charts

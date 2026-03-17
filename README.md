@@ -1033,6 +1033,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.58] - 2026-03-17
+- fix: TypeError "c.canvas.addEventListener is not an object" in scatter charts (zoom feature)
+
 ### [2.0.57] - 2026-03-17
 - feat: zoom & pan on Heat Demand and Flow Temperature scatter charts (scroll wheel, pinch, drag, double-click reset)
 

@@ -1474,7 +1474,7 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
       }
     }
   });
-  c.canvas.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
+  c.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
 })();
 `:``}
 ${hasCurve && corrPairs2.length >= 5 ? `
@@ -1550,7 +1550,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
       }
     }
   });
-  c.canvas.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
+  c.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
 })();
 ` : ''}
 
