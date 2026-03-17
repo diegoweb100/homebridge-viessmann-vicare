@@ -728,6 +728,104 @@ if (gasDays.length >= 3) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// HOURLY HEATMAP — burner runtime % and avg outside temp per hour-of-day
+// Rows with event_type='snapshot' or no event_type (legacy) only — not events
+// ─────────────────────────────────────────────────────────────────────────────
+const hourlyStats = (() => {
+  const buckets = {};
+  for (let h = 0; h < 24; h++) buckets[h] = { onCount: 0, total: 0, tempSum: 0, tempCount: 0, gasSum: 0 };
+
+  // Group gas per day so we can attribute daily gas to hourly slots
+  const gasPerDayH = {};
+  boilerRows.forEach(r => {
+    if (!r.gas_heating_day_m3 && !r.gas_dhw_day_m3) return;
+    const day = r.timestamp.slice(0, 10);
+    const g = (parseFloat(r.gas_heating_day_m3)||0) + (parseFloat(r.gas_dhw_day_m3)||0);
+    if (!gasPerDayH[day] || g > gasPerDayH[day]) gasPerDayH[day] = g;
+  });
+
+  boilerRows.forEach(r => {
+    const h = new Date(r.timestamp).getHours();
+    buckets[h].total++;
+    if (r.burner_active === 'true') buckets[h].onCount++;
+    const t = parseFloat(r.outside_temp);
+    if (!isNaN(t) && t !== 0) { buckets[h].tempSum += t; buckets[h].tempCount++; }
+  });
+
+  return Array.from({length: 24}, (_, h) => {
+    const b = buckets[h];
+    return {
+      hour: h,
+      label: String(h).padStart(2,'0') + ':00',
+      runtimePct: b.total > 0 ? Math.round((b.onCount / b.total) * 100) : 0,
+      avgOutside:  b.tempCount > 0 ? +(b.tempSum / b.tempCount).toFixed(1) : null,
+    };
+  });
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY EFFICIENCY — heat produced / gas consumed per calendar day (from CSV)
+// Uses heat_heating_day_kwh + gas_heating_day_m3 columns (plugin >= v2.0.50)
+// ─────────────────────────────────────────────────────────────────────────────
+const dailyEfficiency = (() => {
+  const GAS_PCS = 10.55; // kWh per m³ higher heating value
+  const perDay = {};
+  boilerRows.forEach(r => {
+    const day = r.timestamp.slice(0, 10);
+    const heat = parseFloat(r.heat_heating_day_kwh);
+    const gas  = parseFloat(r.gas_heating_day_m3);
+    if (!isNaN(heat) && heat > 0 && !isNaN(gas) && gas > 0.1) {
+      if (!perDay[day]) perDay[day] = { heat: 0, gas: 0 };
+      // Take max within day (daily cumulative values grow during the day)
+      if (heat > perDay[day].heat) perDay[day].heat = heat;
+      if (gas  > perDay[day].gas)  perDay[day].gas  = gas;
+    }
+  });
+  const days = Object.keys(perDay).sort();
+  return {
+    labels: days.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; }),
+    values: days.map(d => {
+      const eff = Math.min(110, Math.round((perDay[d].heat / (perDay[d].gas * GAS_PCS)) * 100));
+      return eff;
+    }),
+    hasData: days.length >= 2,
+  };
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENERGY FLOW — daily PV / battery / grid / wallbox aggregation (from CSV)
+// ─────────────────────────────────────────────────────────────────────────────
+const energyFlow = (() => {
+  if (!energyRows.length) return null;
+  const perDay = {};
+  energyRows.forEach(r => {
+    const day = r.timestamp.slice(0, 10);
+    if (!perDay[day]) perDay[day] = { pv: 0, battChr: 0, battDis: 0, gridFeed: 0, gridDraw: 0, wallbox: 0, count: 0 };
+    const d = perDay[day];
+    // Average within day (these are instantaneous W readings)
+    d.pv       += parseFloat(r.pv_production_w)   || 0;
+    d.battChr  += parseFloat(r.battery_charging_w) || 0;
+    d.battDis  += parseFloat(r.battery_discharging_w) || 0;
+    d.gridFeed += parseFloat(r.grid_feedin_w)      || 0;
+    d.gridDraw += parseFloat(r.grid_draw_w)         || 0;
+    d.wallbox  += parseFloat(r.wallbox_power_w)    || 0;
+    d.count++;
+  });
+  const days = Object.keys(perDay).sort();
+  const avg = (d, k) => d.count > 0 ? Math.round(perDay[d][k] / perDay[d].count) : 0;
+  return {
+    labels:    days.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; }),
+    pv:        days.map(d => avg(d,'pv')),
+    battChr:   days.map(d => avg(d,'battChr')),
+    battDis:   days.map(d => avg(d,'battDis')),
+    gridFeed:  days.map(d => avg(d,'gridFeed')),
+    gridDraw:  days.map(d => avg(d,'gridDraw')),
+    wallbox:   days.map(d => avg(d,'wallbox')),
+    hasData:   days.length >= 2 && (hasPV || hasBattery),
+  };
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VIESSMANN STATUS / ERROR CODE TRANSLATIONS
 // Source: Viessmann service documentation + vieventlog error_codes.go
 // ─────────────────────────────────────────────────────────────────────────────
@@ -889,6 +987,20 @@ header p{font-size:12px;opacity:.65;margin-top:5px}
 .pbp{font-size:11px;font-weight:600;margin-top:3px}
 footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 @media(max-width:500px){.grid{grid-template-columns:1fr 1fr}}
+/* Hourly heatmap */
+.hmap{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-top:8px}
+.hmap-cell{height:38px;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#fff;cursor:default;transition:transform .1s}
+.hmap-cell:hover{transform:scale(1.15);z-index:2}
+.hmap-lbl{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-top:2px}
+.hmap-lbl span{font-size:8px;color:#bbb;text-align:center}
+/* Daily efficiency gauge row */
+.eff-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.eff-day{background:#f8f9fc;border-radius:8px;padding:8px 10px;text-align:center;min-width:64px;flex:1}
+.eff-day .eff-pct{font-size:16px;font-weight:700}
+.eff-day .eff-lbl{font-size:9px;color:#aaa;margin-top:2px}
+/* Energy flow legend */
+.flow-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:#666}
+.flow-legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -899,7 +1011,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 <div class="wrap">
 
 <div class="box">
-  <h2>Overview</h2>
+  <h2>📈 Overview</h2>
   <div class="ch-overview"><canvas id="cOverview"></canvas></div>
   ${scheduleBarHtml}
 
@@ -907,7 +1019,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>Boiler — Burner</h2>
+  <h2>🔥 Boiler — Burner</h2>
   <!-- KPI row 1: real cycle metrics from API counter -->
   <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Cycle performance (from API counters — precise)</div>
   <div class="grid" style="margin-bottom:6px">
@@ -935,11 +1047,34 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>
   <p class="note">⚠️ Burner ON/OFF bars show only cycles visible within 15-min sampling interval. Actual cycle count (${realCycleCount ?? '?'}) is ${realCycleCount && cycleCount ? Math.round(realCycleCount/Math.max(cycleCount,1)) : '~100'}× higher — see API counter KPIs above.</p>` : ''}
   ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Cycle duration histogram (sampled)</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">Distribution of burner ON durations visible in CSV samples. Actual cycle duration from API counters: avg ${realAvgDur ?? '?'} min. Histogram shows only ~${cycleCount} of ${realCycleCount ?? '?'} real cycles.</p></div>` : ''}
-  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">Daily gas consumption (m³)</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">Stacked bars: heating (dark blue) + DHW (teal). Red line: daily total. Today's bar shows current accumulated value.</p></div>` : ''}
+
+  <!-- Hourly heatmap -->
+  <div style="margin-top:22px">
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">🕐 Burner activity by hour of day</div>
+    <p class="note" style="margin-bottom:8px">Each cell = % of snapshots in that hour where burner was ON. Darker = more active. Hover for details.</p>
+    <div class="hmap" id="hmapCells"></div>
+    <div class="hmap-lbl">${Array.from({length:24},(_,h)=>`<span>${String(h).padStart(2,'0')}</span>`).join('')}</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:10px;color:#aaa">
+      <span>Low</span>
+      ${[0,20,40,60,80,100].map(v=>`<div style="width:18px;height:12px;border-radius:2px;background:${v===0?'#f0f0f0':`rgba(230,81,0,${(v/100)*0.9+0.1})`}"></div>`).join('')}
+      <span>High</span>
+      <span style="margin-left:12px;color:#aaa">Burner ON %</span>
+    </div>
+  </div>
+
+  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">⛽ Daily gas consumption (m³)</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">Stacked bars: heating (dark blue) + DHW (teal). Red line: daily total. Today's bar shows current accumulated value.</p></div>` : ''}
+
+  <!-- Daily efficiency from CSV (v2.0.50+) -->
+  ${dailyEfficiency.hasData ? `
+  <div style="margin-top:22px">
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">📐 Daily thermal efficiency (heat produced / gas input)</div>
+    <p class="note" style="margin-bottom:8px">Calculated from CSV columns: heat_heating_day_kwh ÷ (gas_heating_day_m3 × 10.55 kWh/m³). Condensing boilers can exceed 100%.</p>
+    <div class="ch"><canvas id="cDailyEff"></canvas></div>
+  </div>` : ''}
 </div>
 
 <div class="box">
-  <h2>Heating Circuit (HC0)</h2>
+  <h2>🌡️ Heating Circuit (HC0)</h2>
   <div class="grid">
     ${sc('Avg room temp', avgRoom, '°C')}
     ${sc('Avg setpoint', avgTarget, '°C')}
@@ -986,7 +1121,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>Domestic Hot Water (DHW)</h2>
+  <h2>🚿 Domestic Hot Water (DHW)</h2>
   <div class="grid">
     ${sc('Avg temp', avgDhw, '°C')}
     ${sc('Avg setpoint', avgDhwTarget, '°C')}
@@ -1051,7 +1186,7 @@ ${gasForecast ? `
 
 ${energyRows.length >= 1 ? `
 <div class="box">
-  <h2>Energy System</h2>
+  <h2>⚡ Energy System (PV / Battery / Grid)</h2>
   <div class="grid">
     ${hasPV ? sc('PV avg production', avgPV, 'W') : ''}
     ${hasPV ? sc('PV max production', maxPV, 'W') : ''}
@@ -1060,7 +1195,20 @@ ${energyRows.length >= 1 ? `
     ${hasWallbox ? sc('Wallbox avg power', avgWallboxPwr, 'W') : ''}
   </div>
   ${energyRows.length < 5 ? `<p class="note">Only ${energyRows.length} samples — data will accumulate over time (~1 every 15 min).</p>` : ''}
-  ${hasPV && energyRows.length >= 2 ? `<div class="ch-tall"><canvas id="cPV"></canvas></div>` : ''}
+  ${energyFlow?.hasData ? `
+  <div style="margin-top:6px">
+    <div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">⚡ Daily average power flow (W)</div>
+    <div class="ch-tall"><canvas id="cEnergyFlow"></canvas></div>
+    <div class="flow-legend">
+      <span style="--c:#f9a825">☀️ PV production</span>
+      <span style="--c:#43a047">🔋 Battery charging</span>
+      <span style="--c:#e53935">🔋 Battery discharging</span>
+      <span style="--c:#1e88e5">🔌 Grid draw</span>
+      <span style="--c:#7b1fa2">🚗 Wallbox</span>
+    </div>
+    <p class="note">Daily averages of instantaneous W readings from CSV snapshots (15-min resolution).</p>
+  </div>` : ''}
+  ${hasPV && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cPV"></canvas></div>` : ''}
   ${hasBattery && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cBatt"></canvas></div>` : ''}
   ${hasWallbox && energyRows.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cWallbox"></canvas></div>` : ''}
 </div>` : ''}
@@ -1256,6 +1404,89 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
   });
 })();
 `:``}
+
+// ── Hourly heatmap ──────────────────────────────────────────────────────
+(function(){
+  const data=${JSON.stringify(hourlyStats)};
+  const container=document.getElementById('hmapCells');
+  if(!container)return;
+  data.forEach(h=>{
+    const pct=h.runtimePct;
+    const alpha=pct===0?0:Math.max(0.08,pct/100*0.85+0.08);
+    const bg=pct===0?'#f0f0f0':'rgba(230,81,0,'+alpha.toFixed(2)+')';
+    const fg=pct>50?'#fff':'#444';
+    const cell=document.createElement('div');
+    cell.className='hmap-cell';
+    cell.style.background=bg;
+    cell.style.color=fg;
+    const outsideTxt=h.avgOutside!==null?'  |  outdoor '+h.avgOutside+'\u00b0C':'';
+    cell.title=h.label+': burner ON '+pct+'%'+outsideTxt;
+    cell.innerHTML=pct>0?'<span>'+pct+'%</span>':'<span style="opacity:.3">\u2014</span>';
+    container.appendChild(cell);
+  });
+})();
+
+${dailyEfficiency.hasData?`
+// ── Daily thermal efficiency chart ─────────────────────────────────────
+(function(){
+  const c=document.getElementById('cDailyEff');if(!c)return;
+  const vals=${JSON.stringify(dailyEfficiency.values)};
+  new Chart(c,{
+    type:'line',
+    data:{
+      labels:${JSON.stringify(dailyEfficiency.labels)},
+      datasets:[{
+        label:'Thermal efficiency (%)',
+        data:vals,
+        borderColor:'#43a047',
+        backgroundColor:'rgba(67,160,71,.09)',
+        fill:true,tension:0.3,pointRadius:5,borderWidth:2,
+        pointBackgroundColor:vals.map(v=>v>=95?'#2d7a3a':v>=85?'#f57c00':'#e53935'),
+        pointBorderColor:'#fff',pointBorderWidth:1.5
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{label:ctx=>ctx.parsed.y+'% \u2014 '+(ctx.parsed.y>=95?'Condensing \u2713':ctx.parsed.y>=85?'OK':'Check')}}
+      },
+      scales:{
+        x:{grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:'%'},suggestedMin:70,suggestedMax:105,grid:{color:'#f5f5f5'},ticks:{callback:v=>v+'%'}}
+      }
+    }
+  });
+})();
+`:''}
+
+${energyFlow&&energyFlow.hasData?`
+// ── Energy flow chart ───────────────────────────────────────────────────
+(function(){
+  const c=document.getElementById('cEnergyFlow');if(!c)return;
+  const ef=${JSON.stringify(energyFlow)};
+  const ds=[
+    {label:'\u2600\ufe0f PV (W)',             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:'\uD83D\uDD0B Batt. charging (W)', data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:'\uD83D\uDD0C Grid draw (W)',       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
+  ];
+  if(ef.wallbox.some(v=>v>0))ds.push({label:'\uD83D\uDE97 Wallbox (W)',data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
+  new Chart(c,{
+    type:'bar',
+    data:{labels:ef.labels,datasets:ds},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
+      scales:{
+        x:{grid:{color:'#f5f5f5'},stacked:true},
+        y:{title:{display:true,text:'Avg W'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
+      }
+    }
+  });
+})();
+`:''}
+
 <\/script>
 </body></html>`;
 

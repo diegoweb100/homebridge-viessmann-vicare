@@ -1984,13 +1984,14 @@ private setupTemperatureProgramServices() {
         setTemp: this.states.HeatingThresholdTemperature,
       });
       this.historyLogger.appendCsvRow({
-        timestamp: new Date().toISOString(),
-        accessory: `hc${this.circuitNumber}`,
-        room_temp: this.states.CurrentTemperature,
+        timestamp:   new Date().toISOString(),
+        accessory:   `hc${this.circuitNumber}`,
+        event_type:  'snapshot',
+        room_temp:   this.states.CurrentTemperature,
         target_temp: this.states.HeatingThresholdTemperature,
-        flow_temp: this.states.FlowTemperature,
-        program: this.currentProgram,
-        mode: this.currentMode,
+        flow_temp:   this.states.FlowTemperature,
+        program:     this.currentProgram,
+        mode:        this.currentMode,
       });
     }
   }

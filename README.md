@@ -1033,6 +1033,15 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.52] - 2026-03-17
+- feat: hourly burner heatmap in report (24-cell grid, runtime %, outdoor temp on hover)
+- feat: daily thermal efficiency chart from CSV (heat_heating_day_kwh / gas × 10.55)
+- feat: energy flow chart for PV/battery/grid/wallbox installations
+- feat: emoji icons on all report section headers
+- fix: CSV migration — hc0/dhw post-deploy rows now correctly detected (35-col format)
+- fix: hc0/dhw appendCsvRow now includes event_type='snapshot' for future-proof migration
+- fix: viessmann-history-2045571.csv migration script updated (re-run if needed)
+
 ### [2.0.51] - 2026-03-16
 - fix: viessmann-report-server.js missing from npm package (added to files field)
 

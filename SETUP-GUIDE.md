@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.51
+# Complete Setup Guide - v2.0.52
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.50 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.52 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1227,6 +1227,11 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.52 (2026-03-17)
+- feat: 3 new report sections — hourly heatmap, daily efficiency chart, energy flow
+- feat: icons on all report section headers
+- fix: CSV migration corrected for hc0/dhw post-deploy rows
 
 ### v2.0.51 (2026-03-16)
 - fix: viessmann-report-server.js missing from npm package

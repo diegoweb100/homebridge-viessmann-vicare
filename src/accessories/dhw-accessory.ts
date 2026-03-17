@@ -853,11 +853,12 @@ async setActive(value: CharacteristicValue) {
         setTemp: this.states.HeatingThresholdTemperature,
       });
       this.historyLogger.appendCsvRow({
-        timestamp: new Date().toISOString(),
-        accessory: 'dhw',
-        dhw_temp: this.states.CurrentTemperature,
-        dhw_target: this.states.HeatingThresholdTemperature,
-        mode: this.currentMode,
+        timestamp:   new Date().toISOString(),
+        accessory:   'dhw',
+        event_type:  'snapshot',
+        dhw_temp:    this.states.CurrentTemperature,
+        dhw_target:  this.states.HeatingThresholdTemperature,
+        mode:        this.currentMode,
       });
     }
   }
