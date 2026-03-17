@@ -2,8 +2,8 @@
   "pluginAlias": "ViessmannPlatform",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "\ud83d\udd25 Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic with persistent token storage. \u26a0\ufe0f CRITICAL: Authorization codes expire in 20 seconds during OAuth setup!",
-  "footerDisplay": "\u26a0\ufe0f Important: Refresh tokens expire after 180 days. For help and support visit: [\ud83d\udcd6 Setup Guide](https://github.com/diegoweb100/homebridge-viessmann-vicare/blob/main/SETUP-GUIDE.md) | [\ud83d\udd27 Troubleshooting](https://github.com/diegoweb100/homebridge-viessmann-vicare#-troubleshooting) | [\ud83d\udcde Support](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)",
+  "headerDisplay": "🔥 Homebridge plugin for Viessmann heating systems with full control capabilities including boiler, DHW, and heating circuits. Features advanced rate limiting protection, intelligent cache management, and automatic retry logic with persistent token storage. ⚠️ CRITICAL: Authorization codes expire in 20 seconds during OAuth setup!",
+  "footerDisplay": "⚠️ Important: Refresh tokens expire after 180 days. For help and support visit: [📖 Setup Guide](https://github.com/diegoweb100/homebridge-viessmann-vicare/blob/main/SETUP-GUIDE.md) | [🔧 Troubleshooting](https://github.com/diegoweb100/homebridge-viessmann-vicare#-troubleshooting) | [📞 Support](https://github.com/diegoweb100/homebridge-viessmann-vicare/issues)",
   "schema": {
     "type": "object",
     "properties": {
@@ -181,10 +181,10 @@
         "title": "Force Service Recreation",
         "type": "boolean",
         "default": false,
-        "description": "\ud83d\udd27 DEVELOPMENT: Force recreation of HomeKit services with new subtypes to refresh names immediately. Enable temporarily if custom names don't appear, then disable after restart."
+        "description": "🔧 DEVELOPMENT: Force recreation of HomeKit services with new subtypes to refresh names immediately. Enable temporarily if custom names don't appear, then disable after restart."
       },
       "customNames": {
-        "title": "\ud83c\udfaf Custom Names & Localization",
+        "title": "🎯 Custom Names & Localization",
         "type": "object",
         "description": "Customize accessory names for localization or personal preference. Perfect for non-English users or custom naming schemes.",
         "properties": {
@@ -275,7 +275,7 @@
         }
       },
       "cache": {
-        "title": "\ud83d\uddc4\ufe0f Enhanced API Cache Configuration",
+        "title": "🗄️ Enhanced API Cache Configuration",
         "type": "object",
         "properties": {
           "enabled": {
@@ -351,7 +351,7 @@
         }
       },
       "advanced": {
-        "title": "\ud83d\udd27 Advanced Settings",
+        "title": "🔧 Advanced Settings",
         "type": "object",
         "properties": {
           "baseDelay": {
@@ -395,7 +395,7 @@
         }
       },
       "features": {
-        "title": "\ud83c\udf9b\ufe0f Feature Control",
+        "title": "🎛️ Feature Control",
         "type": "object",
         "properties": {
           "enableBoilerAccessories": {
@@ -437,7 +437,7 @@
         }
       },
       "network": {
-        "title": "\ud83c\udf10 Network Settings",
+        "title": "🌐 Network Settings",
         "type": "object",
         "properties": {
           "enableIPv6": {
@@ -463,6 +463,53 @@
             "description": "Use persistent HTTP connections to improve performance and reduce latency."
           }
         }
+      },
+      "enableImmediateBurnerUpdates": {
+        "title": "Enable Immediate Burner Updates",
+        "type": "boolean",
+        "default": true,
+        "description": "Enable rapid burner state polling (~30s interval) to capture precise ON/OFF events in the CSV history. Required for accurate burner cycle data in viessmann-sync-events.js."
+      },
+      "burnerUpdateDelay": {
+        "title": "Burner Update Interval (ms)",
+        "type": "integer",
+        "default": 30000,
+        "minimum": 10000,
+        "maximum": 120000,
+        "description": "Polling interval in ms for rapid burner state updates. Default: 30000 (30s). Lower values capture more cycles but use more API calls."
+      },
+      "burnerUpdateDebounce": {
+        "title": "Burner Update Debounce (ms)",
+        "type": "integer",
+        "default": 5000,
+        "minimum": 1000,
+        "maximum": 30000,
+        "description": "Debounce delay in ms to prevent duplicate CSV writes for rapid burner state changes. Default: 5000 (5s)."
+      },
+      "postCommandRetry": {
+        "title": "⚙️ Post-Command Retry",
+        "type": "object",
+        "description": "Configuration for confirmation retries after sending commands (e.g. temperature changes). Verifies the command was applied by the boiler.",
+        "properties": {
+          "delays": {
+            "title": "Retry Delays",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 300000
+            },
+            "description": "Delays in ms between confirmation attempts. Default: [5000, 15000, 30000, 60000]"
+          },
+          "guardDuration": {
+            "title": "Guard Duration (ms)",
+            "type": "integer",
+            "default": 120000,
+            "minimum": 10000,
+            "maximum": 600000,
+            "description": "Duration in ms to block regular polling from overwriting command state after a command is sent. Default: 120000 (2 minutes)."
+          }
+        }
       }
     },
     "required": [
@@ -475,8 +522,8 @@
   "layout": [
     {
       "type": "fieldset",
-      "title": "\ud83d\udd10 Basic Configuration",
-      "description": "Essential settings to connect to your Viessmann system. \u26a0\ufe0f Remember: Authorization codes expire in 20 seconds!",
+      "title": "🔐 Basic Configuration",
+      "description": "Essential settings to connect to your Viessmann system. ⚠️ Remember: Authorization codes expire in 20 seconds!",
       "expandable": true,
       "expanded": true,
       "items": [
@@ -489,7 +536,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83d\udd11 Authentication Method",
+      "title": "🔑 Authentication Method",
       "description": "Choose how to authenticate with Viessmann API. Automatic OAuth is recommended for desktop environments, manual for headless/Docker setups.",
       "expandable": true,
       "expanded": true,
@@ -502,7 +549,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\u2699\ufe0f Manual Authentication (Advanced)",
+      "title": "⚙️ Manual Authentication (Advanced)",
       "description": "Only required if authMethod is 'manual'. For headless/server environments where browser OAuth isn't possible.",
       "expandable": true,
       "expanded": false,
@@ -513,7 +560,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83d\udd12 Token Management",
+      "title": "🔒 Token Management",
       "description": "Configure token refresh and persistence. Refresh tokens are valid for 180 days.",
       "expandable": true,
       "expanded": false,
@@ -524,7 +571,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83c\udfaf Installation Filtering",
+      "title": "🎯 Installation Filtering",
       "description": "Filter which installations to show in HomeKit to reduce API calls and improve performance. Can reduce API usage by up to 50%.",
       "expandable": true,
       "expanded": false,
@@ -535,8 +582,8 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83c\udfaf Custom Names & Localization",
-      "description": "\ud83c\udf0d Customize accessory names for different languages or personal preferences. Perfect for Italian, German, French, Spanish users or custom naming schemes. Changes require Homebridge restart.",
+      "title": "🎯 Custom Names & Localization",
+      "description": "🌍 Customize accessory names for different languages or personal preferences. Perfect for Italian, German, French, Spanish users or custom naming schemes. Changes require Homebridge restart.",
       "expandable": true,
       "expanded": false,
       "items": [
@@ -559,7 +606,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\u26a1 Performance & Rate Limiting",
+      "title": "⚡ Performance & Rate Limiting",
       "description": "Configure timing and rate limiting protection to prevent API blocking. Essential for maintaining reliable operation.",
       "expandable": true,
       "expanded": false,
@@ -574,7 +621,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83d\udcbe Enhanced API Caching",
+      "title": "💾 Enhanced API Caching",
       "description": "Configure intelligent API response caching to reduce API calls by 70-90% and improve responsiveness. Includes compression and smart prefetch.",
       "expandable": true,
       "expanded": false,
@@ -593,7 +640,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83c\udf9b\ufe0f Feature Control",
+      "title": "🎛️ Feature Control",
       "description": "Enable or disable specific accessory types to customize your HomeKit experience and reduce API overhead.",
       "expandable": true,
       "expanded": false,
@@ -608,7 +655,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83d\udd27 Advanced Settings",
+      "title": "🔧 Advanced Settings",
       "description": "Advanced configuration options for fine-tuning performance, behavior, and compatibility.",
       "expandable": true,
       "expanded": false,
@@ -622,7 +669,7 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83c\udf10 Network Settings",
+      "title": "🌐 Network Settings",
       "description": "Configure network-specific options for special environments or connectivity requirements.",
       "expandable": true,
       "expanded": false,
@@ -635,7 +682,20 @@
     },
     {
       "type": "fieldset",
-      "title": "\ud83d\udcca Monitoring & Debug",
+      "title": "🔥 Burner & Command Settings",
+      "description": "Configure rapid burner state polling for accurate CSV history and post-command verification behavior.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "enableImmediateBurnerUpdates",
+        "burnerUpdateDelay",
+        "burnerUpdateDebounce",
+        "postCommandRetry.guardDuration"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "📊 Monitoring & Debug",
       "description": "Enable monitoring and debugging features. Disable debug logging for production use to improve performance.",
       "expandable": true,
       "expanded": false,

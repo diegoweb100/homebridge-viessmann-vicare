@@ -1033,6 +1033,12 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.55] - 2026-03-17
+- feat: heating curve overlay on Heat Demand vs Outdoor Temperature scatter chart (non-linear, fitted from ViCare app data)
+- feat: heating curve slope/shift auto-read from viessmann-history-explore JSON per installation/circuit
+- feat: viessmann-explore-history.js now reads heating.circuits.*.heating.curve for all circuits
+- fix: curve formula uses cubic polynomial fit (±2°C accuracy) instead of linear approximation
+
 ### [2.0.54] - 2026-03-17
 - fix: viessmann-explore-history.js added to npm package files (was missing since initial release)
 

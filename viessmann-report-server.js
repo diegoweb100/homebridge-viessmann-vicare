@@ -55,6 +55,8 @@ function generateReport(params) {
     if (params.boilerKW)     cliArgs.push('--boilerKW',    params.boilerKW);
     if (params.designTemp)   cliArgs.push('--designTemp',  params.designTemp);
     if (params.gasPrice)     cliArgs.push('--gasPriceEur', params.gasPrice);
+    if (params.curveSlope)   cliArgs.push('--curveSlope',  params.curveSlope);
+    if (params.curveShift !== undefined && params.curveShift !== '') cliArgs.push('--curveShift', params.curveShift);
 
     execFile(process.execPath, cliArgs, { timeout: 60000 }, (err, stdout, stderr) => {
       if (err) { reject(new Error(stderr || err.message)); return; }
@@ -181,6 +183,8 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
       <div class="field">
         <label>Design outdoor temp</label>
         <input type="number" id="designTemp" placeholder="-7" min="-30" max="10" step="1">
+        <input type="number" id="curveSlope" placeholder="Curve slope (e.g. 1.3)" min="0.2" max="3.5" step="0.1" style="margin-top:6px">
+        <input type="number" id="curveShift" placeholder="Curve shift (e.g. 6)" min="-13" max="40" step="1" style="margin-top:4px">
         <div class="hint">&#176;C — for peak load calculation</div>
       </div>
       <div class="field">
@@ -207,6 +211,8 @@ async function generate(){
   const installation=document.getElementById('installation').value;
   const boilerKW=document.getElementById('boilerKW').value.trim();
   const designTemp=document.getElementById('designTemp').value.trim();
+  const curveSlope=document.getElementById('curveSlope').value.trim();
+  const curveShift=document.getElementById('curveShift').value.trim();
   const gasPrice=document.getElementById('gasPrice').value.trim();
   btn.disabled=true;
   status.className='loading';
@@ -215,6 +221,8 @@ async function generate(){
   if(installation)p.set('installation',installation);
   if(boilerKW)p.set('boilerKW',boilerKW);
   if(designTemp)p.set('designTemp',designTemp);
+  if(curveSlope)p.set('curveSlope',curveSlope);
+  if(curveShift)p.set('curveShift',curveShift);
   if(gasPrice)p.set('gasPrice',gasPrice);
   try{
     const res=await fetch('/report?'+p.toString());
@@ -261,6 +269,8 @@ const server = http.createServer(async (req, res) => {
     const installation = (q.installation || '').replace(/[^0-9]/g, '');
     const boilerKW     = safeNum(q.boilerKW);
     const designTemp   = safeNum(q.designTemp);
+    const curveSlope   = safeNum(q.curveSlope);
+    const curveShift   = q.curveShift !== undefined ? safeNum(q.curveShift) : undefined;
     const gasPrice     = safeNum(q.gasPrice);
 
     const csvName = installation
@@ -279,7 +289,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const html = await generateReport({ days, installation, boilerKW, designTemp, gasPrice });
+      const html = await generateReport({ days, installation, boilerKW, designTemp, gasPrice, curveSlope, curveShift });
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     } catch (e) {

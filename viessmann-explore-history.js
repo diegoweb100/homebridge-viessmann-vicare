@@ -186,6 +186,29 @@ async function main() {
 
       results.devices[devKey] = deviceResult;
 
+      // Step 4b: Read heating circuits configuration (slope/shift for each circuit)
+      console.log(`\n3b. Reading heating circuit curves for device ${dev.id}...`);
+      const circuitCurves = {};
+      for (let circuitIdx = 0; circuitIdx <= 3; circuitIdx++) {
+        await sleep(200);
+        const curveFeature = `heating.circuits.${circuitIdx}.heating.curve`;
+        const curveUrl = `${BASE_URL}/iot/v2/features/installations/${INST}/gateways/${gw.serial}/devices/${dev.id}/features/${curveFeature}`;
+        const curveRes = await apiGet(curveUrl, token);
+        if (curveRes.status === 200 && curveRes.body?.data?.isEnabled) {
+          const props = curveRes.body.data.properties || {};
+          const slope = props.slope?.value ?? null;
+          const shift = props.shift?.value ?? null;
+          if (slope !== null) {
+            circuitCurves[circuitIdx] = { slope, shift: shift ?? 0 };
+            console.log(`   Circuit ${circuitIdx}: slope=${slope}, shift=${shift}`);
+          }
+        } else if (curveRes.status !== 404 && curveRes.status !== 200) {
+          // Stop scanning if we get an unexpected error
+          break;
+        }
+      }
+      deviceResult.heatingCircuits = circuitCurves;
+
       // Step 5: Check if time-series API endpoints exist
       console.log(`\n4. Checking time-series API availability for device ${dev.id}...`);
       await sleep(300);

@@ -355,9 +355,53 @@ const shortCycleCls   = shortestCycle ? (parseFloat(shortestCycle) < 5 ? 'warn' 
 // boilerNominalPowerKW: CLI param > env var > default 0 (kW-based cards hidden)
 // designOutdoorTemp:    CLI param > env var > default -7°C (Europe central)
 // ─────────────────────────────────────────────────────────────────────────────
-const BOILER_KW  = parseFloat(getArg('--boilerKW', process.env.BOILER_KW || '0'));
+const BOILER_KW   = parseFloat(getArg('--boilerKW',   process.env.BOILER_KW   || '0'));
 const DESIGN_TEMP = parseFloat(getArg('--designTemp', process.env.DESIGN_TEMP || '-7'));
+// Heating curve: CLI overrides > explore JSON > 0 (disabled)
+const _curveCli_slope = parseFloat(getArg('--curveSlope', process.env.CURVE_SLOPE || '0'));
+const _curveCli_shift = getArg('--curveShift', process.env.CURVE_SHIFT || '');
+const _curveFromExplore = (() => {
+  try {
+    const _ePath = require('path').join(HB_PATH, `viessmann-history-explore-${INSTALLATION_ID || 'all'}.json`);
+    if (!require('fs').existsSync(_ePath)) return null;
+    const _raw = JSON.parse(require('fs').readFileSync(_ePath, 'utf8'));
+    for (const _dk of Object.keys(_raw.devices || {})) {
+      const _circuits = _raw.devices[_dk].heatingCircuits || {};
+      const _ck = '0' in _circuits ? '0' : Object.keys(_circuits)[0];
+      if (_ck !== undefined) return _circuits[_ck];
+    }
+  } catch(_) {}
+  return null;
+})();
+const CURVE_SLOPE = _curveCli_slope > 0 ? _curveCli_slope : (_curveFromExplore?.slope ?? 0);
+const CURVE_SHIFT = _curveCli_shift !== '' ? parseFloat(_curveCli_shift) : (_curveFromExplore?.shift ?? 0);
 const hasBoilerKW = BOILER_KW > 0;
+const hasCurve    = CURVE_SLOPE > 0;
+
+// --- Heating curve: Viessmann uses a non-linear curve fitted from ViCare app data ---
+// Real app points for slope=1.3,shift=6: (+20°,29°),(+10°,45°),(0°,57°),(-10°,68°),(-20°,80°),(-30°,82°)
+// Cubic fit coefficients are computed from the 6 known points for the reference slope=1.3,shift=6
+// For other slope/shift values we scale around the reference and apply shift offset
+const heatingCurveLine = (() => {
+  if (!hasCurve) return null;
+  // Reference cubic coefficients (slope=1.3, shift=6, from ViCare app)
+  // p(t) = 2.222e-4*t^3 - 9.167e-3*t^2 - 1.309*t + 57.52
+  const refSlope = 1.3, refShift = 6;
+  const refCoeffs = [2.222e-4, -9.167e-3, -1.309, 57.52];
+  const poly = (t, c) => c[0]*t**3 + c[1]*t**2 + c[2]*t + c[3];
+  const pts = [];
+  for (let t = -30; t <= 22; t += 1) {
+    // Scale: adjust for different slope (linear scaling of the curve steepness)
+    // and shift (vertical offset adjustment)
+    const refVal = poly(t, refCoeffs);
+    // Slope adjustment: scale the deviation from room temp (20°C) by slope ratio
+    const slopeAdj = (CURVE_SLOPE / refSlope);
+    const shiftAdj = CURVE_SHIFT - refShift;
+    const val = 20 + (refVal - 20) * slopeAdj + shiftAdj;
+    pts.push({ x: t, y: +val.toFixed(1) });
+  }
+  return pts;
+})();
 
 // Override avgHeatDemand with correct nominal power if provided
 const avgModActive = activeBurnerRows.length
@@ -1116,7 +1160,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
     <div class="ch-tall"><canvas id="cScatter"></canvas></div>
-    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}</p>
+    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}${hasCurve ? ' Orange line = heating curve (slope='+CURVE_SLOPE+', shift='+CURVE_SHIFT+').' : ''}</p>
   </div>` : ''}
 </div>
 
@@ -1374,29 +1418,47 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
   }];
   if(reg){
     datasets.push({
-      label:'Trend',
+      label:'Trend (heat demand)',
       data:reg.line,
       type:'line',
       borderColor:'#ef5350',
       backgroundColor:'transparent',
       borderWidth:2,
       pointRadius:0,
-      tension:0
+      tension:0,
+      yAxisID:'yLeft'
     });
   }
+  ${hasCurve ? `
+  datasets.push({
+    label:'Heating curve (slope=${CURVE_SLOPE}, shift='+${JSON.stringify(CURVE_SHIFT)}+')',
+    data:${JSON.stringify(heatingCurveLine)},
+    type:'line',
+    borderColor:'#f57c00',
+    backgroundColor:'transparent',
+    borderWidth:2.5,
+    borderDash:[7,4],
+    pointRadius:0,
+    tension:0,
+    yAxisID:'yRight'
+  });` : ''}
   new Chart(c,{
     type:'scatter',
     data:{datasets},
     options:{
       responsive:true,
       maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
       plugins:{
-        legend:{display:true,position:'top'},
-        tooltip:{callbacks:{label:p=>'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
+        legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
+        tooltip:{callbacks:{label:p=>p.dataset.yAxisID==='yRight'
+          ? 'flow temp: '+p.parsed.y+'°C'
+          : 'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
       },
       scales:{
         x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}}
+        yLeft:{type:'linear',position:'left',title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}},
+        yRight:{type:'linear',position:'right',title:{display:${hasCurve ? 'true' : 'false'},text:'Flow temp (°C)'},grid:{drawOnChartArea:false},display:${hasCurve ? 'true' : 'false'}}
       }
     }
   });
