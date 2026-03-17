@@ -24,6 +24,334 @@ const path = require('path');
 const args = process.argv.slice(2);
 const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i+1] ? args[i+1] : def; };
 const DAYS = parseInt(getArg('--days', '7'), 10);
+const LANG = getArg('--lang', process.env.REPORT_LANG || 'en').toLowerCase();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// i18n — Internationalization
+// Add new languages by extending the STRINGS object below.
+// Supported: 'en' (default), 'it'
+// Usage: --lang it  or  env REPORT_LANG=it
+// ═══════════════════════════════════════════════════════════════════════════
+const STRINGS = {
+  en: {
+    // ── Section titles ──────────────────────────────────────────────────
+    reportTitle:        'Viessmann ViCare — History Report',
+    sectionOverview:    '📈 Overview',
+    sectionBoiler:      '🔥 Boiler — Burner',
+    sectionHC0:         '🌡️ Heating Circuit (HC0)',
+    sectionSystemAnalysis: '🔍 System Analysis',
+    sectionDHW:         '🚿 Domestic Hot Water (DHW)',
+    sectionEnergySummary: '📊 Energy Summary (from Viessmann API)',
+    sectionEnergySystem: '⚡ Energy System (PV / Battery / Grid)',
+    sectionGasForecast: '⛽ Gas Forecast',
+    sectionDeviceMessages: '🔔 Device Messages',
+
+    // ── KPI labels ──────────────────────────────────────────────────────
+    cyclesInPeriod:     'CYCLES IN PERIOD',
+    startsPerHour:      'STARTS/HOUR',
+    avgCycleDuration:   'AVG CYCLE DURATION',
+    burnerRuntime:      'BURNER RUNTIME',
+    lifetimeStarts:     'LIFETIME STARTS',
+    lifetimeHours:      'LIFETIME HOURS',
+    avgModulation:      'AVG MODULATION (ACTIVE)',
+    maxModulation:      'MAX MODULATION',
+    avgHeatDemand:      'AVG HEAT DEMAND',
+    gasHeatingToday:    'GAS HEATING TODAY',
+    gasDhwToday:        'GAS DHW TODAY',
+    gasTotalToday:      'GAS TOTAL TODAY',
+    avgRoomTemp:        'AVG ROOM TEMP',
+    avgSetpoint:        'AVG SETPOINT',
+    maxFlowTemp:        'MAX FLOW TEMP',
+    condensingMode:     'CONDENSING MODE',
+    avgFlowTemp:        'AVG FLOW TEMP',
+    todaySchedule:      "TODAY'S SCHEDULE",
+    programDist:        'PROGRAM DISTRIBUTION',
+    heatLossCoeff:      'HEAT LOSS COEFF.',
+    estPeakLoad:        'EST. PEAK LOAD',
+    boilerNominal:      'BOILER NOMINAL',
+    houseEfficiency:    'HOUSE EFFICIENCY',
+    cyclingScore:       'CYCLING SCORE',
+    comfortStability:   'COMFORT STABILITY',
+    estEfficiency:      'EST. EFFICIENCY',
+    heatingCurveLabel:  'HEATING CURVE',
+
+    // ── Ratings ─────────────────────────────────────────────────────────
+    condensing:         'Condensing ✓',
+    excellent:          'Excellent',
+    good:               'Good',
+    average:            'Average',
+    poor:               'Poor',
+    oversized:          'Oversized',
+    weatherComp:        'Weather-compensated ✓',
+    fixedFlow:          'Fixed flow temp',
+    checkCurve:         'Check curve config',
+    atOutdoor:          'at {temp}°C outdoor',
+
+    // ── Chart notes ─────────────────────────────────────────────────────
+    cycleApiNote:       'Cycle count uses <strong>API firmware counters</strong> (burner_starts delta) — captures all ignitions regardless of 15-min CSV sample rate. CSV edge detection would miss ~{pct}% of cycles at this cycle frequency.',
+    burnerBarsNote:     'Burner ON/OFF bars show only cycles visible within 15-min sampling interval. Actual cycle count ({n}) is {mult}× higher — see API counter KPIs above.',
+    histNote:           'Distribution of burner ON durations visible in CSV samples. Actual cycle duration from API counters: avg {dur} min. Histogram shows only ~{vis} of {real} real cycles.',
+    flowTempNote:       'Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.',
+    heatDemandTitle:    'Heat Demand vs Outdoor Temperature',
+    heatDemandNote:     'Each point = one burner-active sample. Red line = linear regression.{bp} <em>Scroll to zoom · Drag to pan · Double-click to reset.</em>',
+    balancePoint:       ' Balance point (estimated): {bp}°C outdoor.',
+    flowCurveTitle:     '🌡️ Flow Temperature vs Outdoor — Actual vs Heating Curve',
+    flowCurveNote:      'Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope={slope}, shift={shift}). Gap between dots and curve indicates deviation from the set curve. <em>Scroll to zoom · Drag to pan · Double-click to reset.</em>',
+    zoomReset:          '⟳ Reset zoom',
+    scrollZoom:         'Scroll to zoom · Drag to pan · Double-click to reset.',
+
+    // ── KPI label lookup (used by sc() in HTML template) ──────────────────
+    kpiLabels: {
+      'Cycles in period':        'CYCLES IN PERIOD',
+      'Starts/hour':             'STARTS/HOUR',
+      'Avg cycle duration':      'AVG CYCLE DURATION',
+      'Burner runtime':          'BURNER RUNTIME',
+      'Lifetime starts':         'LIFETIME STARTS',
+      'Lifetime hours':          'LIFETIME HOURS',
+      'Avg modulation (active)': 'AVG MODULATION (ACTIVE)',
+      'Max modulation':          'MAX MODULATION',
+      'Avg heat demand':         'AVG HEAT DEMAND',
+      'Gas heating today':       'GAS HEATING TODAY',
+      'Gas DHW today':           'GAS DHW TODAY',
+      'Gas total today':         'GAS TOTAL TODAY',
+      'Avg room temp':           'AVG ROOM TEMP',
+      'Avg setpoint':            'AVG SETPOINT',
+      'Max flow temp':           'MAX FLOW TEMP',
+      'Condensing mode':         'CONDENSING MODE',
+      'Avg flow temp':           'AVG FLOW TEMP',
+      'Heat loss coeff.':        'HEAT LOSS COEFF.',
+      'Est. peak load':          'EST. PEAK LOAD',
+      'Boiler nominal':          'BOILER NOMINAL',
+      'House efficiency':        'HOUSE EFFICIENCY',
+      'Cycling score':           'CYCLING SCORE',
+      'Comfort stability':       'COMFORT STABILITY',
+      'Est. efficiency':         'EST. EFFICIENCY',
+      'Heating curve':           'HEATING CURVE',
+      'Avg temp':                'AVG TEMP',
+      'Avg setpoint (DHW)':      'AVG SETPOINT',
+    },
+
+    // ── Insights — existing ─────────────────────────────────────────────
+    insightNoIssues:    'No issues detected. System appears to be operating normally.',
+    insightAddBoilerKW: 'Add --boilerKW <nominal_kW> to enable heat demand, peak load and house efficiency calculations (e.g. --boilerKW 19).',
+    insightShortCycling: 'Short cycling detected — avg cycle {dur} min (ideal > 6 min). With {sph} starts/hour, the boiler is cycling too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.',
+    insightHighCycling: 'High cycling rate — {sph} starts/hour. Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.',
+    insightLowMod:      'Boiler running at low modulation (avg {mod}%) with short cycles. Consider lowering the heating curve to reduce cycling.',
+    insightHighFlow:    'Flow temperature (avg {flow}°C) is higher than necessary for current outdoor conditions ({out}°C). Lowering the heating curve improves condensing efficiency.',
+    insightOversized:   'Boiler nominal power ({kw} kW) is more than twice the estimated peak load (~{peak} kW). Oversizing is common for combi boilers but contributes to cycling.',
+    insightGoodHouse:   'Building thermal efficiency rated {rating} (heat loss {coeff} kW/°C). Good insulation reduces heating demand.',
+    insightCyclingSevere: 'Cycling severity score {score} — severe. Boiler starts {sph} times/hour with avg cycle {dur} min. Technician calibration of minimum modulation recommended.',
+    insightCyclingHigh: 'Cycling severity score {score} — high. Boiler starts {sph} times/hour (avg cycle {dur} min). Consider requesting minimum modulation calibration.',
+    insightMinMod:      'Boiler frequently operating near minimum modulation (avg {mod}%). Combined with short cycles, this suggests oversizing or flow temperature set too high.',
+    insightFixedFlow:   'Flow temperature appears fixed (r={r}). Consider enabling weather compensation on your boiler controller to improve efficiency.',
+    insightCurveMiscfg: 'Heating curve may be misconfigured — flow temperature correlates positively with outdoor temperature (r={r}). Expected: flow should rise when outdoor drops.',
+
+    // ── Insights — NEW: recommendations with actions ────────────────────
+    recTitle:           '💡 Recommended actions',
+    recImpact:          'Estimated impact',
+    recActionsLabel:    'Recommended actions',
+    recOversizingActions: {
+      title:   '⚠️ Boiler oversized ({ratio}×) — structural cycling',
+      body:    'Minimum boiler power (~{minPow} kW) exceeds avg heat demand ({demand} kW). The boiler physically cannot modulate low enough — cycling is inevitable.',
+      actions: [
+        'Lower flow temperature setpoint → reduces heat demand per cycle',
+        'Enable weather compensation (slope {slope}, shift {shift} → already set)',
+        'Ask technician to calibrate minimum modulation to lowest possible value',
+        'Consider hydraulic separator if not present',
+      ],
+      impact:  '−20–35% cycles · +2–4% efficiency',
+    },
+    recHighFlow: {
+      title:   '⚠️ Flow temperature too high for outdoor conditions',
+      body:    'Current avg flow {flow}°C with outdoor {out}°C. The heating curve prescribes {curve}°C — you are running {delta}°C above curve.',
+      actions: [
+        'Reduce curve shift by {suggestShift} points (from {shift} to {newShift})',
+        'Or reduce slope slightly (from {slope} to {newSlope})',
+        'Monitor room temperature over 2–3 days — reduce further if comfortable',
+      ],
+      impact:  '+3–5% condensing efficiency · −10–15% gas',
+    },
+    recNoWeatherComp: {
+      title:   'ℹ️ Weather compensation not active',
+      body:    'Flow temperature is fixed regardless of outdoor temperature (r={r}). In mild weather the boiler overheats — in cold weather it may underheat.',
+      actions: [
+        'Enable weather compensation on boiler controller (ViCare app → Heating → Curve)',
+        'Recommended starting point: slope {slope}, shift {shift} (already programmed)',
+        'Re-evaluate after 1 week of data',
+      ],
+      impact:  '−5–10% gas consumption · reduced cycling',
+    },
+  },
+
+  it: {
+    // ── Section titles ──────────────────────────────────────────────────
+    reportTitle:        'Viessmann ViCare — Report Storico',
+    sectionOverview:    '📈 Panoramica',
+    sectionBoiler:      '🔥 Caldaia — Bruciatore',
+    sectionHC0:         '🌡️ Circuito di Riscaldamento (HC0)',
+    sectionSystemAnalysis: '🔍 Analisi Sistema',
+    sectionDHW:         '🚿 Acqua Calda Sanitaria (ACS)',
+    sectionEnergySummary: '📊 Riepilogo Energetico (da API Viessmann)',
+    sectionEnergySystem: '⚡ Sistema Energetico (PV / Batteria / Rete)',
+    sectionGasForecast: '⛽ Previsione Gas',
+    sectionDeviceMessages: '🔔 Messaggi Dispositivo',
+
+    // ── KPI labels ──────────────────────────────────────────────────────
+    cyclesInPeriod:     'CICLI NEL PERIODO',
+    startsPerHour:      'ACCENSIONI/ORA',
+    avgCycleDuration:   'DURATA MEDIA CICLO',
+    burnerRuntime:      'RUNTIME BRUCIATORE',
+    lifetimeStarts:     'ACCENSIONI LIFETIME',
+    lifetimeHours:      'ORE LIFETIME',
+    avgModulation:      'MODULAZIONE MEDIA (ATTIVA)',
+    maxModulation:      'MODULAZIONE MASSIMA',
+    avgHeatDemand:      'DOMANDA TERMICA MEDIA',
+    gasHeatingToday:    'GAS RISCALDAMENTO OGGI',
+    gasDhwToday:        'GAS ACS OGGI',
+    gasTotalToday:      'GAS TOTALE OGGI',
+    avgRoomTemp:        'TEMP. MEDIA AMBIENTE',
+    avgSetpoint:        'SETPOINT MEDIO',
+    maxFlowTemp:        'TEMP. MANDATA MAX',
+    condensingMode:     'MODALITÀ CONDENSAZIONE',
+    avgFlowTemp:        'TEMP. MANDATA MEDIA',
+    todaySchedule:      'PROGRAMMA ODIERNO',
+    programDist:        'DISTRIBUZIONE PROGRAMMI',
+    heatLossCoeff:      'COEFF. DISPERSIONE',
+    estPeakLoad:        'CARICO DI PUNTA STIMATO',
+    boilerNominal:      'POTENZA CALDAIA',
+    houseEfficiency:    'EFFICIENZA EDIFICIO',
+    cyclingScore:       'INDICE DI CICLAGGIO',
+    comfortStability:   'STABILITÀ COMFORT',
+    estEfficiency:      'EFFICIENZA STIMATA',
+    heatingCurveLabel:  'CURVA DI RISCALDAMENTO',
+
+    // ── Ratings ─────────────────────────────────────────────────────────
+    condensing:         'Condensazione ✓',
+    excellent:          'Eccellente',
+    good:               'Buono',
+    average:            'Medio',
+    poor:               'Scarso',
+    oversized:          'Sovradimensionata',
+    weatherComp:        'Compensazione clima ✓',
+    fixedFlow:          'Mandata fissa',
+    checkCurve:         'Verificare curva',
+    atOutdoor:          'a {temp}°C esterna',
+
+    // ── Chart notes ─────────────────────────────────────────────────────
+    cycleApiNote:       'Il conteggio cicli usa i <strong>contatori firmware API</strong> (delta burner_starts) — cattura tutte le accensioni indipendentemente dal campionamento CSV a 15 min. Il rilevamento da CSV mancherebbe il ~{pct}% dei cicli a questa frequenza.',
+    burnerBarsNote:     'Le barre ON/OFF mostrano solo i cicli visibili nell\'intervallo di campionamento a 15 min. Il conteggio reale ({n}) è {mult}× superiore — vedi KPI contatori API sopra.',
+    histNote:           'Distribuzione delle durate ON visibili nei campioni CSV. Durata media reale da API: {dur} min. L\'istogramma mostra solo ~{vis} dei {real} cicli reali.',
+    flowTempNote:       'Temperatura di mandata (mandata) — indicatore dell\'efficienza di condensazione. Sotto 55°C = modalità condensazione.',
+    heatDemandTitle:    'Domanda Termica vs Temperatura Esterna',
+    heatDemandNote:     'Ogni punto = un campione con bruciatore attivo. Linea rossa = regressione lineare.{bp} <em>Scroll per zoom · Trascina per spostare · Doppio click per reset.</em>',
+    balancePoint:       ' Balance point (stimato): {bp}°C esterna.',
+    flowCurveTitle:     '🌡️ Temp. Mandata vs Esterna — Reale vs Curva',
+    flowCurveNote:      'Punti blu = temperatura mandata misurata con bruciatore attivo. Linea arancione = curva programmata (pendenza={slope}, livello={shift}). Il gap indica la deviazione dalla curva impostata. <em>Scroll per zoom · Trascina per spostare · Doppio click per reset.</em>',
+    zoomReset:          '⟳ Reset zoom',
+    scrollZoom:         'Scroll per zoom · Trascina · Doppio click per reset.',
+
+    // ── KPI label lookup ────────────────────────────────────────────────────
+    kpiLabels: {
+      'Cycles in period':        'CICLI NEL PERIODO',
+      'Starts/hour':             'ACCENSIONI/ORA',
+      'Avg cycle duration':      'DURATA MEDIA CICLO',
+      'Burner runtime':          'RUNTIME BRUCIATORE',
+      'Lifetime starts':         'ACCENSIONI LIFETIME',
+      'Lifetime hours':          'ORE LIFETIME',
+      'Avg modulation (active)': 'MODULAZIONE MEDIA (ATTIVA)',
+      'Max modulation':          'MODULAZIONE MASSIMA',
+      'Avg heat demand':         'DOMANDA TERMICA MEDIA',
+      'Gas heating today':       'GAS RISCALDAMENTO OGGI',
+      'Gas DHW today':           'GAS ACS OGGI',
+      'Gas total today':         'GAS TOTALE OGGI',
+      'Avg room temp':           'TEMP. MEDIA AMBIENTE',
+      'Avg setpoint':            'SETPOINT MEDIO',
+      'Max flow temp':           'TEMP. MANDATA MAX',
+      'Condensing mode':         'MODALITÀ CONDENSAZIONE',
+      'Avg flow temp':           'TEMP. MANDATA MEDIA',
+      'Heat loss coeff.':        'COEFF. DISPERSIONE',
+      'Est. peak load':          'CARICO DI PUNTA STIMATO',
+      'Boiler nominal':          'POTENZA CALDAIA',
+      'House efficiency':        'EFFICIENZA EDIFICIO',
+      'Cycling score':           'INDICE DI CICLAGGIO',
+      'Comfort stability':       'STABILITÀ COMFORT',
+      'Est. efficiency':         'EFFICIENZA STIMATA',
+      'Heating curve':           'CURVA DI RISCALDAMENTO',
+      'Avg temp':                'TEMP. MEDIA',
+      'Avg setpoint (DHW)':      'SETPOINT MEDIO',
+    },
+
+    // ── Insights — existing ─────────────────────────────────────────────
+    insightNoIssues:    'Nessun problema rilevato. Il sistema sembra funzionare normalmente.',
+    insightAddBoilerKW: 'Aggiungi --boilerKW <kW_nominali> per abilitare il calcolo della domanda termica, del carico di punta e dell\'efficienza edificio.',
+    insightShortCycling: 'Ciclaggio breve rilevato — ciclo medio {dur} min (ideale > 6 min). Con {sph} accensioni/ora, la caldaia cicla troppo frequentemente. Verificare modulazione minima (tecnico), bilanciamento idraulico e velocità pompa.',
+    insightHighCycling: 'Frequenza di ciclaggio elevata — {sph} accensioni/ora. Valutare di alzare il setpoint della curva o richiedere la calibrazione del runtime minimo del bruciatore.',
+    insightLowMod:      'Caldaia che lavora a bassa modulazione (media {mod}%) con cicli brevi. Abbassare la curva di riscaldamento per ridurre il ciclaggio.',
+    insightHighFlow:    'Temperatura di mandata (media {flow}°C) superiore al necessario per le condizioni esterne ({out}°C). Abbassare la curva migliora l\'efficienza di condensazione.',
+    insightOversized:   'La potenza nominale della caldaia ({kw} kW) è più del doppio del carico di punta stimato (~{peak} kW). Il sovradimensionamento è comune nelle caldaie a condensazione ma contribuisce al ciclaggio.',
+    insightGoodHouse:   'Efficienza termica edificio: {rating} (dispersione {coeff} kW/°C). Buona coibentazione riduce la domanda di calore.',
+    insightCyclingSevere: 'Indice di ciclaggio {score} — grave. La caldaia si accende {sph} volte/ora con ciclo medio {dur} min. Calibrazione della modulazione minima da parte di un tecnico raccomandata.',
+    insightCyclingHigh: 'Indice di ciclaggio {score} — alto. La caldaia si accende {sph} volte/ora (ciclo medio {dur} min). Valutare la calibrazione della modulazione minima.',
+    insightMinMod:      'Caldaia spesso vicina alla modulazione minima (media {mod}%). Combinato con cicli brevi, indica sovradimensionamento o temperatura di mandata troppo alta.',
+    insightFixedFlow:   'Temperatura di mandata apparentemente fissa (r={r}). Considerare l\'attivazione della compensazione climatica sul regolatore della caldaia.',
+    insightCurveMiscfg: 'Curva di riscaldamento probabilmente non configurata correttamente — la temperatura di mandata correla positivamente con la temperatura esterna (r={r}). Atteso: la mandata dovrebbe salire quando la temperatura esterna scende.',
+
+    // ── Insights — NEW: recommendations with actions ────────────────────
+    recTitle:           '💡 Azioni consigliate',
+    recImpact:          'Impatto stimato',
+    recActionsLabel:    'Azioni consigliate',
+    recOversizingActions: {
+      title:   '⚠️ Caldaia sovradimensionata ({ratio}×) — ciclaggio strutturale',
+      body:    'La potenza minima della caldaia (~{minPow} kW) supera la domanda termica media ({demand} kW). La caldaia non riesce fisicamente a modulare abbastanza in basso — il ciclaggio è inevitabile.',
+      actions: [
+        'Abbassare il setpoint della temperatura di mandata → riduce la domanda termica per ciclo',
+        'Attivare la compensazione climatica (pendenza {slope}, livello {shift} → già impostati)',
+        'Chiedere al tecnico di calibrare la modulazione minima al valore più basso possibile',
+        'Verificare la presenza di un separatore idraulico',
+      ],
+      impact:  '−20–35% cicli · +2–4% efficienza',
+    },
+    recHighFlow: {
+      title:   '⚠️ Temperatura di mandata troppo alta per le condizioni esterne',
+      body:    'Mandata media {flow}°C con esterno a {out}°C. La curva prescrive {curve}°C — stai lavorando {delta}°C sopra la curva.',
+      actions: [
+        'Ridurre il livello della curva di {suggestShift} punti (da {shift} a {newShift})',
+        'Oppure ridurre leggermente la pendenza (da {slope} a {newSlope})',
+        'Monitorare la temperatura ambiente per 2–3 giorni e ridurre ulteriormente se il comfort lo permette',
+      ],
+      impact:  '+3–5% efficienza condensazione · −10–15% gas',
+    },
+    recNoWeatherComp: {
+      title:   'ℹ️ Compensazione climatica non attiva',
+      body:    'La temperatura di mandata è fissa indipendentemente dalla temperatura esterna (r={r}). Nelle giornate miti la caldaia surriscalda, in quelle fredde potrebbe non bastare.',
+      actions: [
+        'Attivare la compensazione climatica sul regolatore (app ViCare → Riscaldamento → Curva)',
+        'Punto di partenza consigliato: pendenza {slope}, livello {shift} (già programmati)',
+        'Rivalutare dopo 1 settimana di dati',
+      ],
+      impact:  '−5–10% consumo gas · riduzione ciclaggio',
+    },
+  },
+};
+
+// Helper: get string with variable substitution
+// Usage: T('insightOversized', {kw:25, peak:9.9})
+function T(key, vars) {
+  const lang = STRINGS[LANG] || STRINGS['en'];
+  let s = lang[key] ?? STRINGS['en'][key] ?? key;
+  if (vars && typeof s === 'string') {
+    Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll('{'+k+'}', v); });
+  }
+  return s;
+}
+
+// Helper for nested objects (recommendations)
+function TR(key) {
+  const lang = STRINGS[LANG] || STRINGS['en'];
+  return lang[key] ?? STRINGS['en'][key] ?? {};
+}
+
+
 const HB_PATH = getArg('--path', '/var/lib/homebridge');
 const INSTALLATION_ID = getArg('--installation', '');
 const csvSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
@@ -462,20 +790,20 @@ const inefficientOp = avgModNum !== null && avgCycleDurNum !== null && avgModNum
 const insights = [];
 if (shortCycling || excessiveCycling)
   insights.push({ type:'warn', text: shortCycling
-    ? `Short cycling detected — avg cycle ${realAvgDur ?? avgCycleDur} min (ideal > 6 min). With ${cyclesPerHour} starts/hour (wall-clock), the boiler is cycling too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.`
-    : `High cycling rate — ${cyclesPerHour} starts/hour (wall-clock). Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.` });
+    ? T('insightShortCycling', {dur: realAvgDur ?? avgCycleDur, sph: cyclesPerHour})
+    : T('insightHighCycling',  {sph: cyclesPerHour}) });
 if (inefficientOp)
-  insights.push({ type:'warn', text: `Boiler running at low modulation (avg ${avgMod}%) with short cycles. Consider lowering the heating curve to reduce cycling.` });
+  insights.push({ type:'warn', text: T('insightLowMod', {mod: avgMod}) });
 if (highFlowTemp)
-  insights.push({ type:'warn', text: `Flow temperature (avg ${avgFlow}°C) is higher than necessary for current outdoor conditions (${avgOutsideNum?.toFixed(1)}°C). Lowering the heating curve improves condensing efficiency.` });
+  insights.push({ type:'warn', text: T('insightHighFlow', {flow: avgFlow, out: avgOutsideNum?.toFixed(1)}) });
 if (boilerOversized)
-  insights.push({ type:'info', text: `Boiler nominal power (${BOILER_KW} kW) is more than twice the estimated peak load (~${peakLoadKW} kW). Oversizing is common for combi boilers but contributes to cycling.` });
+  insights.push({ type:'info', text: T('insightOversized', {kw: BOILER_KW, peak: peakLoadKW}) });
 if (houseEff && (houseEff.label === 'Good' || houseEff.label === 'Excellent'))
-  insights.push({ type:'good', text: `Building thermal efficiency rated ${houseEff.label} (heat loss ${heatLossCoeff} kW/°C). Good insulation reduces heating demand.` });
+  insights.push({ type:'good', text: T('insightGoodHouse', {rating: T(houseEff.label.toLowerCase()), coeff: heatLossCoeff}) });
 if (!hasBoilerKW)
-  insights.push({ type:'info', text: `Add --boilerKW <nominal_kW> to enable heat demand, peak load and house efficiency calculations (e.g. --boilerKW 19).` });
+  insights.push({ type:'info', text: T('insightAddBoilerKW') });
 if (insights.length === 0 && hasBoilerKW)
-  insights.push({ type:'good', text: 'No issues detected. System appears to be operating normally.' });
+  insights.push({ type:'good', text: T('insightNoIssues') });
 
 // ── Comfort stability: stddev of room temperature ────────────────────────────
 const roomTemps = hcRows.map(r => parseFloat(r.room_temp)).filter(v => !isNaN(v) && v > 0);
@@ -503,15 +831,76 @@ if (cyclesPerHour && avgCycleDurNum && avgCycleDurNum > 0) {
   else if (sc2 < 6) { cyclingSeverity = 'High';        cyclingSeverityCls = 'warn'; }
   else              { cyclingSeverity = 'Severe';      cyclingSeverityCls = 'bad';  }
   if (sc2 >= 6)
-    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — severe. Boiler starts ${cyclesPerHour} times/hour with avg cycle ${avgCycleDurNum.toFixed(1)} min. Technician calibration of minimum modulation recommended.` });
+    insights.push({ type:'warn', text: T('insightCyclingSevere', {score: cyclingScore, sph: cyclesPerHour, dur: avgCycleDurNum.toFixed(1)}) });
   else if (sc2 >= 3)
-    insights.push({ type:'warn', text: `Cycling severity score ${cyclingScore} — high. Boiler starts ${cyclesPerHour} times/hour (avg cycle ${avgCycleDurNum.toFixed(1)} min). Consider requesting minimum modulation calibration.` });
+    insights.push({ type:'warn', text: T('insightCyclingHigh', {score: cyclingScore, sph: cyclesPerHour, dur: avgCycleDurNum.toFixed(1)}) });
 }
 
 // ── Min modulation check ─────────────────────────────────────────────────────
 const minModCheck = (avgModNum !== null && avgModNum < 20 && avgCycleDurNum !== null && avgCycleDurNum < 10);
 if (minModCheck)
-  insights.push({ type:'warn', text: `Boiler frequently operating near minimum modulation (avg ${avgMod}%). Combined with short cycles, this suggests oversizing or flow temperature set too high.` });
+  insights.push({ type:'warn', text: T('insightMinMod', {mod: avgMod}) });
+
+// ── Minimum boiler power estimate ────────────────────────────────────────────
+// Viessmann Vitodens 100: min modulation typically 10–15%
+const MIN_MOD_PCT = 10; // conservative estimate
+const minBoilerPow = hasBoilerKW ? +(BOILER_KW * MIN_MOD_PCT / 100).toFixed(1) : null;
+const demandKW = heatDemandKW ? parseFloat(heatDemandKW) : null;
+const oversizingRatio = (minBoilerPow && demandKW && demandKW > 0)
+  ? (minBoilerPow / demandKW).toFixed(1) : null;
+const structuralCycling = oversizingRatio && parseFloat(oversizingRatio) > 1.0;
+
+// ── Build recommendations (actionable, structured) ────────────────────────────
+const recommendations = [];
+
+// Rec 1: Structural cycling due to oversizing
+if (structuralCycling && hasBoilerKW) {
+  const rec = TR('recOversizingActions');
+  const suggestedShift = CURVE_SHIFT > 0 ? Math.max(0, CURVE_SHIFT - 3) : null;
+  const suggestedSlope = CURVE_SLOPE > 0 ? Math.max(0.5, CURVE_SLOPE - 0.2).toFixed(1) : null;
+  recommendations.push({
+    type: 'warn',
+    title: rec.title
+      ?.replaceAll('{ratio}', oversizingRatio),
+    body: rec.body
+      ?.replaceAll('{minPow}', minBoilerPow)
+       .replaceAll('{demand}', demandKW?.toFixed(1)),
+    actions: rec.actions?.map(a => a
+      .replaceAll('{slope}', CURVE_SLOPE || '—')
+      .replaceAll('{shift}', CURVE_SHIFT ?? '—')
+    ),
+    impact: rec.impact,
+  });
+}
+
+// Rec 2: Flow temp above curve
+if (hasCurve && avgFlowNum && avgOutNum !== null) {
+  const theoreticalFlow = heatingCurveLine?.find(p => Math.abs(p.x - Math.round(avgOutNum)) <= 0.5)?.y;
+  const delta = theoreticalFlow ? (avgFlowNum - theoreticalFlow).toFixed(1) : null;
+  if (delta && parseFloat(delta) > 5) {
+    const rec = TR('recHighFlow');
+    const suggestShift = Math.round(parseFloat(delta));
+    const newShift = CURVE_SHIFT !== undefined ? CURVE_SHIFT - suggestShift : null;
+    const newSlope = CURVE_SLOPE ? Math.max(0.5, CURVE_SLOPE - 0.2).toFixed(1) : null;
+    recommendations.push({
+      type: 'warn',
+      title: rec.title,
+      body: rec.body
+        ?.replaceAll('{flow}', avgFlowNum.toFixed(1))
+         .replaceAll('{out}', avgOutNum.toFixed(1))
+         .replaceAll('{curve}', theoreticalFlow)
+         .replaceAll('{delta}', delta),
+      actions: rec.actions?.map(a => a
+        .replaceAll('{suggestShift}', suggestShift)
+        .replaceAll('{shift}', CURVE_SHIFT ?? '—')
+        .replaceAll('{newShift}', newShift ?? '—')
+        .replaceAll('{slope}', CURVE_SLOPE || '—')
+        .replaceAll('{newSlope}', newSlope ?? '—')
+      ),
+      impact: rec.impact,
+    });
+  }
+}
 
 // ── Gas efficiency: estimated kWh produced per m³ gas ───────────────────────
 // heatProduced (kWh) = avgHeatDemand(kW) × burnerRuntime(h)
@@ -577,9 +966,21 @@ if (usePairs.length >= 20) {
     else if (c < 0.1)  { heatCurveBehaviour = 'Fixed flow temp';        heatCurveCls = 'warn'; }
     else               { heatCurveBehaviour = 'Check curve config';     heatCurveCls = 'bad';  }
     if (c >= 0.1)
-      insights.push({ type:'warn', text: `Heating curve may be misconfigured — flow temperature correlates positively with outdoor temperature (r=${heatCurveCorr}). Expected: flow should rise when outdoor drops.` });
+      insights.push({ type:'warn', text: T('insightCurveMiscfg', {r: heatCurveCorr}) });
     else if (c > -0.3 && c < 0.1)
-      insights.push({ type:'info', text: `Flow temperature appears fixed (r=${heatCurveCorr}). Consider enabling weather compensation on your boiler controller to improve efficiency.` });
+      insights.push({ type:'info', text: T('insightFixedFlow', {r: heatCurveCorr}) });
+    // Rec 3: weather comp not active — add to recommendations
+    const rec3 = TR('recNoWeatherComp');
+    recommendations.push({
+      type: 'info',
+      title: rec3.title,
+      body: rec3.body?.replaceAll('{r}', heatCurveCorr),
+      actions: rec3.actions?.map(a => a
+        .replaceAll('{slope}', CURVE_SLOPE || '—')
+        .replaceAll('{shift}', CURVE_SHIFT ?? '—')
+      ),
+      impact: rec3.impact,
+    });
   }
 }
 
@@ -986,7 +1387,11 @@ function translateCode(code) {
 // (future: read from a separate messages JSON file written by the plugin)
 const lastBoiler = boilerRows.length ? boilerRows[boilerRows.length - 1] : null;
 
-const sc = (l,v,u='',badge='') => `<div class="sc"><div class="sl">${l}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
+const KPI_LABELS = STRINGS[LANG]?.kpiLabels || STRINGS['en'].kpiLabels || {};
+const sc = (l,v,u='',badge='') => {
+  const lbl = KPI_LABELS[l] || l;
+  return `<div class="sc"><div class="sl">${lbl}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
+};
 const badge = (cls,txt) => `<span class="badge badge-${cls}">${txt}</span>`;
 const genAt = new Date().toLocaleString('en-GB');
 const periodStart = cutoff.toLocaleDateString('en-GB');
@@ -1054,13 +1459,13 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </head>
 <body>
 <header>
-  <h1>Viessmann ViCare — History Report</h1>
+  <h1>${T('reportTitle')}</h1>
   <p>Period: ${periodStart} — ${periodEnd} &nbsp;(last ${DAYS} days) &nbsp;|&nbsp; Generated: ${genAt} &nbsp;|&nbsp; ${filtered.length} samples</p>
 </header>
 <div class="wrap">
 
 <div class="box">
-  <h2>📈 Overview</h2>
+  <h2>${T('sectionOverview')}</h2>
   <div class="ch-overview"><canvas id="cOverview"></canvas></div>
   ${scheduleBarHtml}
 
@@ -1068,7 +1473,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>🔥 Boiler — Burner</h2>
+  <h2>${T('sectionBoiler')}</h2>
   <!-- KPI row 1: real cycle metrics from API counter -->
   <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Cycle performance (from API counters — precise)</div>
   <div class="grid" style="margin-bottom:6px">
@@ -1123,7 +1528,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>🌡️ Heating Circuit (HC0)</h2>
+  <h2>${T('sectionHC0')}</h2>
   <div class="grid">
     ${sc('Avg room temp', avgRoom, '°C')}
     ${sc('Avg setpoint', avgTarget, '°C')}
@@ -1139,7 +1544,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>🔍 System Analysis</h2>
+  <h2>${T('sectionSystemAnalysis')}</h2>
   <div class="grid">
     ${heatDemandKW ? sc('Avg heat demand', heatDemandKW, ' kW') : ''}
     ${heatLossCoeff ? sc('Heat loss coeff.', heatLossCoeff, ' kW/°C') : ''}
@@ -1161,6 +1566,24 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
       return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;margin-bottom:8px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+i.text+'</span></div>';
     }).join('')}
   </div>
+  ${recommendations.length > 0 ? `
+  <div style="margin-top:20px">
+    <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #f0f0f0">${T('recTitle')}</div>
+    ${recommendations.map(r => {
+      const bg = r.type==='warn' ? '#fff8e1' : r.type==='good' ? '#f1f8f1' : '#e8f4fd';
+      const br = r.type==='warn' ? '#f57c00' : r.type==='good' ? '#43a047' : '#1e88e5';
+      return '<div style="background:'+bg+';border-left:4px solid '+br+';border-radius:6px;padding:14px 16px;margin-bottom:12px">'
+        + '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">'+r.title+'</div>'
+        + '<div style="font-size:12px;color:#444;margin-bottom:10px;line-height:1.5">'+r.body+'</div>'
+        + '<div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">'+T('recActionsLabel', {})+'</div>'
+        + '<ul style="margin:0 0 10px 0;padding-left:18px;font-size:12px;color:#444;line-height:1.7">'
+        + r.actions.map(a => '<li>'+a+'</li>').join('')
+        + '</ul>'
+        + '<div style="font-size:11px;color:#888;border-top:1px solid rgba(0,0,0,.06);padding-top:6px">'
+        + '<strong>'+T('recImpact')+':</strong> '+r.impact+'</div>'
+        + '</div>';
+    }).join('')}
+  </div>` : ''}
   ${scatterData.length >= 10 ? `
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
@@ -1176,7 +1599,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 </div>
 
 <div class="box">
-  <h2>🚿 Domestic Hot Water (DHW)</h2>
+  <h2>${T('sectionDHW')}</h2>
   <div class="grid">
     ${sc('Avg temp', avgDhw, '°C')}
     ${sc('Avg setpoint', avgDhwTarget, '°C')}
@@ -1186,7 +1609,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 
 ${apiSummary ? `
 <div class="box">
-  <h2>📊 Energy Summary (from Viessmann API)</h2>
+  <h2>${T('sectionEnergySummary')}</h2>
   <p class="note" style="margin-bottom:14px">Official aggregated data from Viessmann cloud API. Data snapshot: ${apiSummary.timestamp ? new Date(apiSummary.timestamp).toLocaleString('en-GB') : 'N/A'}. Run <code>viessmann-explore-history.js</code> to refresh.</p>
 
   <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Gas consumption (m³)</div>
@@ -1222,7 +1645,7 @@ ${apiSummary ? `
 
 ${gasForecast ? `
 <div class="box">
-  <h2>⛽ Gas Forecast</h2>
+  <h2>${T('sectionGasForecast')}</h2>
   <p class="note" style="margin-bottom:14px">Projection based on last ${gasForecast.daysUsed} day(s) of data · gas price: €${gasForecast.gasPrice}/m³ · trend: <strong>${gasForecast.trend === 'rising' ? '↑ Rising' : gasForecast.trend === 'falling' ? '↓ Falling' : '→ Stable'}</strong></p>
   <div class="grid">
     ${sc('Avg consumption/day', gasForecast.avgPerDay, ' m³')}
@@ -1241,7 +1664,7 @@ ${gasForecast ? `
 
 ${energyRows.length >= 1 ? `
 <div class="box">
-  <h2>⚡ Energy System (PV / Battery / Grid)</h2>
+  <h2>${T('sectionEnergySystem')}</h2>
   <div class="grid">
     ${hasPV ? sc('PV avg production', avgPV, 'W') : ''}
     ${hasPV ? sc('PV max production', maxPV, 'W') : ''}
@@ -1269,7 +1692,7 @@ ${energyRows.length >= 1 ? `
 </div>` : ''}
 
 <div class="box" id="device-messages">
-  <h2>🔔 Device Messages</h2>
+  <h2>${T('sectionDeviceMessages')}</h2>
   <p class="note" style="margin-bottom:12px">Status, info and fault codes reported by the device. Translated from Viessmann service documentation.</p>
   <div id="msg-list">
 ${(() => {

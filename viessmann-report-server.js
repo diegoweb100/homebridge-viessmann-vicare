@@ -57,6 +57,7 @@ function generateReport(params) {
     if (params.gasPrice)     cliArgs.push('--gasPriceEur', params.gasPrice);
     if (params.curveSlope)   cliArgs.push('--curveSlope',  params.curveSlope);
     if (params.curveShift !== undefined && params.curveShift !== '') cliArgs.push('--curveShift', params.curveShift);
+    if (params.lang)         cliArgs.push('--lang',        params.lang);
 
     execFile(process.execPath, cliArgs, { timeout: 60000 }, (err, stdout, stderr) => {
       if (err) { reject(new Error(stderr || err.message)); return; }
@@ -190,6 +191,10 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
       <div class="field">
         <label>Gas price</label>
         <input type="number" id="gasPrice" placeholder="0.90" min="0" max="10" step="0.01">
+        <select id="lang" style="margin-top:8px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:100%">
+          <option value="en">🌐 English</option>
+          <option value="it">🇮🇹 Italiano</option>
+        </select>
         <div class="hint">&#8364;/m&#179; — for cost forecast</div>
       </div>
     </div>
@@ -214,6 +219,7 @@ async function generate(){
   const curveSlope=document.getElementById('curveSlope').value.trim();
   const curveShift=document.getElementById('curveShift').value.trim();
   const gasPrice=document.getElementById('gasPrice').value.trim();
+  const lang=document.getElementById('lang').value;
   btn.disabled=true;
   status.className='loading';
   status.innerHTML='<span class="spinner"></span>Generating report&hellip;';
@@ -224,6 +230,7 @@ async function generate(){
   if(curveSlope)p.set('curveSlope',curveSlope);
   if(curveShift)p.set('curveShift',curveShift);
   if(gasPrice)p.set('gasPrice',gasPrice);
+  if(lang)p.set('lang',lang);
   try{
     const res=await fetch('/report?'+p.toString());
     if(!res.ok){throw new Error(await res.text()||res.statusText);}
@@ -272,6 +279,7 @@ const server = http.createServer(async (req, res) => {
     const curveSlope   = safeNum(q.curveSlope);
     const curveShift   = q.curveShift !== undefined ? safeNum(q.curveShift) : undefined;
     const gasPrice     = safeNum(q.gasPrice);
+    const lang         = (q.lang || 'en').replace(/[^a-z]/g, '').slice(0, 5);
 
     const csvName = installation
       ? 'viessmann-history-' + installation + '.csv'
@@ -289,7 +297,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const html = await generateReport({ days, installation, boilerKW, designTemp, gasPrice, curveSlope, curveShift });
+      const html = await generateReport({ days, installation, boilerKW, designTemp, gasPrice, curveSlope, curveShift, lang });
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     } catch (e) {

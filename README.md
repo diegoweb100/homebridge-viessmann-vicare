@@ -1033,6 +1033,12 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.59] - 2026-03-17
+- feat: i18n system — English and Italian with --lang CLI param (extensible to any language)
+- feat: all section titles, KPI labels and insight strings translated
+- feat: actionable recommendations with concrete actions and estimated impact
+- feat: --lang selector in report server web UI
+
 ### [2.0.58] - 2026-03-17
 - fix: TypeError "c.canvas.addEventListener is not an object" in scatter charts (zoom feature)
 

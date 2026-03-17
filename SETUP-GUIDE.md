@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.58
+# Complete Setup Guide - v2.0.59
 
 ## Overview
 
@@ -1227,6 +1227,10 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.59 (2026-03-17)
+- feat: i18n — English/Italian, all labels and insights translated, --lang CLI param
+- feat: actionable recommendations with concrete actions
 
 ### v2.0.58 (2026-03-17)
 - fix: crash in scatter charts zoom (c.canvas.addEventListener → c.addEventListener)
