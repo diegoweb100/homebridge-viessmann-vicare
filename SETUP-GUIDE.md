@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.59
+# Complete Setup Guide - v2.0.60
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.60 (2026-03-17)
+- feat: heat loss line on scatter, condensing score, Comfort vs Efficiency section with data accumulation guard
 
 ### v2.0.59 (2026-03-17)
 - feat: i18n — English/Italian, all labels and insights translated, --lang CLI param

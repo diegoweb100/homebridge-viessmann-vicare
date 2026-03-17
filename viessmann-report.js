@@ -147,6 +147,31 @@ const STRINGS = {
     insightCurveMiscfg: 'Heating curve may be misconfigured — flow temperature correlates positively with outdoor temperature (r={r}). Expected: flow should rise when outdoor drops.',
 
     // ── Insights — NEW: recommendations with actions ────────────────────
+
+    // ── Comfort efficiency strings ────────────────────────────────────────
+    ceTitle:            '⚖️ Comfort vs Efficiency',
+    ceNotEnoughData:    'Accumulating data — this analysis will be available after {need} days of monitoring ({have} of {need} collected so far).',
+    ceStabilityLabel:   'Temperature stability',
+    ceGasNormLabel:     'Normalised gas consumption',
+    ceTrendStability:   'Comfort trend',
+    ceTrendGas:         'Gas trend',
+    ceInsightGasNoComfort: 'Gas consumption increased without comfort improvement — consider reviewing flow temperature or schedule.',
+    ceInsightComfortFree:  'Comfort improved with no significant gas increase — system optimisation is working.',
+    ceInsightBothWorse:    'Both comfort and efficiency worsened — configuration change or external factor detected.',
+    ceInsightStable:       'No significant trend — system is stable.',
+    ceImproved:         'improved',
+    ceWorsened:         'worsened',
+    ceUnchanged:        'stable',
+
+    // ── Condensing score strings ──────────────────────────────────────────
+    csTitle:            'Est. condensing score',
+    csLabel:            'Return temp < 55°C',
+    csNote:             'Estimated from flow temp and modulation (model-based, not measured).',
+    csNotEnough:        'Insufficient burner data',
+
+    // ── Heat loss line string ─────────────────────────────────────────────
+    hlLineLabel:        'Theoretical heat loss (H={h} kW/°C)',
+
     recTitle:           '💡 Recommended actions',
     recImpact:          'Estimated impact',
     recActionsLabel:    'Recommended actions',
@@ -297,6 +322,31 @@ const STRINGS = {
     insightCurveMiscfg: 'Curva di riscaldamento probabilmente non configurata correttamente — la temperatura di mandata correla positivamente con la temperatura esterna (r={r}). Atteso: la mandata dovrebbe salire quando la temperatura esterna scende.',
 
     // ── Insights — NEW: recommendations with actions ────────────────────
+
+    // ── Comfort efficiency strings ────────────────────────────────────────
+    ceTitle:            '⚖️ Comfort vs Efficienza',
+    ceNotEnoughData:    "Dati in accumulo — questa analisi sarà disponibile dopo {need} giorni di monitoraggio ({have} di {need} raccolti finora).",
+    ceStabilityLabel:   'Stabilità temperatura',
+    ceGasNormLabel:     'Consumo gas normalizzato',
+    ceTrendStability:   'Trend comfort',
+    ceTrendGas:         'Trend gas',
+    ceInsightGasNoComfort: "Il consumo di gas è aumentato senza miglioramenti al comfort — verificare la temperatura di mandata o il programma.",
+    ceInsightComfortFree:  "Il comfort è migliorato senza aumento significativo del gas — l'ottimizzazione del sistema funziona.",
+    ceInsightBothWorse:    "Sia il comfort che l'efficienza sono peggiorati — rilevato cambiamento di configurazione o fattore esterno.",
+    ceInsightStable:       'Nessun trend significativo — il sistema è stabile.',
+    ceImproved:         'migliorato',
+    ceWorsened:         'peggiorato',
+    ceUnchanged:        'stabile',
+
+    // ── Condensing score strings ──────────────────────────────────────────
+    csTitle:            'Indice condensazione stimato',
+    csLabel:            'Temp. ritorno < 55°C',
+    csNote:             "Stimato da temperatura mandata e modulazione (basato su modello, non misurato).",
+    csNotEnough:        'Dati bruciatore insufficienti',
+
+    // ── Heat loss line string ─────────────────────────────────────────────
+    hlLineLabel:        'Dispersione termica teorica (H={h} kW/°C)',
+
     recTitle:           '💡 Azioni consigliate',
     recImpact:          'Impatto stimato',
     recActionsLabel:    'Azioni consigliate',
@@ -1125,6 +1175,142 @@ const ovMod      = overviewTimes.map(ts => interpolate(boilerRows,ts, 'modulatio
 const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
 
 
+
+// ── D: Estimated return temperature + condensing score ──────────────────────
+// T_return ≈ T_flow - ΔT(modulation)  — model-based, not measured
+// ΔT = clamp(5, 15, 5 + 0.1 × modulation)
+const MIN_DATA_DAYS = 30;  // threshold for statistically meaningful analysis
+
+const condensingScore = (() => {
+  const samples = hcRows
+    .map(r => {
+      const flow = parseFloat(r.flow_temp);
+      const ts   = r.timestamp;
+      // find nearest boiler row for modulation
+      const b = boilerRows.reduce((best, br) => {
+        const d = Math.abs(new Date(br.timestamp) - new Date(ts));
+        return (!best || d < Math.abs(new Date(best.timestamp) - new Date(ts))) ? br : best;
+      }, null);
+      const mod = b ? parseFloat(b.modulation) : NaN;
+      if (isNaN(flow) || flow <= 0 || isNaN(mod)) return null;
+      const deltaT = Math.max(5, Math.min(15, 5 + 0.1 * mod));
+      const tReturn = flow - deltaT;
+      return { tReturn, flow, mod };
+    })
+    .filter(Boolean);
+
+  if (samples.length < 10) return null;
+  const condensing = samples.filter(s => s.tReturn < 55).length;
+  return {
+    pct:     Math.round(condensing / samples.length * 100),
+    samples: samples.length,
+    avgReturn: (samples.reduce((s,r) => s + r.tReturn, 0) / samples.length).toFixed(1),
+  };
+})();
+
+// ── B: Heat loss line for scatter (Q = H × (T_indoor - T_outdoor)) ──────────
+// Uses heatLossCoeff already computed above
+const heatLossLine = (() => {
+  if (!heatLossCoeff || !avgRoomNum) return null;
+  const H = parseFloat(heatLossCoeff);
+  const Ti = avgRoomNum;
+  // Generate line from -15°C to +20°C outdoor
+  return Array.from({length: 36}, (_, i) => {
+    const tout = i - 15;
+    const q = Math.max(0, H * (Ti - tout));
+    return { x: tout, y: +q.toFixed(2) };
+  });
+})();
+
+// ── E: Comfort vs efficiency (rolling 12h windows, normalised for outdoor temp) ─
+const MIN_DAYS_COMFORT = 30;
+const dataDays = [...new Set(boilerRows.map(r => r.timestamp.slice(0,10)))].length;
+const hasEnoughForComfort = dataDays >= MIN_DAYS_COMFORT;
+
+const comfortEfficiency = (() => {
+  if (!hasEnoughForComfort) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
+
+  const WINDOW_MS = 12 * 60 * 60 * 1000;
+  const INDOOR_SET = avgRoomNum || 20;
+
+  // Build merged timeline: timestamp, roomTemp, gasDelta, outdoorTemp
+  const timeline = hcRows
+    .map(r => {
+      const ts  = new Date(r.timestamp).getTime();
+      const rt  = parseFloat(r.room_temp);
+      if (isNaN(rt) || rt <= 0) return null;
+      // nearest boiler row
+      const b = boilerRows.reduce((best, br) => {
+        const d = Math.abs(new Date(br.timestamp).getTime() - ts);
+        return (!best || d < Math.abs(new Date(best.timestamp).getTime() - ts)) ? br : best;
+      }, null);
+      const out = b ? parseFloat(b.outside_temp) : NaN;
+      const gas = b ? parseFloat(b.gas_heating_day_m3) : NaN;
+      return { ts, rt, out: isNaN(out) ? null : out, gas: isNaN(gas) ? null : gas };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+
+  if (timeline.length < 20) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
+
+  const windows = [];
+  for (let i = 0; i < timeline.length; i++) {
+    const win = timeline.filter(p => p.ts >= timeline[i].ts && p.ts < timeline[i].ts + WINDOW_MS);
+    if (win.length < 5) continue;
+
+    const temps = win.map(p => p.rt).filter(v => v != null);
+    if (temps.length < 3) continue;
+    const mean = temps.reduce((a,b) => a+b, 0) / temps.length;
+    const stddev = Math.sqrt(temps.reduce((a,v) => a+(v-mean)**2, 0) / temps.length);
+
+    // Gas normalised by heating degree
+    let gasSum = 0, dtSum = 0;
+    for (const p of win) {
+      if (p.gas == null || p.out == null) continue;
+      const dt = INDOOR_SET - p.out;
+      if (dt <= 0) continue;
+      gasSum += p.gas; dtSum += dt;
+    }
+    if (dtSum === 0) continue;
+    const gasNorm = gasSum / dtSum;
+
+    windows.push({ ts: timeline[i].ts, stability: stddev, gasNorm });
+  }
+
+  if (windows.length < 10) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
+
+  // Split into first/second half for trend
+  const half = Math.floor(windows.length / 2);
+  const avg  = (arr, k) => arr.reduce((s,v) => s + v[k], 0) / arr.length;
+  const s1   = avg(windows.slice(0, half), 'stability');
+  const s2   = avg(windows.slice(half),    'stability');
+  const g1   = avg(windows.slice(0, half), 'gasNorm');
+  const g2   = avg(windows.slice(half),    'gasNorm');
+  const dStability = ((s1 - s2) / Math.max(s1, 0.001) * 100).toFixed(1); // positive = improved
+  const dGas       = ((g2 - g1) / Math.max(g1, 0.001) * 100).toFixed(1); // positive = more gas
+
+  // Insight
+  let insight = null;
+  const ds = parseFloat(dStability), dg = parseFloat(dGas);
+  if (Math.abs(ds) < 5 && dg > 5)
+    insight = { type:'warn', key:'ceInsightGasNoComfort' };
+  else if (ds > 5 && Math.abs(dg) < 10)
+    insight = { type:'good', key:'ceInsightComfortFree' };
+  else if (ds < -5 && dg > 5)
+    insight = { type:'warn', key:'ceInsightBothWorse' };
+  else
+    insight = { type:'info', key:'ceInsightStable' };
+
+  return {
+    available: true,
+    windows,
+    dStability, dGas,
+    avgStability: (windows.reduce((s,w) => s+w.stability, 0) / windows.length).toFixed(3),
+    avgGasNorm:   (windows.reduce((s,w) => s+w.gasNorm, 0) / windows.length).toFixed(3),
+    insight,
+  };
+})();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GAS FORECAST
 // Uses gasPerDay (already computed above) to project monthly/annual consumption.
@@ -1536,7 +1722,9 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${condensingPct !== null ? sc('Condensing mode', condensingPct, '% time', badge(condensingCls, condensingLabel)) : ''}
     ${avgFlow ? sc('Avg flow temp', avgFlow, '°C', badge(parseFloat(avgFlow||99)<45?'good':parseFloat(avgFlow||99)<55?'warn':'neutral', parseFloat(avgFlow||99)<45?'Excellent':parseFloat(avgFlow||99)<55?'Condensing':'High')) : ''}
     ${scheduleToday ? sc('Today\'s schedule', scheduleToday) : ''}
+    ${condensingScore ? sc(T('csTitle'), condensingScore.pct, '%', badge(condensingScore.pct >= 90 ? 'good' : condensingScore.pct >= 60 ? 'warn' : 'bad', condensingScore.pct + '% time')) : ''}
   </div>
+  ${condensingScore ? `<p class="note" style="font-size:11px">${T('csNote')}</p>` : ''}
   ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">Program distribution</div>
   <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
   ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
@@ -1588,7 +1776,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Heat Demand vs Outdoor Temperature</div>
     <div class="chart-wrap"><div class="ch-tall"><canvas id="cScatter"></canvas></div><button class="zoom-reset" onclick="resetZoom('cScatter')">⟳ Reset zoom</button></div>
-    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''} <em>Scroll to zoom · Drag to pan · Double-click to reset.</em></p>
+    <p class="note">Each point = one burner-active sample. Red line = linear regression.${scatterRegression?.balancePoint ? ' Balance point (estimated): '+scatterRegression.balancePoint+'°C outdoor.' : ''}${heatLossLine ? ' Green line = theoretical heat loss curve (H='+heatLossCoeff+' kW/°C).' : ''} <em>Scroll to zoom · Drag to pan · Double-click to reset.</em></p>
   </div>` : ''}
   ${hasCurve && corrPairs2.length >= 5 ? `
   <div style="margin-top:18px">
@@ -1596,6 +1784,29 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     <div class="chart-wrap"><div class="ch-tall"><canvas id="cFlowCurve"></canvas></div><button class="zoom-reset" onclick="resetZoom('cFlowCurve')">⟳ Reset zoom</button></div>
     <p class="note">Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT}). Gap between dots and curve indicates deviation from the set curve. <em>Scroll to zoom · Drag to pan · Double-click to reset.</em></p>
   </div>` : ''}
+</div>
+
+<div class="box">
+  <h2>${T('ceTitle')}</h2>
+  ${comfortEfficiency.available ? `
+  <div class="grid" style="margin-bottom:16px">
+    ${sc(T('ceStabilityLabel'), '±'+comfortEfficiency.avgStability, '°C')}
+    ${sc(T('ceGasNormLabel'), comfortEfficiency.avgGasNorm, ' m³/°C·h')}
+    ${sc(T('ceTrendStability'), Math.abs(parseFloat(comfortEfficiency.dStability)) < 5 ? T('ceUnchanged') : parseFloat(comfortEfficiency.dStability) > 0 ? T('ceImproved')+' '+Math.abs(comfortEfficiency.dStability)+'%' : T('ceWorsened')+' '+Math.abs(comfortEfficiency.dStability)+'%', '', badge(parseFloat(comfortEfficiency.dStability) > 5 ? 'good' : parseFloat(comfortEfficiency.dStability) < -5 ? 'bad' : 'neutral', ''))}
+    ${sc(T('ceTrendGas'), Math.abs(parseFloat(comfortEfficiency.dGas)) < 5 ? T('ceUnchanged') : parseFloat(comfortEfficiency.dGas) < 0 ? T('ceImproved')+' '+Math.abs(comfortEfficiency.dGas)+'%' : T('ceWorsened')+' '+Math.abs(comfortEfficiency.dGas)+'%', '', badge(parseFloat(comfortEfficiency.dGas) < -5 ? 'good' : parseFloat(comfortEfficiency.dGas) > 5 ? 'warn' : 'neutral', ''))}
+  </div>
+  ${(() => {
+    const ins = comfortEfficiency.insight;
+    if (!ins) return '';
+    const icon = ins.type==='good' ? '✅' : ins.type==='warn' ? '⚠️' : 'ℹ️';
+    const bg   = ins.type==='good' ? '#f1f8f1' : ins.type==='warn' ? '#fff8e1' : '#e8f4fd';
+    const br   = ins.type==='good' ? '#a5d6a7' : ins.type==='warn' ? '#ffe082' : '#90caf9';
+    return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+T(ins.key)+'</span></div>';
+  })()}` : `
+  <div style="padding:18px 16px;background:#f8f9fa;border-radius:8px;border:1px dashed #ddd;text-align:center;color:#888;font-size:13px">
+    <div style="font-size:24px;margin-bottom:8px">📊</div>
+    <div>${T('ceNotEnoughData', {need: comfortEfficiency.daysNeed, have: comfortEfficiency.daysHave})}</div>
+  </div>`}
 </div>
 
 <div class="box">
@@ -1869,6 +2080,20 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
       borderColor:'#ef5350',
       backgroundColor:'transparent',
       borderWidth:2,
+      pointRadius:0,
+      tension:0
+    });
+  }
+  const hlLine=${JSON.stringify(heatLossLine)};
+  if(hlLine){
+    datasets.push({
+      label:${JSON.stringify(heatLossLine ? 'Heat loss Q=H\u00d7\u0394T (H='+heatLossCoeff+' kW/\u00b0C)' : '')},
+      data:hlLine,
+      type:'line',
+      borderColor:'rgba(67,160,71,0.85)',
+      backgroundColor:'transparent',
+      borderWidth:2,
+      borderDash:[5,3],
       pointRadius:0,
       tension:0
     });

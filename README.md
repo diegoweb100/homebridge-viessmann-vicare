@@ -1033,6 +1033,12 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.60] - 2026-03-17
+- feat: Heat Demand scatter now includes theoretical heat loss line Q=H×(Ti-To) in green
+- feat: Estimated condensing score (return temp model) added to HC0 section
+- feat: Comfort vs Efficiency section — shows placeholder with data accumulation progress when < 30 days
+- fix: i18n strings — escaped apostrophes in Italian strings
+
 ### [2.0.59] - 2026-03-17
 - feat: i18n system — English and Italian with --lang CLI param (extensible to any language)
 - feat: all section titles, KPI labels and insight strings translated
