@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.60
+# Complete Setup Guide - v2.0.61
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.61 (2026-03-17)
+- feat: full i18n coverage — all strings translated, no remaining hardcoded EN text
 
 ### v2.0.60 (2026-03-17)
 - feat: heat loss line on scatter, condensing score, Comfort vs Efficiency section with data accumulation guard

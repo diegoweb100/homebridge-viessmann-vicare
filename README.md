@@ -1033,6 +1033,12 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.61] - 2026-03-17
+- feat: complete i18n — all report strings translated (section headers, KPI labels, badges, chart notes, boiler notes, forecast, device messages)
+- fix: self-referencing T() calls inside STRINGS block
+- fix: broken forecast note template literal
+- fix: unescaped apostrophes in EN/IT string literals
+
 ### [2.0.60] - 2026-03-17
 - feat: Heat Demand scatter now includes theoretical heat loss line Q=H×(Ti-To) in green
 - feat: Estimated condensing score (return temp model) added to HC0 section
