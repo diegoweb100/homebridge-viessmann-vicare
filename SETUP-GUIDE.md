@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.63
+# Complete Setup Guide - v2.0.64
 
 ## Overview
 
@@ -1228,9 +1228,15 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.64 (2026-03-18)
+- fix: version bump
+
 ### v2.0.63 (2026-03-18)
 - fix: ReferenceError T() in browser JS — grafici non visibili con --lang it
 - fix: thermal efficiency note tradotta
+
+### v2.0.63 (2026-03-18)
+- fix: SyntaxError in browser — chart labels missing quotes around translated strings
 
 ### v2.0.62 (2026-03-18)
 - fix: report server — Language card always visible, Advanced panel fields cleaned up

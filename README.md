@@ -1033,10 +1033,18 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.64] - 2026-03-18
+- fix: CSV cleanup — 4 rows with invalid program='heating' (from first run on 10/03) corrected to empty string
+- fix: version bump (v2.0.63 was already published)
+
 ### [2.0.63] - 2026-03-18
 - fix: ReferenceError T() in browser — chart labels now evaluated at build time via \${} wrapper
 - fix: tooltip callbacks use pre-injected _tooltip object with _tt() helper
 - fix: thermal efficiency note still hardcoded in Energy Summary section
+
+### [2.0.63] - 2026-03-18
+- fix: SyntaxError "Unexpected identifier" in browser — chart labels T() values were emitted without quotes (label:Temp. ambiente (°C) instead of label:"Temp. ambiente (°C)")
+- fix: all 40 chart label and axis T() expressions now correctly wrapped in quotes in generated HTML
 
 ### [2.0.62] - 2026-03-18
 - fix: report server UI — Language selector now always visible as dedicated card (was hidden inside Advanced panel)
