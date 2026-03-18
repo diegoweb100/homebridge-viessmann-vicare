@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.61
+# Complete Setup Guide - v2.0.62
 
 ## Overview
 
@@ -1227,6 +1227,17 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.62 (2026-03-18)
+- fix: report server — Language card always visible, Advanced panel fields cleaned up
+
+### v2.0.62 (2026-03-18)
+- fix: complete i18n — zero English strings remaining in Italian report
+- fix: report server language selector layout
+
+### v2.0.62 (2026-03-18)
+- feat: 100% complete i18n — every visible string translated in Italian report
+- fix: chart labels, schedule labels, badges, condensing unit, period header
 
 ### v2.0.61 (2026-03-17)
 - feat: full i18n coverage — all strings translated, no remaining hardcoded EN text

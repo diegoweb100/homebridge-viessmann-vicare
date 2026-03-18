@@ -1033,6 +1033,26 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.62] - 2026-03-18
+- fix: report server UI — Language selector now always visible as dedicated card (was hidden inside Advanced panel)
+- fix: Advanced panel — curve slope and shift now have separate labeled fields
+- fix: report server UI card order: Period → Installation → Language → Advanced
+
+### [2.0.62] - 2026-03-18
+- fix: all remaining hardcoded English strings in IT report (Cycle performance, Modulation & gas, Burner activity by hour, Daily gas consumption, Flow temperature note, Reset zoom, trend: label)
+- fix: report server language selector moved to correct position in Advanced panel (col 1, below Boiler KW)
+
+### [2.0.62] - 2026-03-18
+- feat: complete i18n — 100% of visible text translated, zero English strings in Italian report
+- feat: all Chart.js dataset labels translated (Room temp, Flow temp, Heat demand, Heating curve, Condensing limit, Trend, etc.)
+- feat: program schedule labels translated (Normal→Normale, Reduced→Ridotto, Heating→Riscaldamento, Off→Spento)
+- feat: report header period/generated/samples line translated
+- feat: heatmap legend (Low/High) translated
+- fix: condensing mode/score unit shows "100% del tempo" correctly
+- fix: houseEff comparison uses CSS class instead of translated label
+- fix: effLabel badge uses T() for High/Severe
+- fix: report server language selector in correct position
+
 ### [2.0.61] - 2026-03-17
 - feat: complete i18n — all report strings translated (section headers, KPI labels, badges, chart notes, boiler notes, forecast, device messages)
 - fix: self-referencing T() calls inside STRINGS block

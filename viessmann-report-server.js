@@ -111,8 +111,10 @@ input,select{background:var(--bg);border:1px solid var(--border);border-radius:6
 input:focus,select:focus{outline:none;border-color:var(--accent)}
 .custom-row input{max-width:80px}
 .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:420px){.field-grid{grid-template-columns:1fr}}
+@media(max-width:560px){.field-grid{grid-template-columns:1fr}}
+.field{margin-bottom:0}
 .field label{display:block;font-size:11px;font-family:'Space Mono',monospace;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.field+.field{margin-top:14px}
 .hint{font-size:10px;color:var(--muted);margin-top:4px;opacity:.7}
 .adv-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-family:'Space Mono',monospace;color:var(--muted);user-select:none;transition:color .15s}
 .adv-toggle:hover{color:var(--text)}
@@ -146,6 +148,7 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
   <p>History Report Generator &nbsp;·&nbsp; ${today}</p>
 </header>
 
+<!-- 1. Period -->
 <div class="card">
   <div class="section-label">Period</div>
   <div class="presets">
@@ -161,6 +164,7 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
   </div>
 </div>
 
+<!-- 2. Installation -->
 <div class="card">
   <div class="section-label">Installation</div>
   <div class="field">
@@ -169,32 +173,40 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
   </div>
 </div>
 
+<!-- 3. Language — always visible -->
+<!-- 4. Advanced (collapsed) -->
 <div class="card">
   <div class="adv-toggle" onclick="toggleAdv()">
     <span class="arr" id="arr">&#9654;</span>
     Advanced parameters (boiler &amp; gas)
   </div>
   <div id="adv-fields">
-    <div class="field-grid">
+    <div class="field-grid" style="margin-top:16px">
       <div class="field">
         <label>Boiler nominal power</label>
-        <input type="number" id="boilerKW" placeholder="e.g. 19" min="0" max="200" step="0.5">
+        <input type="number" id="boilerKW" placeholder="e.g. 25" min="0" max="200" step="0.5">
         <div class="hint">kW — enables heat demand &amp; sizing</div>
+        <label style="margin-top:14px">Language</label>
+        <select id="lang" style="margin-top:6px">
+          <option value="en">🌐 English</option>
+          <option value="it">🇮🇹 Italiano</option>
+        </select>
+        <div class="hint">Report output language</div>
       </div>
       <div class="field">
         <label>Design outdoor temp</label>
         <input type="number" id="designTemp" placeholder="-7" min="-30" max="10" step="1">
-        <input type="number" id="curveSlope" placeholder="Curve slope (e.g. 1.3)" min="0.2" max="3.5" step="0.1" style="margin-top:6px">
-        <input type="number" id="curveShift" placeholder="Curve shift (e.g. 6)" min="-13" max="40" step="1" style="margin-top:4px">
         <div class="hint">&#176;C — for peak load calculation</div>
+        <label style="margin-top:14px">Heating curve slope</label>
+        <input type="number" id="curveSlope" placeholder="e.g. 1.3" min="0.2" max="3.5" step="0.1" style="margin-top:6px">
+        <div class="hint">e.g. 1.3 — from ViCare app</div>
+        <label style="margin-top:10px">Heating curve shift</label>
+        <input type="number" id="curveShift" placeholder="e.g. 6" min="-13" max="40" step="1" style="margin-top:6px">
+        <div class="hint">e.g. 6 — from ViCare app</div>
       </div>
       <div class="field">
         <label>Gas price</label>
         <input type="number" id="gasPrice" placeholder="0.90" min="0" max="10" step="0.01">
-        <select id="lang" style="margin-top:8px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;width:100%">
-          <option value="en">🌐 English</option>
-          <option value="it">🇮🇹 Italiano</option>
-        </select>
         <div class="hint">&#8364;/m&#179; — for cost forecast</div>
       </div>
     </div>
@@ -228,7 +240,7 @@ async function generate(){
   if(boilerKW)p.set('boilerKW',boilerKW);
   if(designTemp)p.set('designTemp',designTemp);
   if(curveSlope)p.set('curveSlope',curveSlope);
-  if(curveShift)p.set('curveShift',curveShift);
+  if(curveShift!=='')p.set('curveShift',curveShift);
   if(gasPrice)p.set('gasPrice',gasPrice);
   if(lang)p.set('lang',lang);
   try{
@@ -248,8 +260,7 @@ async function generate(){
 }
 </script>
 </body>
-</html>`;
-}
+</html>`;}
 
 // ── HTTP Server ────────────────────────────────────────────────────────────
 

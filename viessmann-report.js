@@ -198,7 +198,7 @@ const STRINGS = {
     thermalEffTitle:         'THERMAL EFFICIENCY (HEAT PRODUCED / GAS INPUT × PCS 10.55 KWH/M³)',
     thermalEffNote:          'Thermal efficiency >100% is possible for condensing boilers (latent heat recovery). Values >105% may indicate rounding in Viessmann API data.',
     forecastNote:            'Annual estimate requires at least {min} days of gas data (currently {n}). Run with --days {min} or more. Use --gasPriceEur to set your tariff.',
-    forecastProjectionNote:  'Projection based on last {n} day(s) of data · gas price: €{price}/m³ · trend: {trend}',
+    forecastProjectionNote:  'Projection based on last {n} day(s) of data · gas price: €{price}/m³ · {trend}',
     forecastTrendRising:     '↑ Rising',
     forecastTrendFalling:    '↓ Falling',
     forecastTrendStable:     '→ Stable',
@@ -254,6 +254,90 @@ const STRINGS = {
 
     balancePoint:       'Balance point (estimated): {bp}°C outdoor.',
     hlLineLabelShort:   'Green line = theoretical heat loss curve (H={h} kW/°C).',
+
+
+    condensingTimePct:  '{pct}% time',
+    atOutdoorTemp:      'at {temp}°C outdoor',
+    hoverDetails:       'Passa il cursore per dettagli.',
+    noMessagesFile:     'No messages file found yet. Messages will appear here once the plugin writes',
+
+
+    oneFilePerDevice:   '(one file per device per installation).',
+
+    periodLabel:        'Period',
+    generatedLabel:     'Generated',
+    lastNDays:          'last {n} days',
+    samplesLabel:       '{n} samples',
+    progHeating:        'Heating',
+    progReduced:        'Reduced',
+    progNormal:         'Normal',
+    progOff:            'Off',
+    progComfort:        'Comfort',
+
+
+    // ── Chart.js dataset labels ───────────────────────────────────────────
+    chartRoomTemp:        'Room temp (°C)',
+    chartHC0Setpoint:     'HC0 setpoint (°C)',
+    chartFlowTemp:        'Flow temp (°C)',
+    chartDHWTemp:         'DHW temp (°C)',
+    chartDHWSetpoint:     'DHW setpoint (°C)',
+    chartOutdoorTemp:     'Outdoor temp (°C)',
+    chartOutdoorHum:      'Outdoor humidity (%)',
+    chartModulation:      'Modulation (%)',
+    chartBurnerBar:       'Burner (0/100)',
+    chartBurnerOnOff:     'Burner (1=ON 0=OFF)',
+    chartHeatDemand:      'Heat demand (kW)',
+    chartTrend:           'Trend',
+    chartHeatLossLine:    'Heat loss Q=H\u00d7\u0394T (H={h} kW/\u00b0C)',
+    chartActualFlow:      'Actual flow temp (°C)',
+    chartHeatingCurve:    'Heating curve (slope={slope}, shift={shift})',
+    chartCondensingLimit: 'Condensing limit (55°C)',
+    chartThermalEff:      'Thermal efficiency (%)',
+    chartSetpoint:        'Setpoint (°C)',
+    chartHeatingM3:       'Heating (m\u00b3)',
+    chartDHWM3:           'DHW (m\u00b3)',
+    chartTotalM3:         'Total (m\u00b3)',
+    chartCycles:          'Cycles',
+    chartPV:              '\u2600\ufe0f PV (W)',
+    chartPVProd:          'PV production (W)',
+    chartBattLevel:       'Battery level (%)',
+    chartBattCharge:      '\uD83D\uDD0B Batt. charging (W)',
+    chartBattChargeW:     'Charging (W)',
+    chartBattDischarge:   'Discharging (W)',
+    chartGridDraw:        '\uD83D\uDD0C Grid draw (W)',
+    chartWallbox:         '\uD83D\uDE97 Wallbox (W)',
+    chartWallboxW:        'Wallbox power (W)',
+
+
+    // ── Program / schedule labels ─────────────────────────────────────────
+    unstable:           'Unstable',
+    progNormal:         'Normal',
+    progComfort:        'Comfort',
+    progReduced:        'Reduced',
+    progOff:            'Off',
+    progHeating:        'Heating',
+    legendNormal:       'Normal',
+    legendComfort:      'Comfort',
+    legendReduced:      'Reduced',
+    legendOff:          'Off',
+    periodLabel:        'Period',
+    generatedLabel:     'Generated',
+    samplesLabel:       '{n} samples',
+    lastNDays:          'last {n} days',
+
+
+    // ── Axis labels & tooltip strings ────────────────────────────────────
+    axisOutdoorTemp:    'Outdoor temperature (°C)',
+    axisHeatDemand:     'Heat demand (kW)',
+    axisFlowTemp:       'Flow temperature (°C)',
+    axisAvgW:           'Avg W',
+    tooltipOutdoor:     'outdoor: {x}°C  demand: {y} kW',
+    tooltipFlowActual:  'outdoor: {x}°C  flow: {y}°C',
+    tooltipFlowCurve:   'curve: {y}°C at {x}°C outdoor',
+
+
+    axisCycles:         '# cycles',
+    axisM3:             'm³',
 
     recTitle:           '💡 Recommended actions',
     recImpact:          'Estimated impact',
@@ -355,8 +439,7 @@ const STRINGS = {
     balancePoint:       ' Balance point (stimato): {bp}°C esterna.',
     flowCurveTitle:     '🌡️ Temp. Mandata vs Esterna — Reale vs Curva',
     flowCurveNote:      'Punti blu = temperatura mandata misurata con bruciatore attivo. Linea arancione = curva programmata (pendenza={slope}, livello={shift}). Il gap indica la deviazione dalla curva impostata. <em>Scroll per zoom · Trascina per spostare · Doppio click per reset.</em>',
-    zoomReset:          '⟳ Reset zoom',
-    scrollZoom:         'Scroll per zoom · Trascina · Doppio click per reset.',
+        zoomReset:          '⟳ Reimposta zoom', scrollZoom:         'Scroll per zoom · Trascina · Doppio click per reset.',
 
     // ── KPI label lookup ────────────────────────────────────────────────────
     kpiLabels: {
@@ -440,7 +523,7 @@ const STRINGS = {
     programDistKey:          'Distribuzione programmi',
     burnerBarsTitle:         'Istogramma durata cicli (campionato)',
     heatmapTitle:            '🕐 Attività bruciatore per ora del giorno',
-    heatmapNote:             'Ogni cella = % di campioni in quell\'ora con bruciatore ON. Più scuro = più attivo. Hover per dettagli.',
+    heatmapNote:             'Ogni cella = % di campioni in quell\'ora con bruciatore ON. Più scuro = più attivo. Passa il cursore per dettagli.',
     heatmapLow:              'Basso',
     heatmapHigh:             'Alto',
     heatmapBurnerPct:        'Bruciatore ON %',
@@ -456,7 +539,7 @@ const STRINGS = {
     thermalEffTitle:         'EFFICIENZA TERMICA (CALORE PRODOTTO / GAS × PCS 10.55 KWH/M³)',
     thermalEffNote:          'Efficienza >100% possibile nelle caldaie a condensazione (recupero calore latente). Valori >105% possono indicare arrotondamenti nei dati API Viessmann.',
     forecastNote:            'La stima annuale richiede almeno {min} giorni di dati gas (attualmente {n}). Usa --days {min} o più. Usa --gasPriceEur per impostare la tariffa.',
-    forecastProjectionNote:  'Proiezione basata sugli ultimi {n} giorni · prezzo gas: €{price}/m³ · trend: {trend}',
+    forecastProjectionNote:  'Proiezione basata sugli ultimi {n} giorni · prezzo gas: €{price}/m³ · {trend}',
     forecastTrendRising:     '↑ In aumento',
     forecastTrendFalling:    '↓ In calo',
     forecastTrendStable:     '→ Stabile',
@@ -512,6 +595,90 @@ const STRINGS = {
 
     balancePoint:       'Punto di bilanciamento (stimato): {bp}°C esterna.',
     hlLineLabelShort:   'Linea verde = curva di dispersione termica teorica (H={h} kW/°C).',
+
+
+    condensingTimePct:  '{pct}% del tempo',
+    atOutdoorTemp:      'a {temp}°C esterna',
+    hoverDetails:       'Passa il cursore per dettagli.',
+    noMessagesFile:     'File messaggi non ancora creato. I messaggi appariranno qui una volta che il plugin scriverà il file',
+
+
+    oneFilePerDevice:   '(un file per dispositivo per installazione).',
+
+    periodLabel:        'Periodo',
+    generatedLabel:     'Generato',
+    lastNDays:          'ultimi {n} giorni',
+    samplesLabel:       '{n} campioni',
+    progHeating:        'Riscaldamento',
+    progReduced:        'Ridotto',
+    progNormal:         'Normale',
+    progOff:            'Off',
+    progComfort:        'Comfort',
+
+
+    // ── Chart.js dataset labels ───────────────────────────────────────────
+    chartRoomTemp:        'Temp. ambiente (°C)',
+    chartHC0Setpoint:     'Setpoint HC0 (°C)',
+    chartFlowTemp:        'Temp. mandata (°C)',
+    chartDHWTemp:         'Temp. ACS (°C)',
+    chartDHWSetpoint:     'Setpoint ACS (°C)',
+    chartOutdoorTemp:     'Temp. esterna (°C)',
+    chartOutdoorHum:      'Umidità esterna (%)',
+    chartModulation:      'Modulazione (%)',
+    chartBurnerBar:       'Bruciatore (0/100)',
+    chartBurnerOnOff:     'Bruciatore (1=ON 0=OFF)',
+    chartHeatDemand:      'Domanda termica (kW)',
+    chartTrend:           'Tendenza',
+    chartHeatLossLine:    'Dispersione termica Q=H\u00d7\u0394T (H={h} kW/\u00b0C)',
+    chartActualFlow:      'Temp. mandata reale (°C)',
+    chartHeatingCurve:    'Curva riscaldamento (pendenza={slope}, livello={shift})',
+    chartCondensingLimit: 'Limite condensazione (55°C)',
+    chartThermalEff:      'Efficienza termica (%)',
+    chartSetpoint:        'Setpoint (°C)',
+    chartHeatingM3:       'Riscaldamento (m\u00b3)',
+    chartDHWM3:           'ACS (m\u00b3)',
+    chartTotalM3:         'Totale (m\u00b3)',
+    chartCycles:          'Cicli',
+    chartPV:              '\u2600\ufe0f FV (W)',
+    chartPVProd:          'Produzione FV (W)',
+    chartBattLevel:       'Livello batteria (%)',
+    chartBattCharge:      '\uD83D\uDD0B Carica batt. (W)',
+    chartBattChargeW:     'Carica (W)',
+    chartBattDischarge:   'Scarica (W)',
+    chartGridDraw:        '\uD83D\uDD0C Prelievo rete (W)',
+    chartWallbox:         '\uD83D\uDE97 Wallbox (W)',
+    chartWallboxW:        'Potenza Wallbox (W)',
+
+
+    // ── Program / schedule labels ─────────────────────────────────────────
+    unstable:           'Instabile',
+    progNormal:         'Normale',
+    progComfort:        'Comfort',
+    progReduced:        'Ridotto',
+    progOff:            'Spento',
+    progHeating:        'Riscaldamento',
+    legendNormal:       'Normale',
+    legendComfort:      'Comfort',
+    legendReduced:      'Ridotto',
+    legendOff:          'Spento',
+    periodLabel:        'Periodo',
+    generatedLabel:     'Generato',
+    samplesLabel:       '{n} campioni',
+    lastNDays:          'ultimi {n} giorni',
+
+
+    // ── Axis labels & tooltip strings ────────────────────────────────────
+    axisOutdoorTemp:    'Temperatura esterna (°C)',
+    axisHeatDemand:     'Domanda termica (kW)',
+    axisFlowTemp:       'Temperatura mandata (°C)',
+    axisAvgW:           'Media W',
+    tooltipOutdoor:     'esterna: {x}°C  domanda: {y} kW',
+    tooltipFlowActual:  'esterna: {x}°C  mandata: {y}°C',
+    tooltipFlowCurve:   'curva: {y}°C a {x}°C esterna',
+
+
+    axisCycles:         '# cicli',
+    axisM3:             'm³',
 
     recTitle:           '💡 Azioni consigliate',
     recImpact:          'Impatto stimato',
@@ -668,7 +835,7 @@ const realAvgDur     = avgCycleDurReal;
 //   2–4/h = acceptable
 //   > 4/h = high cycling concern
 const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : parseFloat(sph) < 4 ? 'warn' : 'bad') : 'neutral';
-const effLabel = sph ? (parseFloat(sph) < 2 ? T('badgeNormal') : parseFloat(sph) < 4 ? 'High' : 'Severe') : 'N/A';
+const effLabel = sph ? (parseFloat(sph) < 2 ? T('badgeNormal') : parseFloat(sph) < 4 ? T('badgeHigh') : T('badgeSevere')) : 'N/A';
 
 // --- Flow temperature stats (from hc0 rows) ---
 const avgFlow  = avg(hcRows, 'flow_temp');
@@ -847,17 +1014,17 @@ function buildScheduleBarHtml() {
   const bars = segments.map(s => {
     const pct = (s.mins / totalSegMins * 100).toFixed(3);
     const color = COLORS[s.mode] || COLORS.reduced;
-    const label = s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
+    const modeKey = 'prog'+s.mode.charAt(0).toUpperCase()+s.mode.slice(1); const label = T(modeKey) || s.mode.charAt(0).toUpperCase()+s.mode.slice(1);
     const hrs = Math.round(s.mins / 60 * 10) / 10;
     return `<div title="${label} (${hrs}h)" style="width:${pct}%;background:${color};height:100%"></div>`;
   }).join('');
 
   const legend = Object.entries(COLORS).map(([mode, color]) =>
-    `<span style="font-size:10px;color:#888"><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:3px;vertical-align:middle"></span>${mode.charAt(0).toUpperCase()+mode.slice(1)}</span>`
+    `<span style="font-size:10px;color:#888"><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:3px;vertical-align:middle"></span>${T('legend'+mode.charAt(0).toUpperCase()+mode.slice(1)) || mode.charAt(0).toUpperCase()+mode.slice(1)}</span>`
   ).join('<span style="margin:0 8px"></span>');
 
   return `<div style="margin-top:6px">
-    <div style="font-size:11px;color:#888;margin-bottom:3px">Heating schedule</div>
+    <div style="font-size:11px;color:#888;margin-bottom:3px">${T('heatingScheduleLabel')}</div>
     <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;width:100%">${bars}</div>
     <div style="display:flex;gap:12px;margin-top:4px;flex-wrap:wrap">${legend}</div>
   </div>`;
@@ -967,10 +1134,10 @@ const heatLossCoeff = (heatDemandKW !== null && deltaT !== null && deltaT > 0)
 function houseEffRating(coeff) {
   if (coeff === null) return null;
   const c = parseFloat(coeff);
-  if (c < 0.25) return { label: 'Excellent', cls: 'good' };
-  if (c < 0.40) return { label: 'Good',      cls: 'good' };
-  if (c < 0.60) return { label: 'Average',   cls: 'warn' };
-  return             { label: 'Poor',        cls: 'bad'  };
+  if (c < 0.25) return { label: T('excellent'), cls: 'good' };
+  if (c < 0.40) return { label: T('good'),      cls: 'good' };
+  if (c < 0.60) return { label: T('average'),   cls: 'warn' };
+  return             { label: T('poor'),        cls: 'bad'  };
 }
 const houseEff = houseEffRating(heatLossCoeff);
 
@@ -1014,8 +1181,8 @@ if (highFlowTemp)
   insights.push({ type:'warn', text: T('insightHighFlow', {flow: avgFlow, out: avgOutsideNum?.toFixed(1)}) });
 if (boilerOversized)
   insights.push({ type:'info', text: T('insightOversized', {kw: BOILER_KW, peak: peakLoadKW}) });
-if (houseEff && (houseEff.label === 'Good' || houseEff.label === 'Excellent'))
-  insights.push({ type:'good', text: T('insightGoodHouse', {rating: T(houseEff.label.toLowerCase()), coeff: heatLossCoeff}) });
+if (houseEff && (houseEff.cls === 'good'))
+  insights.push({ type:'good', text: T('insightGoodHouse', {rating: houseEff.label, coeff: heatLossCoeff}) });
 if (!hasBoilerKW)
   insights.push({ type:'info', text: T('insightAddBoilerKW') });
 if (insights.length === 0 && hasBoilerKW)
@@ -1028,9 +1195,9 @@ if (roomTemps.length >= 10) {
   const mean = roomTemps.reduce((a,b) => a+b, 0) / roomTemps.length;
   comfortStddev = Math.sqrt(roomTemps.reduce((a,v) => a + (v-mean)**2, 0) / roomTemps.length).toFixed(2);
   const sd = parseFloat(comfortStddev);
-  if (sd < 0.2)      { comfortRating = 'Excellent'; comfortCls = 'good'; }
-  else if (sd < 0.5) { comfortRating = 'Good';      comfortCls = 'good'; }
-  else               { comfortRating = 'Unstable';  comfortCls = 'warn'; }
+  if (sd < 0.2)      { comfortRating = T('excellent'); comfortCls = 'good'; }
+  else if (sd < 0.5) { comfortRating = T('good');      comfortCls = 'good'; }
+  else               { comfortRating = T('unstable');  comfortCls = 'warn'; }
 }
 
 // ── Cycling severity score ───────────────────────────────────────────────────
@@ -1178,9 +1345,9 @@ if (usePairs.length >= 20) {
   heatCurveCorr = den > 0 ? (num/den).toFixed(2) : null;
   if (heatCurveCorr !== null) {
     const c = parseFloat(heatCurveCorr);
-    if (c < -0.3)      { heatCurveBehaviour = 'Weather-compensated ✓'; heatCurveCls = 'good'; }
-    else if (c < 0.1)  { heatCurveBehaviour = 'Fixed flow temp';        heatCurveCls = 'warn'; }
-    else               { heatCurveBehaviour = 'Check curve config';     heatCurveCls = 'bad';  }
+    if (c < -0.3)      { heatCurveBehaviour = T('weatherComp'); heatCurveCls = 'good'; }
+    else if (c < 0.1)  { heatCurveBehaviour = T('fixedFlow');        heatCurveCls = 'warn'; }
+    else               { heatCurveBehaviour = T('checkCurve');     heatCurveCls = 'bad';  }
     if (c >= 0.1)
       insights.push({ type:'warn', text: T('insightCurveMiscfg', {r: heatCurveCorr}) });
     else if (c > -0.3 && c < 0.1)
@@ -1254,7 +1421,7 @@ const histData = histBuckets.map(b => cycles.filter(d => d >= b.min && d < b.max
 const programs = {};
 hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program]||0)+1; });
 const totalProg = Object.values(programs).reduce((a,b)=>a+b,0);
-const progDist = Object.entries(programs).map(([k,v]) => ({ label: k.charAt(0).toUpperCase()+k.slice(1), pct: ((v/totalProg)*100).toFixed(0) }));
+const progDist = Object.entries(programs).map(([k,v]) => { const key = 'prog'+k.charAt(0).toUpperCase()+k.slice(1); return { label: T(key) || k.charAt(0).toUpperCase()+k.slice(1), cssKey: k, pct: ((v/totalProg)*100).toFixed(0) }; });
 
 function subsample(arr, max=200) {
   if (arr.length <= max) return arr;
@@ -1812,7 +1979,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 <body>
 <header>
   <h1>${T('reportTitle')}</h1>
-  <p>Period: ${periodStart} — ${periodEnd} &nbsp;(last ${DAYS} days) &nbsp;|&nbsp; Generated: ${genAt} &nbsp;|&nbsp; ${filtered.length} samples</p>
+  <p>${T('periodLabel')}: ${periodStart} — ${periodEnd} &nbsp;(${T('lastNDays',{n:DAYS})}) &nbsp;|&nbsp; ${T('generatedLabel')}: ${genAt} &nbsp;|&nbsp; ${T('samplesLabel',{n:filtered.length})}</p>
 </header>
 <div class="wrap">
 
@@ -1827,9 +1994,9 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 <div class="box">
   <h2>${T('sectionBoiler')}</h2>
   <!-- KPI row 1: real cycle metrics from API counter -->
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Cycle performance (from API counters — precise)</div>
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('cyclePerformanceTitle')}</div>
   <div class="grid" style="margin-bottom:6px">
-    ${realCycleCount !== null ? sc('Cycles in period', realCycleCount, '', badge(effCls, effLabel)) : ''}
+    ${realCycleCount !== null ? sc(T('cyclesInPeriod'), realCycleCount, '', badge(effCls, effLabel)) : ''}
     ${sph ? sc('Starts/hour', sph, '/h', badge(effCls, parseFloat(sph)<2?T('badgeNormal'):parseFloat(sph)<4?T('badgeHigh'):T('badgeSevere'))) : ''}
     ${realAvgDur ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<3?'bad':parseFloat(realAvgDur)<6?'warn':'good', parseFloat(realAvgDur)<3?T('badgeVeryShort'):parseFloat(realAvgDur)<6?T('badgeShort'):T('badgeOK'))) : ''}
     ${burnerRuntimePct ? sc('Burner runtime', burnerRuntimePct, '%', badge(parseFloat(burnerRuntimePct)<15?'good':parseFloat(burnerRuntimePct)<40?'warn':'bad', parseFloat(burnerRuntimePct)<15?T('badgeLowDemand'):parseFloat(burnerRuntimePct)<40?T('badgeNormal'):T('badgeHigh'))) : ''}
@@ -1839,7 +2006,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <p class="note" style="margin-bottom:14px">${T('cycleApiNoteShort')}</p>
 
   <!-- KPI row 2: modulation + gas -->
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">Modulation & gas (period)</div>
+  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('modGasTitle')}</div>
   <div class="grid" style="margin-bottom:6px">
     ${sc('Avg modulation (active)', avgMod, '%', badge(parseFloat(avgMod||0)<15?'warn':'good', parseFloat(avgMod||0)<15?T('badgeLowMod'):T('badgeOK')))}
     ${sc('Max modulation', maxMod, '%')}
@@ -1856,19 +2023,19 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
 
   <!-- Hourly heatmap -->
   <div style="margin-top:22px">
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">🕐 Burner activity by hour of day</div>
-    <p class="note" style="margin-bottom:8px">Each cell = % of snapshots in that hour where burner was ON. Darker = more active. Hover for details.</p>
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">${T('heatmapTitle')}</div>
+    <p class="note" style="margin-bottom:8px">${T('heatmapNote')}</p>
     <div class="hmap" id="hmapCells"></div>
     <div class="hmap-lbl">${Array.from({length:24},(_,h)=>`<span>${String(h).padStart(2,'0')}</span>`).join('')}</div>
     <div style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:10px;color:#aaa">
       <span>${T('heatmapLow')}</span>
       ${[0,20,40,60,80,100].map(v=>`<div style="width:18px;height:12px;border-radius:2px;background:${v===0?'#f0f0f0':`rgba(230,81,0,${(v/100)*0.9+0.1})`}"></div>`).join('')}
-      <span>High</span>
+      <span>${T('heatmapHigh')}</span>
       <span style="margin-left:12px;color:#aaa">${T('heatmapBurnerPct')}</span>
     </div>
   </div>
 
-  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">⛽ Daily gas consumption (m³)</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">${T('gasChartNote')}</p></div>` : ''}
+  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">${T('gasChartTitle')}</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">${T('gasChartNote')}</p></div>` : ''}
 
   <!-- Daily efficiency from CSV (v2.0.50+) -->
   ${dailyEfficiency.hasData ? `
@@ -1885,16 +2052,16 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
     ${sc('Avg room temp', avgRoom, '°C')}
     ${sc('Avg setpoint', avgTarget, '°C')}
     ${maxFlow ? sc('Max flow temp', maxFlow, '°C') : ''}
-    ${condensingPct !== null ? sc('Condensing mode', condensingPct, '% time', badge(condensingCls, condensingLabel)) : ''}
+    ${condensingPct !== null ? sc(T('condensingMode'), condensingPct, LANG==='it'?'% del tempo':'% time', badge(condensingCls, condensingLabel)) : ''}
     ${avgFlow ? sc('Avg flow temp', avgFlow, '°C', badge(parseFloat(avgFlow||99)<45?'good':parseFloat(avgFlow||99)<55?'warn':'neutral', parseFloat(avgFlow||99)<45?T('badgeExcellent'):parseFloat(avgFlow||99)<55?T('badgeCondensing'):T('badgeHigh'))) : ''}
     ${scheduleToday ? sc(T('todayScheduleKey'), scheduleToday) : ''}
-    ${condensingScore ? sc(T('csTitle'), condensingScore.pct, '%', badge(condensingScore.pct >= 90 ? 'good' : condensingScore.pct >= 60 ? 'warn' : 'bad', condensingScore.pct + '% time')) : ''}
+    ${condensingScore ? sc(T('csTitle'), condensingScore.pct, '%', badge(condensingScore.pct >= 90 ? 'good' : condensingScore.pct >= 60 ? 'warn' : 'bad', condensingScore.pct + (LANG==='it'?'% del tempo':'% time'))) : ''}
   </div>
   ${condensingScore ? `<p class="note" style="font-size:11px">${T('csNote')}</p>` : ''}
   ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">${T('programDistKey')}</div>
-  <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
+  <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.cssKey||p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
   ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
-  ${flowVals.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cFlow"></canvas></div><p class="note">Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.</p>` : ''}
+  ${flowVals.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cFlow"></canvas></div><p class="note">${T('flowTempChartNote')}</p>` : ''}
 </div>
 
 <div class="box">
@@ -1902,12 +2069,12 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   <div class="grid">
     ${heatDemandKW ? sc('Avg heat demand', heatDemandKW, ' kW') : ''}
     ${heatLossCoeff ? sc('Heat loss coeff.', heatLossCoeff, ' kW/°C') : ''}
-    ${peakLoadKW ? sc('Est. peak load', peakLoadKW, ' kW', '<span style=\"font-size:10px;color:#888\">at '+DESIGN_TEMP+'°C outdoor</span>') : ''}
+    ${peakLoadKW ? sc('Est. peak load', peakLoadKW, ' kW', '<span style=\"font-size:10px;color:#888\">'+T('atOutdoorTemp',{temp:DESIGN_TEMP})+'</span>') : ''}
     ${hasBoilerKW ? sc('Boiler nominal', BOILER_KW, ' kW', boilerOversized ? badge('warn',T('badgeOversized')) : badge('good','OK')) : ''}
     ${houseEff ? sc('House efficiency', houseEff.label, '', badge(houseEff.cls, heatLossCoeff+' kW/°C')) : ''}
     ${cyclesPerHour ? sc('Starts/hour', cyclesPerHour, '/h', badge(effCls, parseFloat(cyclesPerHour)<3?T('badgeNormal'):parseFloat(cyclesPerHour)<6?T('badgeHigh'):T('badgeSevere'))) : ''}
     ${realAvgDur   ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<5?'warn':parseFloat(realAvgDur)<10?'warn':'good', parseFloat(realAvgDur)<5?T('badgeShort'):parseFloat(realAvgDur)<10?T('badgeCheck'):T('badgeOK'))) : ''}
-    ${cyclingScore ? sc('Cycling score', cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
+    ${cyclingScore ? sc(T('cyclingScore'), cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
     ${comfortStddev ? sc('Comfort stability', comfortRating, '', badge(comfortCls, '±'+comfortStddev+'°C')) : ''}
     ${gasEfficiencyPct ? sc('Est. efficiency', gasEfficiencyPct, '%') : ''}
     ${heatCurveCorr ? sc('Heating curve', heatCurveBehaviour, '', badge(heatCurveCls, 'r='+heatCurveCorr)) : ''}
@@ -1941,13 +2108,13 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   ${scatterData.length >= 10 ? `
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">${T('heatDemandSTitle')}</div>
-    <div class="chart-wrap"><div class="ch-tall"><canvas id="cScatter"></canvas></div><button class="zoom-reset" onclick="resetZoom('cScatter')">⟳ Reset zoom</button></div>
+    <div class="chart-wrap"><div class="ch-tall"><canvas id="cScatter"></canvas></div><button class="zoom-reset" onclick="resetZoom('cScatter')">${T('zoomReset')}</button></div>
     <p class="note">${T('heatDemandNote1')}${scatterRegression?.balancePoint ? ' '+T('balancePoint',{bp:scatterRegression.balancePoint}) : ''}${heatLossLine ? ' '+T('hlLineLabelShort',{h:heatLossCoeff}) : ''} ${T('scrollZoomNote')}</p>
   </div>` : ''}
   ${hasCurve && corrPairs2.length >= 5 ? `
   <div style="margin-top:18px">
     <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">${T('flowCurveSTitle')}</div>
-    <div class="chart-wrap"><div class="ch-tall"><canvas id="cFlowCurve"></canvas></div><button class="zoom-reset" onclick="resetZoom('cFlowCurve')">⟳ Reset zoom</button></div>
+    <div class="chart-wrap"><div class="ch-tall"><canvas id="cFlowCurve"></canvas></div><button class="zoom-reset" onclick="resetZoom('cFlowCurve')">${T('zoomReset')}</button></div>
     <p class="note">${T('flowCurveNote', {slope: CURVE_SLOPE, shift: CURVE_SHIFT})}</p>
   </div>` : ''}
 </div>
@@ -2093,7 +2260,7 @@ ${(() => {
   } catch(_) {}
 
   if (!messages.length) {
-    return `<p class="note">No messages file found yet. Messages will appear here once the plugin writes <code>viessmann-messages-${INSTALLATION_ID || 'ID'}-DEVICEID.json</code> (one file per device per installation).</p>`;
+    return `<p class="note">${T('deviceMessagesNoFile')} <code>viessmann-messages-${INSTALLATION_ID || 'ID'}-DEVICEID.json</code> ${T('oneFilePerDevice')}</p>`;
   }
 
   return messages.slice(0, 20).map(m => {
@@ -2154,14 +2321,14 @@ function mk(id,labels,datasets,yLbl){
   new Chart(c,{type:'line',data:{
     labels:${JSON.stringify(ovLabels)},
     datasets:[
-      {label:'Room temp (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
-      {label:'HC0 setpoint (°C)',   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
-      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:'Flow temp (°C)', yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
-      {label:'DHW temp (°C)',      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
-      {label:'Outdoor temp (°C)',  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
-      {label:'Modulation (%)',     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
-      {label:'Burner (0/100)',  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
-      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:'Outdoor humidity (%)', yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
+      {label:T('chartRoomTemp'), yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
+      {label:T('chartHC0Setpoint'),   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
+      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:T('chartFlowTemp'), yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
+      {label:T('chartDHWTemp'),      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
+      {label:T('chartOutdoorTemp'),  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
+      {label:T('chartModulation'),     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
+      {label:T('chartBurnerBar'),  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
+      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:T('chartOutdoorHum'), yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
     ]
   },options:{
     responsive:true,maintainAspectRatio:false,
@@ -2176,18 +2343,18 @@ function mk(id,labels,datasets,yLbl){
 
 })();
 ${boilerRows.length>=2?`
-mk('cMod',${JSON.stringify(modChart.labels)},[{label:'Modulation (%)',data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
-mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:'Burner (1=ON 0=OFF)',data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
+mk('cMod',${JSON.stringify(modChart.labels)},[{label:T('chartModulation'),data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
+mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:T('chartBurnerOnOff'),data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
 ${hcRows.length>=2?`
 mk('cRoom',${JSON.stringify(roomChart.labels)},[
-  {label:'Room temp (°C)',data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:'Setpoint (°C)',data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  {label:T('chartRoomTemp'),data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:T('chartSetpoint'),data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
 ${flowVals.length>=2?`
-mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:'Flow temp (°C)',data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
+mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:T('chartFlowTemp'),data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
 `:''}
 ${cycleCount>=3?`
-(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:'Cycles',data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:'# cycles'},ticks:{stepSize:1}}}}});})();
+(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:T('chartCycles'),data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:T('axisCycles')},ticks:{stepSize:1}}}}});})();
 `:''}
 ${hasGasChart?`
 (function(){
@@ -2197,9 +2364,9 @@ ${hasGasChart?`
     data:{
       labels:${JSON.stringify(gasBarLabels)},
       datasets:[
-        {type:'bar', label:'Heating (m\u00b3)', data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'bar', label:'DHW (m\u00b3)',     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'line',label:'Total (m\u00b3)',   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
+        {type:'bar', label:T('chartHeatingM3'), data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'bar', label:T('chartDHWM3'),     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'line',label:T('chartTotalM3'),   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
       ]
     },
     options:{
@@ -2216,19 +2383,19 @@ ${hasGasChart?`
 `:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[
-  {label:'DHW temp (°C)',data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:'DHW setpoint (°C)',data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  {label:T('chartDHWTemp'),data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:T('chartDHWSetpoint'),data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
 ${hasPV&&energyRows.length>=2?`
-mk('cPV',${JSON.stringify(pvChart.labels)},[{label:'PV production (W)',data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
-mk('cBatt',${JSON.stringify(battChart.labels)},[{label:'Battery level (%)',data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:'Charging (W)',data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:'Discharging (W)',data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
-mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)',data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
+mk('cPV',${JSON.stringify(pvChart.labels)},[{label:T('chartPVProd'),data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
+mk('cBatt',${JSON.stringify(battChart.labels)},[{label:T('chartBattLevel'),data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:T('chartBattChargeW'),data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:T('chartBattDischarge'),data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
+mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:T('chartWallboxW'),data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
 (function(){
   const c=document.getElementById('cScatter'); if(!c)return;
   const pts=${JSON.stringify(scatterData.length > 300 ? scatterData.filter((_,i)=>i%Math.ceil(scatterData.length/300)===0) : scatterData)};
   const reg=${JSON.stringify(scatterRegression)};
   const datasets=[{
-    label:'Heat demand (kW)',
+    label:T('chartHeatDemand'),
     data:pts,
     backgroundColor:'rgba(78,154,241,0.35)',
     pointRadius:3,
@@ -2237,7 +2404,7 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
   }];
   if(reg){
     datasets.push({
-      label:'Trend',
+      label:T('chartTrend'),
       data:reg.line,
       type:'line',
       borderColor:'#ef5350',
@@ -2250,7 +2417,7 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
   const hlLine=${JSON.stringify(heatLossLine)};
   if(hlLine){
     datasets.push({
-      label:${JSON.stringify(heatLossLine ? 'Heat loss Q=H\u00d7\u0394T (H='+heatLossCoeff+' kW/\u00b0C)' : '')},
+      label:${JSON.stringify(heatLossLine ? T('chartHeatLossLine',{h:heatLossCoeff}) : '')},
       data:hlLine,
       type:'line',
       borderColor:'rgba(67,160,71,0.85)',
@@ -2269,11 +2436,11 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:'Wallbox power (W)'
       maintainAspectRatio:false,
       plugins:{
         legend:{display:true,position:'top'},
-        tooltip:{callbacks:{label:p=>'outdoor: '+p.parsed.x+'°C  demand: '+p.parsed.y+' kW'}}
+        tooltip:{callbacks:{label:p=>T('tooltipOutdoor',{x:p.parsed.x,y:p.parsed.y})}}
       },
       scales:{
-        x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:'Heat demand (kW)'},beginAtZero:true,grid:{color:'#f5f5f5'}}
+        x:{title:{display:true,text:T('axisOutdoorTemp')},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:T('axisHeatDemand')},beginAtZero:true,grid:{color:'#f5f5f5'}}
       },
       plugins:{
         zoom:{
@@ -2306,7 +2473,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
     type:'scatter',
     data:{datasets:[
       {
-        label:'Actual flow temp (°C)',
+        label:T('chartActualFlow'),
         data:pts,
         backgroundColor:'rgba(78,154,241,0.4)',
         pointRadius:3,
@@ -2314,7 +2481,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
         type:'scatter'
       },
       {
-        label:'Heating curve (slope=${CURVE_SLOPE}, shift=${CURVE_SHIFT})',
+        label:T('chartHeatingCurve',{slope:CURVE_SLOPE,shift:CURVE_SHIFT}),
         data:curve,
         type:'line',
         borderColor:'#f57c00',
@@ -2325,7 +2492,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
         tension:0
       },
       {
-        label:'Condensing limit (55°C)',
+        label:T('chartCondensingLimit'),
         data:[{x:-30,y:55},{x:30,y:55}],
         type:'line',
         borderColor:'rgba(67,160,71,0.7)',
@@ -2344,12 +2511,12 @@ ${hasCurve && corrPairs2.length >= 5 ? `
       plugins:{
         legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
         tooltip:{callbacks:{label:p=>p.dataset.type==='scatter'
-          ? 'outdoor: '+p.parsed.x+'°C  flow: '+p.parsed.y+'°C'
-          : 'curve: '+p.parsed.y+'°C at '+p.parsed.x+'°C outdoor'}}
+          ? T('tooltipFlowActual',{x:p.parsed.x,y:p.parsed.y})
+          : T('tooltipFlowCurve',{x:p.parsed.x,y:p.parsed.y})}}
       },
       scales:{
-        x:{title:{display:true,text:'Outdoor temperature (°C)'},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:'Flow temperature (°C)'},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
+        x:{title:{display:true,text:T('axisOutdoorTemp')},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:T('axisFlowTemp')},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
       },
       plugins:{
         zoom:{
@@ -2396,7 +2563,7 @@ ${dailyEfficiency.hasData?`
     data:{
       labels:${JSON.stringify(dailyEfficiency.labels)},
       datasets:[{
-        label:'Thermal efficiency (%)',
+        label:T('chartThermalEff'),
         data:vals,
         borderColor:'#43a047',
         backgroundColor:'rgba(67,160,71,.09)',
@@ -2426,11 +2593,11 @@ ${energyFlow&&energyFlow.hasData?`
   const c=document.getElementById('cEnergyFlow');if(!c)return;
   const ef=${JSON.stringify(energyFlow)};
   const ds=[
-    {label:'\u2600\ufe0f PV (W)',             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:'\uD83D\uDD0B Batt. charging (W)', data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:'\uD83D\uDD0C Grid draw (W)',       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:T('chartPV'),             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:T('chartBattCharge'), data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:T('chartGridDraw'),       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
   ];
-  if(ef.wallbox.some(v=>v>0))ds.push({label:'\uD83D\uDE97 Wallbox (W)',data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
+  if(ef.wallbox.some(v=>v>0))ds.push({label:T('chartWallbox'),data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
   new Chart(c,{
     type:'bar',
     data:{labels:ef.labels,datasets:ds},
@@ -2440,7 +2607,7 @@ ${energyFlow&&energyFlow.hasData?`
       plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
       scales:{
         x:{grid:{color:'#f5f5f5'},stacked:true},
-        y:{title:{display:true,text:'Avg W'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
+        y:{title:{display:true,text:T('axisAvgW')},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
       }
     }
   });
