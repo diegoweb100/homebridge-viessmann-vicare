@@ -1033,6 +1033,11 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.63] - 2026-03-18
+- fix: ReferenceError T() in browser — chart labels now evaluated at build time via \${} wrapper
+- fix: tooltip callbacks use pre-injected _tooltip object with _tt() helper
+- fix: thermal efficiency note still hardcoded in Energy Summary section
+
 ### [2.0.62] - 2026-03-18
 - fix: report server UI — Language selector now always visible as dedicated card (was hidden inside Advanced panel)
 - fix: Advanced panel — curve slope and shift now have separate labeled fields

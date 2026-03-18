@@ -2184,7 +2184,7 @@ ${apiSummary ? `
     ${apiSummary.burnerLifeStarts !== null ? sc('Lifetime starts', apiSummary.burnerLifeStarts) : ''}
     ${apiSummary.burnerLifeHours  !== null ? sc('Lifetime hours',  apiSummary.burnerLifeHours, 'h') : ''}
   </div>
-  <p class="note" style="margin-top:10px">Thermal efficiency >100% is possible for condensing boilers (latent heat recovery). Values >105% may indicate rounding in Viessmann API data.</p>
+  <p class="note" style="margin-top:10px">${T('thermalEffNote')}</p>
 </div>` : ''}
 
 ${gasForecast ? `
@@ -2315,20 +2315,28 @@ function mk(id,labels,datasets,yLbl){
   }});
 }
 
+// i18n strings injected at build time for browser use
+const _tooltip={
+  outdoor:${JSON.stringify(T('tooltipOutdoor',{x:'__X__',y:'__Y__'}))},
+  flowActual:${JSON.stringify(T('tooltipFlowActual',{x:'__X__',y:'__Y__'}))},
+  flowCurve:${JSON.stringify(T('tooltipFlowCurve',{x:'__X__',y:'__Y__'}))},
+};
+function _tt(tpl,x,y){return tpl.replace('__X__',x).replace('__Y__',y);}
+
 // Overview chart — dual Y axis
 (function(){
   const c=document.getElementById('cOverview'); if(!c)return;
   new Chart(c,{type:'line',data:{
     labels:${JSON.stringify(ovLabels)},
     datasets:[
-      {label:T('chartRoomTemp'), yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
-      {label:T('chartHC0Setpoint'),   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
-      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:T('chartFlowTemp'), yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
-      {label:T('chartDHWTemp'),      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
-      {label:T('chartOutdoorTemp'),  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
-      {label:T('chartModulation'),     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
-      {label:T('chartBurnerBar'),  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
-      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:T('chartOutdoorHum'), yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
+      {label:${T('chartRoomTemp')}, yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
+      {label:${T('chartHC0Setpoint')},   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
+      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:${T('chartFlowTemp')}, yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
+      {label:${T('chartDHWTemp')},      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
+      {label:${T('chartOutdoorTemp')},  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
+      {label:${T('chartModulation')},     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
+      {label:${T('chartBurnerBar')},  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
+      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:${T('chartOutdoorHum')}, yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
     ]
   },options:{
     responsive:true,maintainAspectRatio:false,
@@ -2343,18 +2351,18 @@ function mk(id,labels,datasets,yLbl){
 
 })();
 ${boilerRows.length>=2?`
-mk('cMod',${JSON.stringify(modChart.labels)},[{label:T('chartModulation'),data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
-mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:T('chartBurnerOnOff'),data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
+mk('cMod',${JSON.stringify(modChart.labels)},[{label:${T('chartModulation')},data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
+mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:${T('chartBurnerOnOff')},data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
 ${hcRows.length>=2?`
 mk('cRoom',${JSON.stringify(roomChart.labels)},[
-  {label:T('chartRoomTemp'),data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:T('chartSetpoint'),data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  {label:${T('chartRoomTemp')},data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:${T('chartSetpoint')},data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
 ${flowVals.length>=2?`
-mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:T('chartFlowTemp'),data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
+mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:${T('chartFlowTemp')},data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
 `:''}
 ${cycleCount>=3?`
-(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:T('chartCycles'),data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:T('axisCycles')},ticks:{stepSize:1}}}}});})();
+(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:${T('chartCycles')},data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:${T('axisCycles')}},ticks:{stepSize:1}}}}});})();
 `:''}
 ${hasGasChart?`
 (function(){
@@ -2364,9 +2372,9 @@ ${hasGasChart?`
     data:{
       labels:${JSON.stringify(gasBarLabels)},
       datasets:[
-        {type:'bar', label:T('chartHeatingM3'), data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'bar', label:T('chartDHWM3'),     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'line',label:T('chartTotalM3'),   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
+        {type:'bar', label:${T('chartHeatingM3')}, data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'bar', label:${T('chartDHWM3')},     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
+        {type:'line',label:${T('chartTotalM3')},   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
       ]
     },
     options:{
@@ -2383,19 +2391,19 @@ ${hasGasChart?`
 `:''}
 ${dhwRows.length>=2?`
 mk('cDhw',${JSON.stringify(dhwChart.labels)},[
-  {label:T('chartDHWTemp'),data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:T('chartDHWSetpoint'),data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
+  {label:${T('chartDHWTemp')},data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
+  {label:${T('chartDHWSetpoint')},data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
 ],'°C');`:''}
 ${hasPV&&energyRows.length>=2?`
-mk('cPV',${JSON.stringify(pvChart.labels)},[{label:T('chartPVProd'),data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
-mk('cBatt',${JSON.stringify(battChart.labels)},[{label:T('chartBattLevel'),data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:T('chartBattChargeW'),data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:T('chartBattDischarge'),data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
-mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:T('chartWallboxW'),data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
+mk('cPV',${JSON.stringify(pvChart.labels)},[{label:${T('chartPVProd')},data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
+mk('cBatt',${JSON.stringify(battChart.labels)},[{label:${T('chartBattLevel')},data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:${T('chartBattChargeW')},data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:${T('chartBattDischarge')},data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
+mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:${T('chartWallboxW')},data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
 (function(){
   const c=document.getElementById('cScatter'); if(!c)return;
   const pts=${JSON.stringify(scatterData.length > 300 ? scatterData.filter((_,i)=>i%Math.ceil(scatterData.length/300)===0) : scatterData)};
   const reg=${JSON.stringify(scatterRegression)};
   const datasets=[{
-    label:T('chartHeatDemand'),
+    label:${T('chartHeatDemand')},
     data:pts,
     backgroundColor:'rgba(78,154,241,0.35)',
     pointRadius:3,
@@ -2404,7 +2412,7 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:T('chartWallboxW'),
   }];
   if(reg){
     datasets.push({
-      label:T('chartTrend'),
+      label:${T('chartTrend')},
       data:reg.line,
       type:'line',
       borderColor:'#ef5350',
@@ -2436,11 +2444,11 @@ mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:T('chartWallboxW'),
       maintainAspectRatio:false,
       plugins:{
         legend:{display:true,position:'top'},
-        tooltip:{callbacks:{label:p=>T('tooltipOutdoor',{x:p.parsed.x,y:p.parsed.y})}}
+        tooltip:{callbacks:{label:p=>_tt(_tooltip.outdoor,p.parsed.x,p.parsed.y)}}
       },
       scales:{
-        x:{title:{display:true,text:T('axisOutdoorTemp')},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:T('axisHeatDemand')},beginAtZero:true,grid:{color:'#f5f5f5'}}
+        x:{title:{display:true,text:${T('axisOutdoorTemp')}},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:${T('axisHeatDemand')}},beginAtZero:true,grid:{color:'#f5f5f5'}}
       },
       plugins:{
         zoom:{
@@ -2473,7 +2481,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
     type:'scatter',
     data:{datasets:[
       {
-        label:T('chartActualFlow'),
+        label:${T('chartActualFlow')},
         data:pts,
         backgroundColor:'rgba(78,154,241,0.4)',
         pointRadius:3,
@@ -2481,7 +2489,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
         type:'scatter'
       },
       {
-        label:T('chartHeatingCurve',{slope:CURVE_SLOPE,shift:CURVE_SHIFT}),
+        label:${T('chartHeatingCurve',{slope:CURVE_SLOPE,shift:CURVE_SHIFT})},
         data:curve,
         type:'line',
         borderColor:'#f57c00',
@@ -2492,7 +2500,7 @@ ${hasCurve && corrPairs2.length >= 5 ? `
         tension:0
       },
       {
-        label:T('chartCondensingLimit'),
+        label:${T('chartCondensingLimit')},
         data:[{x:-30,y:55},{x:30,y:55}],
         type:'line',
         borderColor:'rgba(67,160,71,0.7)',
@@ -2511,12 +2519,12 @@ ${hasCurve && corrPairs2.length >= 5 ? `
       plugins:{
         legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
         tooltip:{callbacks:{label:p=>p.dataset.type==='scatter'
-          ? T('tooltipFlowActual',{x:p.parsed.x,y:p.parsed.y})
-          : T('tooltipFlowCurve',{x:p.parsed.x,y:p.parsed.y})}}
+          ? _tt(_tooltip.flowActual,p.parsed.x,p.parsed.y)
+          : _tt(_tooltip.flowCurve,p.parsed.x,p.parsed.y)}}
       },
       scales:{
-        x:{title:{display:true,text:T('axisOutdoorTemp')},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:T('axisFlowTemp')},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
+        x:{title:{display:true,text:${T('axisOutdoorTemp')}},grid:{color:'#f5f5f5'}},
+        y:{title:{display:true,text:${T('axisFlowTemp')}},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
       },
       plugins:{
         zoom:{
@@ -2563,7 +2571,7 @@ ${dailyEfficiency.hasData?`
     data:{
       labels:${JSON.stringify(dailyEfficiency.labels)},
       datasets:[{
-        label:T('chartThermalEff'),
+        label:${T('chartThermalEff')},
         data:vals,
         borderColor:'#43a047',
         backgroundColor:'rgba(67,160,71,.09)',
@@ -2593,11 +2601,11 @@ ${energyFlow&&energyFlow.hasData?`
   const c=document.getElementById('cEnergyFlow');if(!c)return;
   const ef=${JSON.stringify(energyFlow)};
   const ds=[
-    {label:T('chartPV'),             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:T('chartBattCharge'), data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:T('chartGridDraw'),       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:${T('chartPV')},             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:${T('chartBattCharge')}, data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
+    {label:${T('chartGridDraw')},       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
   ];
-  if(ef.wallbox.some(v=>v>0))ds.push({label:T('chartWallbox'),data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
+  if(ef.wallbox.some(v=>v>0))ds.push({label:${T('chartWallbox')},data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
   new Chart(c,{
     type:'bar',
     data:{labels:ef.labels,datasets:ds},
@@ -2607,7 +2615,7 @@ ${energyFlow&&energyFlow.hasData?`
       plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
       scales:{
         x:{grid:{color:'#f5f5f5'},stacked:true},
-        y:{title:{display:true,text:T('axisAvgW')},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
+        y:{title:{display:true,text:${T('axisAvgW')}},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
       }
     }
   });
