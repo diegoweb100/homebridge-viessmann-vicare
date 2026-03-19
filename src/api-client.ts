@@ -245,9 +245,18 @@ export class APIClient {
           throw error;
         }
       } else {
+        // HTTP 400 = gateway offline / boiler off — not a transient error, no aggressive retry
+        if (axiosError.response?.status === 400) {
+          if (retryCount === 0) {
+            // Log once at debug level — this is expected when boiler is off
+            this.log.debug(`⏸️ '${operationName}' — gateway offline or boiler off (HTTP 400), skipping retry`);
+          }
+          throw error;
+        }
+
         // For other errors, retry with exponential backoff
         if (retryCount < this.config.maxRetries) {
-          const delay = Math.min(this.config.baseDelay * Math.pow(2, retryCount), 30000); // Max 30 seconds for non-rate-limit retries
+          const delay = Math.min(this.config.baseDelay * Math.pow(2, retryCount), 30000);
           this.log.warn(`⚠️ Error in '${operationName}': ${axiosError.message}. Retrying in ${delay / 1000} seconds...`);
           
           await this.sleep(delay);

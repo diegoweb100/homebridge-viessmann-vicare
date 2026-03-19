@@ -1033,6 +1033,12 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.65] - 2026-03-19
+- fix: HTTP 400 (gateway offline / boiler off) no longer triggers aggressive retry and error logs
+- fix: api-client.ts — 400 responses skip retry loop, logged at debug level only
+- fix: platform.ts — 400 during update cycle logged as debug "⏸️ gateway offline", not error
+- fix: platform.ts — 400 during initial setup logged as debug, not error
+
 ### [2.0.64] - 2026-03-18
 - fix: CSV cleanup — 4 rows with invalid program='heating' (from first run on 10/03) corrected to empty string
 - fix: version bump (v2.0.63 was already published)

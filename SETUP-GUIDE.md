@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.64
+# Complete Setup Guide - v2.0.65
 
 ## Overview
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.65 (2026-03-19)
+- fix: HTTP 400 (boiler off/gateway offline) silenced — no more log spam when secondary installation is off
 
 ### v2.0.64 (2026-03-18)
 - fix: version bump
