@@ -1,4 +1,4 @@
-# Complete Setup Guide - v2.0.65
+# Complete Setup Guide - v2.0.66
 
 ## Overview
 
@@ -301,14 +301,14 @@ CSV files location: `/var/lib/homebridge/viessmann-history-<installationId>.csv`
 
 > ⚠️ **Upgrading from v2.0.34 or earlier**: rename your existing files to include the installation ID (v2.0.37+):
 > ```bash
-> mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-2045571.csv
-> mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-2045571.json
+> mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-YOUR_INSTALLATION_ID.csv
+> mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-YOUR_INSTALLATION_ID.json
 > ```
-> Replace `2045571` with your actual installation ID (visible in Homebridge logs on startup).
+> Replace `YOUR_INSTALLATION_ID` with your actual installation ID (visible in Homebridge logs on startup).
 >
 > ⚠️ **Upgrading from v2.0.25 or earlier**: also update the CSV header:
 > ```bash
-> sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history-2045571.csv
+> sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history-YOUR_INSTALLATION_ID.csv
 > ```
 
 #### **Heating schedule file (v2.0.31+)**
@@ -343,16 +343,16 @@ The file is created automatically after the first Homebridge restart — no manu
 
 ```bash
 # Last 7 days — basic (cycling, flow temp, schedule analysis)
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID
 
 # Full analysis — recommended (add your boiler's nominal kW from the ViCare app)
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --boilerKW 25 --designTemp -10
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --boilerKW 25 --designTemp -10
 
 # Last 30 days
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 30 --boilerKW 25 --designTemp -10
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --days 30 --boilerKW 25 --designTemp -10
 
 # Custom output path
-node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation 2045571 --days 7 --out /tmp/report.html
+node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-report.js --installation YOUR_INSTALLATION_ID --days 7 --out /tmp/report.html
 ```
 
 | Parameter | Description | Default |
@@ -395,7 +395,7 @@ Create `/home/pi/Scripts/viessmann-report.sh`:
 REPORT="/tmp/report.html"
 DAYS="${1:-30}"
 EMAIL="$2"
-INSTALLATION_ID="${3:-2045571}"  # your installation ID
+INSTALLATION_ID="${3:-YOUR_INSTALLATION_ID}"  # your installation ID
 BOILER_KW="${4:-0}"       # nominal boiler power in kW (e.g. 25) — 0 = disabled
 DESIGN_TEMP="${5:--7}"    # design outdoor temperature for peak load calculation
 LOG="/var/log/viessmann-report.log"
@@ -500,7 +500,7 @@ Reduce API calls by filtering installations:
 #### Option 2: Filter by Specific IDs
 ```json
 {
-    "installationIds": [2045780, 1234567]
+    "installationIds": [YOUR_INSTALLATION_ID, 1234567]
 }
 ```
 
@@ -1227,6 +1227,9 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.66 (2026-03-19)
+- fix: HTTP 400 (boiler off/gateway offline) silenced — no more log spam
 
 ### v2.0.65 (2026-03-19)
 - fix: HTTP 400 (boiler off/gateway offline) silenced — no more log spam when secondary installation is off

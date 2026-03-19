@@ -1033,6 +1033,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.66] - 2026-03-19
+- fix: HTTP 400 (gateway offline / boiler off) no longer causes log spam — strengthened detection via both response.status and message string fallback
+
 ### [2.0.65] - 2026-03-19
 - fix: HTTP 400 (gateway offline / boiler off) no longer triggers aggressive retry and error logs
 - fix: api-client.ts — 400 responses skip retry loop, logged at debug level only
@@ -1126,7 +1129,7 @@ For issues and questions:
 - feat: emoji icons on all report section headers
 - fix: CSV migration — hc0/dhw post-deploy rows now correctly detected (35-col format)
 - fix: hc0/dhw appendCsvRow now includes event_type='snapshot' for future-proof migration
-- fix: viessmann-history-2045571.csv migration script updated (re-run if needed)
+- fix: viessmann-history-YOUR_INSTALLATION_ID.csv migration script updated (re-run if needed)
 
 ### [2.0.51] - 2026-03-16
 - fix: viessmann-report-server.js missing from npm package (added to files field)
@@ -1265,8 +1268,8 @@ For issues and questions:
 #### Migration
 Rename existing CSV and schedule files to include your installation ID:
 ```bash
-mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-2045571.csv
-mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-2045571.json
+mv /var/lib/homebridge/viessmann-history.csv /var/lib/homebridge/viessmann-history-YOUR_INSTALLATION_ID.csv
+mv /var/lib/homebridge/viessmann-schedule.json /var/lib/homebridge/viessmann-schedule-YOUR_INSTALLATION_ID.json
 ```
 
 ### [2.0.34] - 2026-03-10

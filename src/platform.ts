@@ -704,7 +704,14 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
     } catch (error) {
-      this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
+      const status = (error as any)?.response?.status;
+      const msg = error instanceof Error ? error.message : String(error);
+      const isOffline = status === 400 || msg.includes('400');
+      if (isOffline) {
+        this.log.debug(`⏸️ Device ${device.id} — gateway offline or boiler off (HTTP 400), skipping setup`);
+      } else {
+        this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
+      }
     }
   }
 
@@ -993,6 +1000,10 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             errorDevices++;
           } else if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized')) {
             this.log.error(`🔑 "${accessory.displayName}" — auth error during update (${msg}). Token refresh may be needed.`);
+            errorDevices++;
+          } else if (msg.includes('400') || (error as any)?.response?.status === 400) {
+            // HTTP 400 = gateway offline / boiler off — expected, not an error
+            this.log.debug(`⏸️ "${accessory.displayName}" — gateway offline or boiler off (HTTP 400)`);
             errorDevices++;
           } else {
             this.log.error(`❌ "${accessory.displayName}" — update failed: ${msg}`);
