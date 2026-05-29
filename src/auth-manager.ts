@@ -607,34 +607,42 @@ private startAuthServer(callback: (code?: string, error?: Error) => void): void 
   }
 
 private openBrowser(url: string): void {
-  // 🆕 Per servizi systemd: NON tentare di aprire automaticamente
-  // L'utente può aprire da qualsiasi dispositivo sulla rete
-  
+  // FIX#5: Always print the full banner + URL unconditionally.
+  // Previous code only logged the URL inside the systemd/homebridge branch,
+  // so Docker containers running as root (USER=root, no SYSTEMD_EXEC_PID)
+  // fell through to tryOpenBrowserDirect which swallowed the URL on error.
+  this.log.info('='.repeat(80));
+  this.log.info('🔐 AUTHENTICATION REQUIRED');
+  this.log.info('='.repeat(80));
+  this.log.info('');
+  this.log.info('📱 Open this URL from ANY device on your network:');
+  this.log.info('');
+  this.log.info(`   ${url}`);
+  this.log.info('');
+  this.log.info('✅ You can open it from:');
+  this.log.info('   • Your computer/laptop');
+  this.log.info('   • Your smartphone/tablet');
+  this.log.info('   • This Raspberry Pi (if you have a browser)');
+  this.log.info('');
+  this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
+  this.log.info('⏳ Waiting for authentication...');
+  this.log.info('='.repeat(80));
+
+  // Detect headless/server environments where auto-open makes no sense.
+  // Covers: systemd services, Homebridge native user, Docker/Umbrel containers,
+  // and any headless Linux without a display server.
   const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
   const isHomebridge = process.env.USER === 'homebridge';
-  
-  // Se siamo in un servizio systemd o utente homebridge, non aprire automaticamente
-  if (isSystemdService || isHomebridge) {
-    this.log.info('='.repeat(80));
-    this.log.info('🔐 AUTHENTICATION REQUIRED');
-    this.log.info('='.repeat(80));
-    this.log.info('');
-    this.log.info('📱 Open this URL from ANY device on your network:');
-    this.log.info('');
-    this.log.info(`   ${url}`);
-    this.log.info('');
-    this.log.info('✅ You can open it from:');
-    this.log.info('   • Your computer/laptop');
-    this.log.info('   • Your smartphone/tablet');
-    this.log.info('   • This Raspberry Pi (if you have a browser)');
-    this.log.info('');
-    this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
-    this.log.info('⏳ Waiting for authentication...');
-    this.log.info('='.repeat(80));
+  const isHeadlessLinux = process.platform === 'linux' &&
+    !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+  const isContainer = !!(process.env.DOCKER || process.env.CONTAINER);
+
+  if (isSystemdService || isHomebridge || isHeadlessLinux || isContainer) {
+    // URL already printed above — nothing more to do.
     return;
   }
 
-  // Solo per installazioni non-systemd (es. macOS, sviluppo locale)
+  // Desktop environments only (macOS dev, Windows, Linux with display server)
   this.tryOpenBrowserDirect(url);
 }
 
@@ -650,15 +658,18 @@ private tryOpenBrowserDirect(url: string): void {
     case 'win32':
       command = `start "" "${url}"`;
       break;
-    default: // Linux desktop (non-systemd)
+    default: // Linux desktop (con display server)
       command = `xdg-open "${url}" 2>/dev/null || firefox "${url}" 2>/dev/null || chromium-browser "${url}" 2>/dev/null`;
   }
 
   exec(command, (error: Error | null) => {
     if (error) {
-      this.log.info('📱 Please open the authentication URL manually in your browser');
+      // FIX#5: repeat the URL here too — belt-and-suspenders for undetected
+      // headless environments where the exec callback is the only output.
+      this.log.info('📱 Could not open browser automatically. Open this URL manually:');
+      this.log.info(`   ${url}`);
     } else {
-      this.log.info('🌐 Opening browser...');
+      this.log.info('🌐 Opening browser for authentication...');
     }
   });
 }

@@ -93,20 +93,38 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
           const reportServerPath = this.config.reportServerPath
             ?? this.api.user.storagePath();
           const reportScript = require('path').join(__dirname, '..', 'viessmann-report-server.js');
-          const args = ['--port', String(reportPort), '--path', reportServerPath];
+
+          // Detect actual LAN IP so the logged URL is reachable from any device on the network
+          const { networkInterfaces } = require('os');
+          const nets = networkInterfaces();
+          let lanIP = 'localhost';
+          outer: for (const name of Object.keys(nets)) {
+            for (const iface of (nets[name] || [])) {
+              if (iface.family === 'IPv4' && !iface.internal) { lanIP = iface.address; break outer; }
+            }
+          }
+
+          const serverArgs = ['--port', String(reportPort), '--path', reportServerPath];
+          if (this.config.debug) serverArgs.push('--debug');
+
           const { execFile } = require('child_process');
-          // Run as detached child so it survives plugin reload
-          const child = execFile(process.execPath, [reportScript, ...args], {
+          const child = execFile(process.execPath, [reportScript, ...serverArgs], {
             detached: false,
             stdio: 'inherit',
           });
           child.on('error', (err: Error) => {
-            this.log.warn(`[Viessmann] Report server failed to start: ${err.message}`);
+            this.log.warn(`Report server failed to start: ${err.message}`);
           });
-          this.log.info(`[Viessmann] Report server started on http://0.0.0.0:${reportPort}`);
-          this.log.info(`[Viessmann] Open in browser: http://localhost:${reportPort}`);
+
+          this.log.info(`Report server ready — open from any device on your network:`);
+          this.log.info(`  🌐 http://${lanIP}:${reportPort}`);
+          if (this.config.debug) {
+            this.log.debug(`  (also available as http://localhost:${reportPort} on this host)`);
+            this.log.debug(`  Data path: ${reportServerPath}`);
+            this.log.debug(`  Script: ${reportScript}`);
+          }
         } catch (e) {
-          this.log.warn(`[Viessmann] Could not start report server: ${(e as Error).message}`);
+          this.log.warn(`Could not start report server: ${(e as Error).message}`);
         }
       }
     });
@@ -705,9 +723,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
     } catch (error) {
       const status = (error as any)?.response?.status;
-      const msg = error instanceof Error ? error.message : String(error);
-      const isOffline = status === 400 || msg.includes('400');
-      if (isOffline) {
+      if (status === 400) {
         this.log.debug(`⏸️ Device ${device.id} — gateway offline or boiler off (HTTP 400), skipping setup`);
       } else {
         this.log.error(`Failed to setup accessories for device ${device.id}:`, error);
