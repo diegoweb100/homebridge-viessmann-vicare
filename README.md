@@ -1033,6 +1033,11 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.70] - 2026-05-29
+- feat: TRV / Room Sensor discovery mode (`features.enableRoomSensorDiscovery`) — scans all gateway devices, logs every API feature path+value tagged `[RoomDiscovery]`, creates a provisional HomeKit `TemperatureSensor` for each device with a temperature reading
+- feat: report generation timeout now configurable (`reportServerTimeout`, default 300 s, range 60–1800 s) — exposed in Homebridge Config UI X
+- fix: report server `--timeout` arg forwarded from plugin config to child process
+
 ### [2.0.68] - 2026-05-29
 - fix: report server now logs actual LAN IP (`http://192.168.x.x:PORT`) instead of `localhost`/`0.0.0.0` — URL is reachable from any device on the network
 - fix: report generation timeout raised from 60 s to 300 s — fixes timeout error with large CSV files (90+ days, 26 000+ rows)

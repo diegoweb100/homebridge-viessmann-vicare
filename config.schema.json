@@ -433,6 +433,12 @@
             "type": "boolean",
             "default": true,
             "description": "Create separate accessories showing burner status, modulation level, and statistics."
+          },
+          "enableRoomSensorDiscovery": {
+            "title": "Enable Room Sensor Discovery (TRV / Smart Climate)",
+            "type": "boolean",
+            "default": false,
+            "description": "Scan all gateway devices for thermostatic radiator valves (TRVs) or per-room temperature sensors. Creates a HomeKit TemperatureSensor for each discovered device and dumps all API feature paths to the Homebridge log. Enable this if you have Viessmann ViCare Smart Climate and want to help implement full TRV support. Disable in production — generates verbose logs."
           }
         }
       },
@@ -510,6 +516,14 @@
             "description": "Duration in ms to block regular polling from overwriting command state after a command is sent. Default: 120000 (2 minutes)."
           }
         }
+      },
+      "reportServerTimeout": {
+        "title": "Report Server Generation Timeout",
+        "type": "integer",
+        "default": 300,
+        "minimum": 60,
+        "maximum": 1800,
+        "description": "Maximum time in seconds allowed for viessmann-report.js to generate a report. Increase for large CSV files (90+ days). Default: 300s (5 min). Range: 60–1800s."
       }
     },
     "required": [

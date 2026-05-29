@@ -20,6 +20,7 @@ import { ViessmannBoilerAccessory } from './accessories/boiler-accessory';
 import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
 import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
+import { ViessmannRoomSensorAccessory, discoverRoomSensorData } from './accessories/room-sensor-accessory';
 import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
@@ -104,7 +105,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             }
           }
 
-          const serverArgs = ['--port', String(reportPort), '--path', reportServerPath];
+          const reportTimeout = (this.config as any).reportServerTimeout ?? 300;
+          const serverArgs = ['--port', String(reportPort), '--path', reportServerPath, '--timeout', String(reportTimeout)];
           if (this.config.debug) serverArgs.push('--debug');
 
           const { execFile } = require('child_process');
@@ -116,13 +118,12 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             this.log.warn(`Report server failed to start: ${err.message}`);
           });
 
-          this.log.info(`Report server ready — open from any device on your network:`);
-          this.log.info(`  🌐 http://${lanIP}:${reportPort}`);
-          if (this.config.debug) {
-            this.log.debug(`  (also available as http://localhost:${reportPort} on this host)`);
-            this.log.debug(`  Data path: ${reportServerPath}`);
-            this.log.debug(`  Script: ${reportScript}`);
-          }
+          this.log.info('═'.repeat(60));
+          this.log.info('📊 Viessmann Report Server');
+          this.log.info(`   Open from any device: http://${lanIP}:${reportPort}`);
+          this.log.info('═'.repeat(60));
+          this.log.debug(`  Data path: ${reportServerPath}`);
+          this.log.debug(`  Script:    ${reportScript}`);
         } catch (e) {
           this.log.warn(`Could not start report server: ${(e as Error).message}`);
         }
@@ -721,6 +722,11 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Energy / Heat Pump accessory (PV, battery, wallbox, electric DHW, Wärmepumpe)
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
+      // TRV / Room Sensor discovery mode (logs all features, creates TemperatureSensor per device)
+      if ((this.config as any).features?.enableRoomSensorDiscovery) {
+        await this.setupRoomSensorDiscovery(installation, gateway, device, features);
+      }
+
     } catch (error) {
       const status = (error as any)?.response?.status;
       if (status === 400) {
@@ -914,6 +920,54 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       new ViessmannEnergyAccessory(this, accessory, installation, gateway, device);
       this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
     }
+  }
+
+  // ── TRV / Room Sensor Discovery ──────────────────────────────────────────
+  // Enabled via features.enableRoomSensorDiscovery = true.
+  // Creates a TemperatureSensor accessory for each device that exposes a
+  // temperature reading. Full feature dump goes to Homebridge logs so we can
+  // identify the correct API paths for a given TRV model.
+  private async setupRoomSensorDiscovery(
+    installation: ViessmannInstallation,
+    gateway:      ViessmannGateway,
+    device:       ViessmannDevice,
+    features:     ViessmannFeature[],
+  ): Promise<void> {
+    // Run the feature scan (always logs, regardless of whether we find a temp)
+    const result = discoverRoomSensorData(this, device, features);
+
+    // Only create a HomeKit accessory if we found at least one temperature value
+    if (result.currentTemp === undefined) {
+      this.log.debug(`[RoomDiscovery] Device ${device.id} — no temperature found, skipping HomeKit accessory`);
+      return;
+    }
+
+    const customNames = (this.config as any).customNames ?? {};
+    const prefix      = customNames.installationPrefix || installation.description || String(installation.id);
+    const modelLabel  = device.modelId || device.id;
+    const name        = `${prefix} Room ${modelLabel}`;
+    const uuid        = this.api.hap.uuid.generate(`room-sensor-${installation.id}-${device.id}`);
+
+    let accessory = this.accessories.find(a => a.UUID === uuid);
+
+    if (!accessory) {
+      this.log.info(`[RoomDiscovery] Creating new TemperatureSensor: "${name}"`);
+      accessory = new this.api.platformAccessory(name, uuid);
+      accessory.context = { installation, gateway, device, isRoomSensor: true };
+      this.api.registerPlatformAccessories(
+        'homebridge-viessmann-vicare', 'ViessmannPlatform', [accessory]
+      );
+      this.accessories.push(accessory);
+    } else {
+      this.log.debug(`[RoomDiscovery] Restoring cached accessory: "${name}"`);
+    }
+
+    const handler = new ViessmannRoomSensorAccessory(
+      this, accessory, installation, gateway, device, features
+    );
+
+    // Attach updateHandler so the main refresh loop can call update()
+    (accessory as any).updateHandler = (feats: ViessmannFeature[]) => handler.update(feats);
   }
 
   async updateAllDevices() {

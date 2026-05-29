@@ -27,10 +27,12 @@ const { execFile, spawn } = require('child_process');
 const args   = process.argv.slice(2);
 const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i+1] ? args[i+1] : def; };
 
-const PORT    = parseInt(getArg('--port',   process.env.REPORT_SERVER_PORT || '3001'), 10);
-const HB_PATH = getArg('--path',   process.env.HB_PATH || '/var/lib/homebridge');
-const SCRIPT  = getArg('--script', path.join(__dirname, 'viessmann-report.js'));
+const PORT    = parseInt(getArg('--port',    process.env.REPORT_SERVER_PORT || '3001'), 10);
+const HB_PATH = getArg('--path',    process.env.HB_PATH || '/var/lib/homebridge');
+const SCRIPT  = getArg('--script',  path.join(__dirname, 'viessmann-report.js'));
 const DEBUG   = args.includes('--debug') || process.env.DEBUG_REPORT === '1';
+// --timeout <seconds> passed from plugin config (reportServerTimeout, default 300)
+const TIMEOUT_SEC = parseInt(getArg('--timeout', '300'), 10);
 
 // ── Debug logger ───────────────────────────────────────────────────────────
 function dbg(...parts) {
@@ -93,7 +95,7 @@ function safeNum(val) {
 // CSV files (e.g. 90 days = ~26 000 rows). The default 60 s was insufficient.
 // Raised to 300 s (5 minutes) which comfortably handles the largest datasets.
 
-const REPORT_TIMEOUT_MS = 300_000; // 5 minutes
+const REPORT_TIMEOUT_MS = Math.min(Math.max(TIMEOUT_SEC, 60), 1800) * 1000; // from --timeout arg (clamped 60–1800s)
 
 function generateReport(params) {
   return new Promise((resolve, reject) => {
@@ -490,7 +492,7 @@ if (require.main === module) {
     console.log('[ReportServer] ═══════════════════════════════════════════════');
     console.log(`[ReportServer] 🌐 Open from any device: http://${LAN_IP}:${PORT}`);
     console.log(`[ReportServer] 📁 Data path:            ${HB_PATH}`);
-    console.log(`[ReportServer] ⏱️  Report timeout:       ${REPORT_TIMEOUT_MS/1000}s`);
+    console.log(`[ReportServer] ⏱️  Report timeout:       ${REPORT_TIMEOUT_MS/1000}s (--timeout ${TIMEOUT_SEC}s)`);
     if (DEBUG) {
       console.log(`[ReportServer] 🔍 Debug mode:           ON`);
       console.log(`[ReportServer]    Script:   ${SCRIPT}`);

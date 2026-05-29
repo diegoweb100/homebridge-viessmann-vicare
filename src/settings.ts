@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.68';
+export const PLUGIN_VERSION = '2.0.70';
 
 /**
  * Default configuration values
@@ -53,12 +53,15 @@ export const DEFAULT_CONFIG = {
     enableTemperaturePrograms: true,
     enableQuickSelections: true,
     enableBurnerStatus: true,
+    // TRV / Smart Climate discovery (verbose — use only for diagnostics)
+    enableRoomSensorDiscovery: false,
   },
   advanced: {
     maxConsecutiveErrors: 5,
     deviceUpdateDelay: 1000,
     userAgent: `homebridge-viessmann-vicare/${PLUGIN_VERSION}`,
   },
+  reportServerTimeout: 300,       // seconds — max time for report generation (default 5 min)
   monitoring: {
     enableHealthReports: true,
     healthReportInterval: 3600000, // 1 hour
