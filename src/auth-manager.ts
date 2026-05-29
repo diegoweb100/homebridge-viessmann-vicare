@@ -59,6 +59,9 @@ export class AuthManager {
   private authTimeout?: NodeJS.Timeout;
   private tokenRefreshTimer?: NodeJS.Timeout;
   private envDiagnosticsLogged = false; // FIX#4: log once at startup only
+  // Persistent auth server fields
+  private authServerPort: number = 4200;
+  private pendingAuthCallback?: (code?: string, error?: Error) => void;
 
   constructor(
     private readonly log: Logger,
@@ -385,9 +388,23 @@ export class AuthManager {
     const authUrl = this.buildAuthUrl();
     this.log.error(`   ${authUrl}`);
     this.log.error('');
+    this.log.error('4. ⚡ QUICKLY exchange authorization code for tokens (20 second limit!):');
+    this.log.error('   curl -X POST "https://iam.viessmann-climatesolutions.com/idp/v3/token" \\');
+    this.log.error('   -H "Content-Type: application/x-www-form-urlencoded" \\');
+    this.log.error(`   -d "client_id=${this.config.clientId}&redirect_uri=${encodeURIComponent(this.redirectUri)}&grant_type=authorization_code&code_verifier=${this.codeVerifier}&code=YOUR_AUTH_CODE"`);
+    this.log.error('');
+    this.log.error('5. 💾 Add tokens to your Homebridge configuration:');
+    this.log.error('   {');
+    this.log.error('     "platform": "ViessmannPlatform",');
+    this.log.error('     "authMethod": "manual",');
+    this.log.error('     "accessToken": "YOUR_ACCESS_TOKEN",');
+    this.log.error('     "refreshToken": "YOUR_REFRESH_TOKEN",');
+    this.log.error('   }');
+    this.log.error('');
     this.log.error('📖 For detailed instructions, visit:');
     this.log.error('https://github.com/diegoweb100/homebridge-viessmann-vicare#manual-authentication');
     this.log.error('='.repeat(80));
+    throw new Error('Manual authentication required - see logs for detailed instructions');
   }
 
   private async performFullAuth(): Promise<void> {
@@ -431,6 +448,15 @@ export class AuthManager {
       code_challenge:        this.codeChallenge!,
     });
     return `${this.authURL}/authorize?${params.toString()}`;
+  }
+
+  private isTokenValid(): boolean {
+    if (!this.accessToken || !this.tokenExpiresAt) {
+      return false;
+    }
+    // Use configured refresh buffer
+    const tokenRefreshBuffer = this.config.tokenRefreshBuffer || 300000;
+    return Date.now() < (this.tokenExpiresAt - tokenRefreshBuffer);
   }
 
   // ─── Persistent auth/status server ────────────────────────────────────────
