@@ -73,9 +73,13 @@ export class AuthManager {
     this.log.debug(`Using redirect URI: ${this.redirectUri}`);
     this.log.debug(`Token storage path: ${this.tokenStoragePath}`);
     
+    this.authServerPort = this.config.redirectPort || 4200;
     this.validateAuthConfiguration();
     this.generatePKCECodes();
     this.initializeTokens();
+    // Start the persistent auth/status server immediately so the URL is
+    // always reachable — even when already authenticated.
+    this.startPersistentAuthServer();
   }
 
   private validateAuthConfiguration(): void {
@@ -306,7 +310,7 @@ export class AuthManager {
 
   public async authenticate(): Promise<void> {
     try {
-      // FIX#4: log env diagnostics only once at startup, not on every authenticate() call
+      // FIX#4: log env diagnostics only once at startup
       if (!this.envDiagnosticsLogged) {
         this.logEnvDiagnostics();
         this.envDiagnosticsLogged = true;
@@ -330,52 +334,32 @@ export class AuthManager {
         }
       }
 
-      // Determine authentication method
       const authMethod = this.config.authMethod || 'auto';
+      if (authMethod === 'manual') {
+        await this.handleManualAuth();
+        return;
+      }
 
-		if (authMethod === 'manual') {
-		  await this.handleManualAuth();
-		  return;
-		}
-		
-		// Prova sempre l'auto-auth; se fallisce, fallback a manual
-		try {
-		  await this.performAutoAuth();   // avvia server di callback + openBrowser()
-		} catch (e) {
-		  this.log.warn(
-			'⚠️ Auto auth failed, falling back to manual:',
-			e instanceof Error ? e.message : String(e)
-		  );
-		  await this.handleManualAuth();
-		}      
+      try {
+        await this.performAutoAuth();
+      } catch (e) {
+        this.log.warn(
+          '⚠️ Auto auth failed, falling back to manual:',
+          e instanceof Error ? e.message : String(e)
+        );
+        await this.handleManualAuth();
+      }
 
     } catch (error) {
       this.log.error('❌ Authentication failed:', error);
       throw error;
     }
   }
-private shouldUseManualAuth(): boolean {
-  // Rispetta la scelta esplicita dell’utente
-  if (this.config.authMethod === 'manual') {
-    this.log.debug('🔧 Auth method explicitly set to "manual" in config.');
-    return true;
+
+  private shouldUseManualAuth(): boolean {
+    if (this.config.authMethod === 'manual') return true;
+    return false;
   }
-
-  // Diagnostica non-bloccante: non forziamo più il manual in headless/systemd/container
-  const isHeadlessLinux = (process.platform === 'linux' && !process.env.DISPLAY);
-  const isContainer = !!(process.env.DOCKER || process.env.CONTAINER);
-  const isSystemd = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
-
-  if (isHeadlessLinux || isContainer || isSystemd) {
-    this.log.debug(
-      `ℹ️ Environment detected (headlessLinux=${isHeadlessLinux}, container=${isContainer}, systemd=${isSystemd}) — ` +
-      'proceeding with AUTO auth first; will fallback to MANUAL if AUTO fails.'
-    );
-  }
-
-  // Di default tentiamo sempre AUTO
-  return false;
-}
 
   private async performAutoAuth(): Promise<void> {
     this.log.info('🚀 Starting automatic OAuth authentication...');
@@ -398,199 +382,310 @@ private shouldUseManualAuth(): boolean {
     this.log.error('   • Scope: IoT User offline_access');
     this.log.error('');
     this.log.error('3. 🔗 Get authorization code using this URL:');
-    
     const authUrl = this.buildAuthUrl();
     this.log.error(`   ${authUrl}`);
-    this.log.error('');
-    this.log.error('4. ⚡ QUICKLY exchange authorization code for tokens (20 second limit!):');
-    this.log.error('   curl -X POST "https://iam.viessmann-climatesolutions.com/idp/v3/token" \\');
-    this.log.error('   -H "Content-Type: application/x-www-form-urlencoded" \\');
-    this.log.error(`   -d "client_id=${this.config.clientId}&redirect_uri=${encodeURIComponent(this.redirectUri)}&grant_type=authorization_code&code_verifier=${this.codeVerifier}&code=YOUR_AUTH_CODE"`);
-    this.log.error('');
-    this.log.error('5. 💾 Add tokens to your Homebridge configuration:');
-    this.log.error('   {');
-    this.log.error('     "platform": "ViessmannPlatform",');
-    this.log.error('     "authMethod": "manual",');
-    this.log.error('     "accessToken": "YOUR_ACCESS_TOKEN",');
-    this.log.error('     "refreshToken": "YOUR_REFRESH_TOKEN",');
-    this.log.error('     // ... other config');
-    this.log.error('   }');
     this.log.error('');
     this.log.error('📖 For detailed instructions, visit:');
     this.log.error('https://github.com/diegoweb100/homebridge-viessmann-vicare#manual-authentication');
     this.log.error('='.repeat(80));
-    
-    throw new Error('Manual authentication required - see logs for detailed instructions');
   }
 
-  private isTokenValid(): boolean {
-    if (!this.accessToken || !this.tokenExpiresAt) {
-      return false;
-    }
-    
-    // Use configured refresh buffer
-    const tokenRefreshBuffer = this.config.tokenRefreshBuffer || 300000;
-    return Date.now() < (this.tokenExpiresAt - tokenRefreshBuffer);
-  }
+  private async performFullAuth(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const authUrl = this.buildAuthUrl();
 
-private async performFullAuth(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const authUrl = this.buildAuthUrl();
-    
-    const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
-    
-    if (isSystemdService) {
-      // Messaggio semplificato per servizi
-      this.log.info('='.repeat(80));
-      this.log.info('🔐 VIESSMANN AUTHENTICATION REQUIRED');
-      this.log.info('='.repeat(80));
-    } else {
-      // Messaggio dettagliato per installazioni desktop
-      this.log.info('='.repeat(80));
-      this.log.info('🔐 VIESSMANN OAUTH AUTHENTICATION');
-      this.log.info('='.repeat(80));
-      this.log.info('⚠️ CRITICAL: You have only 20 seconds after browser authorization!');
-      this.log.info('');
-    }
-
-    // Set timeout for authentication process
-    const authTimeout = this.config.authTimeout || 300000;
-    this.authTimeout = setTimeout(() => {
-      this.stopAuthServer();
-      reject(new Error(`Authentication timeout - no response received within ${authTimeout / 1000} seconds`));
-    }, authTimeout);
-
-    // Start local server to capture callback
-    this.startAuthServer((code, error) => {
-      if (error) {
+      // Set the pending callback so the persistent server can resolve this promise
+      this.pendingAuthCallback = (code, error) => {
+        this.pendingAuthCallback = undefined;
         if (this.authTimeout) {
           clearTimeout(this.authTimeout);
           this.authTimeout = undefined;
         }
-        reject(error);
-        return;
-      }
+        if (error) { reject(error); return; }
+        if (code) {
+          this.exchangeCodeForTokens(code)
+            .then(() => resolve())
+            .catch((err) => reject(err));
+        }
+      };
 
-      if (code) {
-        this.exchangeCodeForTokens(code)
-          .then(() => {
-            if (this.authTimeout) {
-              clearTimeout(this.authTimeout);
-              this.authTimeout = undefined;
-            }
-            resolve();
-          })
-          .catch((err) => {
-            if (this.authTimeout) {
-              clearTimeout(this.authTimeout);
-              this.authTimeout = undefined;
-            }
-            reject(err);
-          });
-      }
+      // Auth timeout
+      const authTimeout = this.config.authTimeout || 300000;
+      this.authTimeout = setTimeout(() => {
+        this.pendingAuthCallback = undefined;
+        reject(new Error(`Authentication timeout after ${authTimeout / 1000}s`));
+      }, authTimeout);
+
+      // Log the auth URL prominently (FIX#5: unconditional)
+      this.openBrowser(authUrl);
     });
-
-    // Try to open browser (will show URL if systemd service)
-    this.openBrowser(authUrl);
-  });
-}
+  }
 
   private buildAuthUrl(): string {
     const params = new URLSearchParams({
-      client_id: this.config.clientId,
-      redirect_uri: this.redirectUri,
-      scope: 'IoT User offline_access',
-      response_type: 'code',
+      client_id:             this.config.clientId,
+      redirect_uri:          this.redirectUri,
+      scope:                 'IoT User offline_access',
+      response_type:         'code',
       code_challenge_method: 'S256',
-      code_challenge: this.codeChallenge!,
+      code_challenge:        this.codeChallenge!,
     });
-
     return `${this.authURL}/authorize?${params.toString()}`;
   }
 
-private startAuthServer(callback: (code?: string, error?: Error) => void): void {
-  // Verifica se server è già attivo
-  if (this.authServer && this.authServer.listening) {
-    this.log.debug('🟢 Auth server already listening, reusing existing server');
-    return;
-  }
+  // ─── Persistent auth/status server ────────────────────────────────────────
+  // Started once in the constructor and never closed while Homebridge is running.
+  // Routes:
+  //   GET /           → token status page (or "authenticate" page if no tokens)
+  //   GET /callback   → OAuth callback (code exchange)
+  //   POST /reauth    → force re-authentication (regenerates PKCE + redirects)
+  //   POST /clear     → clear stored tokens
+  //   GET /health     → JSON status
 
-  this.authServer = http.createServer((req, res) => {
-    const url = new URL(req.url!, `http://localhost:${this.config.redirectPort || 4200}`);
-
-    if (url.pathname === '/') {
-      const code = url.searchParams.get('code');
-      const error = url.searchParams.get('error');
-
-      if (error) {
-        const errorDescription = url.searchParams.get('error_description') || error;
-        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
-          <html>
-            <head><title>Authentication Failed</title></head>
-            <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
-              <h1 style="color: #ff4757;">❌ Authentication Failed</h1>
-              <p>${errorDescription}</p>
-              <p>Please close this window and check your Homebridge logs.</p>
-            </body>
-          </html>
-        `);
-        callback(undefined, new Error(`OAuth error: ${errorDescription}`));
-        // 🆕 Chiudi dopo un delay per far vedere la pagina
-        setTimeout(() => this.stopAuthServer(), 3000);
-        return;
-      }
-
-      if (code) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`
-          <html>
-            <head><title>Authentication Successful</title></head>
-            <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
-              <h1 style="color: #2ed573;">✅ Authentication Successful!</h1>
-              <p>You can now close this window.</p>
-              <p>Homebridge will continue setup automatically.</p>
-            </body>
-          </html>
-        `);
-        callback(code);
-        // 🆕 Chiudi dopo un delay per far vedere la pagina
-        setTimeout(() => this.stopAuthServer(), 3000);
-        return;
-      }
-    }
-
-    // Handle other requests - root path senza parametri
-    if (url.pathname === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`
-        <html>
-          <head><title>Viessmann Authentication</title></head>
-          <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px;">
-            <h1>🔐 Viessmann Authentication</h1>
-            <p>Waiting for authentication callback...</p>
-            <p>If you see this page, the authentication server is working correctly.</p>
-            <p style="color: #666; font-size: 14px;">Server: ${this.hostIp}:${this.config.redirectPort || 4200}</p>
-          </body>
-        </html>
-      `);
+  private startPersistentAuthServer(): void {
+    if (this.authServer?.listening) {
+      this.log.debug('🟢 Auth server already listening — skipping restart');
       return;
     }
 
-    // 404 per altre richieste
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Not found');
-  });
+    this.authServer = http.createServer((req, res) => {
+      const parsedUrl = new URL(req.url ?? '/', `http://localhost:${this.authServerPort}`);
+      const pathname  = parsedUrl.pathname;
+      const method    = req.method?.toUpperCase() ?? 'GET';
 
-  this.authServer.listen(this.config.redirectPort || 4200, '0.0.0.0', () => {
-    this.log.info(`🟢 Auth server ready at: http://${this.hostIp}:${this.config.redirectPort || 4200}/`);
-  });
+      // ── GET /health ──────────────────────────────────────────────────────
+      if (pathname === '/health' && method === 'GET') {
+        const status = this.getTokenStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          authenticated: status.hasTokens,
+          expiresInSeconds: status.expiresInSeconds,
+          hasRefreshToken: status.hasRefreshToken,
+          refreshTokenExpiresInDays: status.refreshTokenExpiresInDays,
+          pendingAuth: !!this.pendingAuthCallback,
+        }));
+        return;
+      }
 
-  this.authServer.on('error', (error) => {
-    this.log.error('❌ Auth server error:', error);
-    callback(undefined, error);
-  });
-}
+      // ── POST /reauth ────────────────────────────────────────────────────
+      if (pathname === '/reauth' && method === 'POST') {
+        this.log.info('🔄 Re-authentication requested from auth status page');
+        this.clearStoredTokens();
+        this.generatePKCECodes();
+        const authUrl = this.buildAuthUrl();
+
+        // Set pending callback — whoever opened /reauth will be redirected to Viessmann
+        // The promise is not awaited here; Homebridge will pick up new tokens on next authenticate()
+        this.pendingAuthCallback = (code, error) => {
+          this.pendingAuthCallback = undefined;
+          if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; }
+          if (error) { this.log.error('❌ Re-auth failed:', error.message); return; }
+          if (code) {
+            this.exchangeCodeForTokens(code)
+              .then(() => this.log.info('✅ Re-authentication successful'))
+              .catch((err) => this.log.error('❌ Re-auth token exchange failed:', err));
+          }
+        };
+
+        const timeout = this.config.authTimeout || 300000;
+        this.authTimeout = setTimeout(() => {
+          this.pendingAuthCallback = undefined;
+          this.log.warn('⏰ Re-authentication timed out');
+        }, timeout);
+
+        // Redirect the browser to Viessmann OAuth
+        res.writeHead(302, { Location: authUrl });
+        res.end();
+        // Also log the URL for headless environments
+        this.openBrowser(authUrl);
+        return;
+      }
+
+      // ── POST /clear ─────────────────────────────────────────────────────
+      if (pathname === '/clear' && method === 'POST') {
+        this.log.info('🗑️ Token clear requested from auth status page');
+        this.clearStoredTokens();
+        if (this.pendingAuthCallback) {
+          this.pendingAuthCallback = undefined;
+          if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; }
+        }
+        res.writeHead(302, { Location: '/' });
+        res.end();
+        return;
+      }
+
+      // ── GET /callback ────────────────────────────────────────────────────
+      if (pathname === '/' || pathname === '/callback') {
+        const code  = parsedUrl.searchParams.get('code');
+        const error = parsedUrl.searchParams.get('error');
+        const errorDesc = parsedUrl.searchParams.get('error_description') || error || '';
+
+        if (error) {
+          this.log.error(`❌ OAuth error: ${errorDesc}`);
+          if (this.pendingAuthCallback) this.pendingAuthCallback(undefined, new Error(errorDesc));
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(this.buildStatusPageHtml('error', errorDesc));
+          return;
+        }
+
+        if (code && this.pendingAuthCallback) {
+          this.log.info('✅ OAuth callback received — exchanging code for tokens...');
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(this.buildStatusPageHtml('exchanging'));
+          this.pendingAuthCallback(code);
+          return;
+        }
+
+        // No code — render status page
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        const tokenStatus = this.getTokenStatus();
+        if (tokenStatus.hasTokens) {
+          res.end(this.buildStatusPageHtml('authenticated'));
+        } else {
+          // Not authenticated: show "click to authenticate" page
+          this.generatePKCECodes();
+          const authUrl = this.buildAuthUrl();
+          res.end(this.buildStatusPageHtml('unauthenticated', authUrl));
+        }
+        return;
+      }
+
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+    });
+
+    this.authServer.listen(this.authServerPort, '0.0.0.0', () => {
+      const port = this.authServerPort;
+      const ip   = this.hostIp;
+      this.log.info('═'.repeat(60));
+      this.log.info('🔐 Viessmann Auth Manager');
+      this.log.info(`   Status page: http://${ip}:${port}`);
+      this.log.info('═'.repeat(60));
+    });
+
+    this.authServer.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        this.log.warn(`⚠️ Auth server port ${this.authServerPort} already in use — auth status page unavailable`);
+      } else {
+        this.log.error('❌ Auth server error:', error.message);
+      }
+      this.authServer = undefined;
+    });
+  }
+
+  private buildStatusPageHtml(state: 'authenticated' | 'unauthenticated' | 'exchanging' | 'error', extra?: string): string {
+    const status   = this.getTokenStatus();
+    const port     = this.authServerPort;
+    const username = this.config.username || '';
+
+    const css = `
+      <style>
+        :root{--bg:#0d1117;--surface:#161b22;--border:#21262d;--accent:#f97316;--text:#e6edf3;--muted:#7d8590;--good:#3fb950;--bad:#f85149;--warn:#e3b341;--r:10px}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 16px 60px}
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:28px 32px;width:100%;max-width:520px;margin-bottom:14px}
+        h1{font-size:22px;font-weight:700;letter-spacing:-.3px;margin-bottom:4px}
+        h1 span{color:var(--accent)}
+        .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+        .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:13px;font-weight:600;margin-bottom:20px}
+        .badge.ok{background:rgba(63,185,80,.15);color:var(--good);border:1px solid rgba(63,185,80,.3)}
+        .badge.no{background:rgba(248,81,73,.15);color:var(--bad);border:1px solid rgba(248,81,73,.3)}
+        .badge.wait{background:rgba(227,179,65,.15);color:var(--warn);border:1px solid rgba(227,179,65,.3)}
+        .row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px}
+        .row:last-child{border-bottom:none}
+        .lbl{color:var(--muted);font-size:12px}
+        .val{font-weight:500;text-align:right;max-width:300px;word-break:break-all}
+        .val.ok{color:var(--good)} .val.warn{color:var(--warn)} .val.bad{color:var(--bad)}
+        .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+        button,a.btn{display:inline-flex;align-items:center;gap:7px;padding:11px 20px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;transition:opacity .15s}
+        button:hover,a.btn:hover{opacity:.85}
+        .btn-primary{background:var(--accent);color:#fff}
+        .btn-danger{background:rgba(248,81,73,.15);color:var(--bad);border:1px solid rgba(248,81,73,.3)}
+        .btn-secondary{background:rgba(249,115,22,.12);color:var(--accent);border:1px solid rgba(249,115,22,.3)}
+        .url-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:monospace;font-size:11px;word-break:break-all;color:var(--muted);margin:14px 0}
+        footer{font-size:11px;color:var(--muted);opacity:.5;margin-top:20px}
+        .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(249,115,22,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+        @keyframes spin{to{transform:rotate(360deg)}}
+      </style>`;
+
+    const header = `
+      <h1>🔐 Viessmann <span>ViCare</span></h1>
+      <div class="sub">Authentication Manager &nbsp;·&nbsp; port ${port}</div>`;
+
+    if (state === 'authenticated') {
+      const expiresIn = status.expiresInSeconds ?? 0;
+      const expiresAt = status.expiresAt ? status.expiresAt.toLocaleString('it-IT') : '—';
+      const rtDays    = status.refreshTokenExpiresInDays ?? 0;
+      const rtAt      = status.refreshTokenExpiresAt ? status.refreshTokenExpiresAt.toLocaleDateString('it-IT') : '—';
+      const exClass   = expiresIn < 300 ? 'bad' : expiresIn < 900 ? 'warn' : 'ok';
+      const rtClass   = rtDays < 7 ? 'bad' : rtDays < 30 ? 'warn' : 'ok';
+      const exLabel   = expiresIn < 3600
+        ? `in ${Math.round(expiresIn / 60)} min`
+        : `in ${Math.round(expiresIn / 3600)} h`;
+
+      return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Viessmann Auth</title>${css}</head><body>
+        <div class="card">
+          ${header}
+          <div class="badge ok">✅ Authenticated</div>
+          <div class="row"><span class="lbl">Account</span><span class="val">${username}</span></div>
+          <div class="row"><span class="lbl">Access token</span><span class="val ${exClass}">Expires ${exLabel} (${expiresAt})</span></div>
+          <div class="row"><span class="lbl">Refresh token</span><span class="val ${rtClass}">${status.hasRefreshToken ? `${rtDays} days left (${rtAt})` : 'not present'}</span></div>
+        </div>
+        <div class="card">
+          <div class="btns">
+            <form method="POST" action="/reauth" style="margin:0">
+              <button type="submit" class="btn-secondary">🔄 Re-authenticate</button>
+            </form>
+            <form method="POST" action="/clear" style="margin:0" onsubmit="return confirm('Clear stored tokens and disconnect?')">
+              <button type="submit" class="btn-danger">🗑️ Clear tokens</button>
+            </form>
+          </div>
+        </div>
+        <footer>homebridge-viessmann-vicare &nbsp;·&nbsp; auth status</footer>
+      </body></html>`;
+    }
+
+    if (state === 'unauthenticated') {
+      const authUrl = extra ?? '';
+      return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Viessmann Auth</title>${css}</head><body>
+        <div class="card">
+          ${header}
+          <div class="badge no">❌ Not authenticated</div>
+          <p style="font-size:14px;color:var(--muted);margin-bottom:12px">
+            Click the button below to log in with your Viessmann ViCare account.<br>
+            Or open the URL manually from any browser on your network:
+          </p>
+          <div class="url-box">${authUrl}</div>
+          <div class="btns">
+            <a href="${authUrl}" class="btn btn-primary" target="_blank">🔗 Authenticate with Viessmann</a>
+          </div>
+        </div>
+        <footer>homebridge-viessmann-vicare &nbsp;·&nbsp; auth status</footer>
+      </body></html>`;
+    }
+
+    if (state === 'exchanging') {
+      return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Viessmann Auth</title>${css}<meta http-equiv="refresh" content="3;url=/"></head><body>
+        <div class="card">
+          ${header}
+          <div class="badge wait"><span class="spinner"></span> Exchanging tokens…</div>
+          <p style="font-size:14px;color:var(--muted)">Authentication successful — saving tokens. This page will refresh in a moment.</p>
+        </div>
+      </body></html>`;
+    }
+
+    // error
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Viessmann Auth</title>${css}</head><body>
+      <div class="card">
+        ${header}
+        <div class="badge no">❌ Authentication error</div>
+        <p style="font-size:14px;color:var(--bad);margin-bottom:16px">${extra ?? 'Unknown error'}</p>
+        <div class="btns">
+          <a href="/reauth" class="btn btn-secondary" onclick="event.preventDefault();fetch('/reauth',{method:'POST'}).then(r=>r.ok?window.location.href='/':null)">🔄 Try again</a>
+        </div>
+      </div>
+    </body></html>`;
+  }
 
   private stopAuthServer(): void {
     if (this.authServer) {
@@ -599,50 +694,42 @@ private startAuthServer(callback: (code?: string, error?: Error) => void): void 
       });
       this.authServer = undefined;
     }
-    
     if (this.authTimeout) {
       clearTimeout(this.authTimeout);
       this.authTimeout = undefined;
     }
   }
 
-private openBrowser(url: string): void {
-  // FIX#5: Always print the full banner + URL unconditionally.
-  // Previous code only logged the URL inside the systemd/homebridge branch,
-  // so Docker containers running as root (USER=root, no SYSTEMD_EXEC_PID)
-  // fell through to tryOpenBrowserDirect which swallowed the URL on error.
-  this.log.info('='.repeat(80));
-  this.log.info('🔐 AUTHENTICATION REQUIRED');
-  this.log.info('='.repeat(80));
-  this.log.info('');
-  this.log.info('📱 Open this URL from ANY device on your network:');
-  this.log.info('');
-  this.log.info(`   ${url}`);
-  this.log.info('');
-  this.log.info('✅ You can open it from:');
-  this.log.info('   • Your computer/laptop');
-  this.log.info('   • Your smartphone/tablet');
-  this.log.info('   • This Raspberry Pi (if you have a browser)');
-  this.log.info('');
-  this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
-  this.log.info('⏳ Waiting for authentication...');
-  this.log.info('='.repeat(80));
 
-  // Detect headless/server environments where auto-open makes no sense.
-  // Covers: systemd services, Homebridge native user, Docker/Umbrel containers,
-  // and any headless Linux without a display server.
+private openBrowser(url: string): void {
+  // 🆕 Per servizi systemd: NON tentare di aprire automaticamente
+  // L'utente può aprire da qualsiasi dispositivo sulla rete
+  
   const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
   const isHomebridge = process.env.USER === 'homebridge';
-  const isHeadlessLinux = process.platform === 'linux' &&
-    !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
-  const isContainer = !!(process.env.DOCKER || process.env.CONTAINER);
-
-  if (isSystemdService || isHomebridge || isHeadlessLinux || isContainer) {
-    // URL already printed above — nothing more to do.
+  
+  // Se siamo in un servizio systemd o utente homebridge, non aprire automaticamente
+  if (isSystemdService || isHomebridge) {
+    this.log.info('='.repeat(80));
+    this.log.info('🔐 AUTHENTICATION REQUIRED');
+    this.log.info('='.repeat(80));
+    this.log.info('');
+    this.log.info('📱 Open this URL from ANY device on your network:');
+    this.log.info('');
+    this.log.info(`   ${url}`);
+    this.log.info('');
+    this.log.info('✅ You can open it from:');
+    this.log.info('   • Your computer/laptop');
+    this.log.info('   • Your smartphone/tablet');
+    this.log.info('   • This Raspberry Pi (if you have a browser)');
+    this.log.info('');
+    this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
+    this.log.info('⏳ Waiting for authentication...');
+    this.log.info('='.repeat(80));
     return;
   }
 
-  // Desktop environments only (macOS dev, Windows, Linux with display server)
+  // Solo per installazioni non-systemd (es. macOS, sviluppo locale)
   this.tryOpenBrowserDirect(url);
 }
 
@@ -658,18 +745,15 @@ private tryOpenBrowserDirect(url: string): void {
     case 'win32':
       command = `start "" "${url}"`;
       break;
-    default: // Linux desktop (con display server)
+    default: // Linux desktop (non-systemd)
       command = `xdg-open "${url}" 2>/dev/null || firefox "${url}" 2>/dev/null || chromium-browser "${url}" 2>/dev/null`;
   }
 
   exec(command, (error: Error | null) => {
     if (error) {
-      // FIX#5: repeat the URL here too — belt-and-suspenders for undetected
-      // headless environments where the exec callback is the only output.
-      this.log.info('📱 Could not open browser automatically. Open this URL manually:');
-      this.log.info(`   ${url}`);
+      this.log.info('📱 Please open the authentication URL manually in your browser');
     } else {
-      this.log.info('🌐 Opening browser for authentication...');
+      this.log.info('🌐 Opening browser...');
     }
   });
 }
