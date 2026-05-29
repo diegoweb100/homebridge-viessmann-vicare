@@ -1033,15 +1033,17 @@ For issues and questions:
 
 ## 📈 Changelog
 
-### [2.0.67] - 2026-05-29
-- fix: OAuth authentication URL never shown in Docker/Umbrel/container environments — URL now printed unconditionally at the top of `openBrowser()` before any environment check (FIX#5)
-- fix: improved headless detection: added `DISPLAY`/`WAYLAND_DISPLAY` check and `DOCKER`/`CONTAINER` env vars — covers Docker, Umbrel, and headless Linux
-- fix: `tryOpenBrowserDirect()` error callback now also emits the URL as fallback for undetected environments
+### [2.0.68] - 2026-05-29
 - fix: report server now logs actual LAN IP (`http://192.168.x.x:PORT`) instead of `localhost`/`0.0.0.0` — URL is reachable from any device on the network
 - fix: report generation timeout raised from 60 s to 300 s — fixes timeout error with large CSV files (90+ days, 26 000+ rows)
 - fix: error response from report server now includes full stderr so the UI displays the actual cause
 - feat: comprehensive debug logging in report server (`--debug` flag, forwarded automatically when plugin `debug: true`)
 - fix: `platform.ts` log messages no longer have redundant `[Viessmann]` prefix (Homebridge already adds it)
+
+### [2.0.67] - 2026-05-29
+- fix: OAuth authentication URL never shown in Docker/Umbrel/container environments — URL now printed unconditionally before any environment check (FIX#5)
+- fix: improved headless detection: `DISPLAY`/`WAYLAND_DISPLAY` check and `DOCKER`/`CONTAINER` env vars — covers Docker, Umbrel, and headless Linux
+- fix: `tryOpenBrowserDirect()` error callback now also emits the URL as fallback for undetected environments
 
 ### [2.0.66] - 2026-03-19
 - fix: HTTP 400 (gateway offline / boiler off) no longer causes log spam — strengthened detection via both response.status and message string fallback

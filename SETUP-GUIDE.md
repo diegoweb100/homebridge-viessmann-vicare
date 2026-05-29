@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.67
+# Complete Setup Guide - v2.0.68
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.67 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.68 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -1228,13 +1228,16 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
-### v2.0.67 (2026-05-29)
-- fix: OAuth auth URL never shown in Docker/Umbrel — now printed unconditionally before any environment check
-- fix: improved headless/container detection (DOCKER/CONTAINER env, DISPLAY/WAYLAND_DISPLAY check)
+### v2.0.68 (2026-05-29)
 - fix: report server now logs actual LAN IP instead of localhost/0.0.0.0
 - fix: report generation timeout raised from 60 s to 300 s (fixes error with 90+ day CSV)
 - fix: full error detail (stderr) shown in browser UI on report failure
 - feat: comprehensive debug logging in report server (auto-enabled when plugin debug:true)
+- fix: platform.ts log no longer has redundant [Viessmann] prefix
+
+### v2.0.67 (2026-05-29)
+- fix: OAuth auth URL never shown in Docker/Umbrel — now printed unconditionally before any environment check
+- fix: improved headless/container detection (DOCKER/CONTAINER env, DISPLAY/WAYLAND_DISPLAY check)
 
 ### v2.0.66 (2026-03-19)
 - fix: HTTP 400 (boiler off/gateway offline) silenced — no more log spam
