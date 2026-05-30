@@ -21,6 +21,7 @@ import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
 import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
 import { ViessmannRoomSensorAccessory, discoverRoomSensorData } from './accessories/room-sensor-accessory';
+import * as fs from 'fs';
 import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
@@ -1126,7 +1127,53 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         const healthScore = this.viessmannAPI.getAPIHealthScore();
         const healthStatus = this.viessmannAPI.getAPIHealthStatus();
         this.log.debug(`📊 API Health: ${healthScore}/100 (${healthStatus})`);
+        this.writeApiStatusFile(healthScore, healthStatus);
       }
+    }
+  }
+
+  // ── API Status File ─────────────────────────────────────────────────────────
+  // Written after each successful update cycle.
+  // Read by viessmann-report-server.js and auth-manager status page to show
+  // API usage percentage, health score, and rate limit info in the web UI.
+  // Viessmann documented daily limit: 1450 requests/day.
+  private writeApiStatusFile(healthScore: number, healthStatus: string): void {
+    try {
+      const storagePath = this.api.user.storagePath();
+      const metrics     = this.viessmannAPI.getAPIMetrics();
+      const rateLimitSt = this.viessmannAPI.getRateLimitStatus();
+      const DAILY_LIMIT = 1450; // Viessmann API documented daily quota
+
+      const status = {
+        timestamp:          new Date().toISOString(),
+        healthScore,
+        healthStatus,
+        totalRequests:      metrics.totalRequests,
+        successfulRequests: metrics.successfulRequests,
+        failedRequests:     metrics.failedRequests,
+        rateLimitHits:      metrics.rateLimitHits,
+        errorRate:          parseFloat(metrics.errorRate.toFixed(1)),
+        avgResponseTime:    Math.round(metrics.averageResponseTime),
+        requestsPerMinute:  metrics.requestsPerMinute,
+        isRateLimited:      rateLimitSt.isLimited,
+        rateLimitWaitSec:   rateLimitSt.waitSeconds ?? 0,
+        dailyQuotaExceeded: rateLimitSt.dailyQuotaExceeded,
+        // Estimated daily usage — resets with metrics (every 24h)
+        // requestsPerMinute × 60 × 24 gives a rough projection
+        dailyEstimatedReqs: Math.round(metrics.requestsPerMinute * 60 * 24),
+        dailyLimitTotal:    DAILY_LIMIT,
+        dailyUsagePct:      Math.min(100, parseFloat(
+          (metrics.totalRequests / DAILY_LIMIT * 100).toFixed(1)
+        )),
+        pluginVersion:      '2.0.71',
+        refreshInterval:    this.config.refreshInterval || 120000,
+      };
+
+      const filePath = require('path').join(storagePath, 'viessmann-api-status.json');
+      fs.writeFileSync(filePath, JSON.stringify(status, null, 2), 'utf8');
+      this.log.debug(`📊 API status written: health=${healthScore}/100, dailyUsage=${status.dailyUsagePct}%`);
+    } catch (e) {
+      this.log.debug(`📊 Could not write API status file: ${(e as Error).message}`);
     }
   }
 

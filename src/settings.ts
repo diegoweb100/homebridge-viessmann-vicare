@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.70';
+export const PLUGIN_VERSION = '2.0.71';
 
 /**
  * Default configuration values
@@ -61,7 +61,7 @@ export const DEFAULT_CONFIG = {
     deviceUpdateDelay: 1000,
     userAgent: `homebridge-viessmann-vicare/${PLUGIN_VERSION}`,
   },
-  reportServerTimeout: 300,       // seconds — max time for report generation (default 5 min)
+  reportServerTimeout: 600,       // seconds — default 10 min; RPi3: ~365s/90days ~1460s/365days
   monitoring: {
     enableHealthReports: true,
     healthReportInterval: 3600000, // 1 hour

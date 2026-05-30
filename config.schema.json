@@ -520,10 +520,10 @@
       "reportServerTimeout": {
         "title": "Report Server Generation Timeout",
         "type": "integer",
-        "default": 300,
-        "minimum": 60,
-        "maximum": 1800,
-        "description": "Maximum time in seconds allowed for viessmann-report.js to generate a report. Increase for large CSV files (90+ days). Default: 300s (5 min). Range: 60–1800s."
+        "default": 600,
+        "minimum": 120,
+        "maximum": 3600,
+        "description": "Maximum time in seconds for report generation. RPi 3 benchmark: ~365s for 90 days / ~1460s for 365 days. Default: 600s. Range: 120–3600s."
       }
     },
     "required": [

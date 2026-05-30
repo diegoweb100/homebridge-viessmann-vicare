@@ -195,13 +195,58 @@ function generateReport(params) {
 
 // ── UI HTML ────────────────────────────────────────────────────────────────
 
-function buildUI(installations) {
+function buildUI(installations, apiStatus) {
   const today = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   const instOptions = installations.length === 0
     ? '<option value="">No CSV found — check path</option>'
     : installations.map(id =>
         '<option value="' + id + '">' + (id ? 'Installation ' + id : 'Default (no ID)') + '</option>'
       ).join('');
+
+
+  // Build API status card from shared status file
+  const apiCardHtml = (() => {
+    if (!apiStatus) {
+      return `<div class="api-card">
+        <div class="api-card-title">🌐 API Usage</div>
+        <div class="api-row"><span class="api-lbl">Status</span><span class="api-val" style="color:var(--muted)">No data yet — waiting for first update cycle</span></div>
+      </div>`;
+    }
+    const pct     = apiStatus.dailyUsagePct ?? 0;
+    const health  = apiStatus.healthScore ?? 0;
+    const pctCls  = pct > 80 ? 'bad' : pct > 50 ? 'warn' : 'ok';
+    const hCls    = health >= 85 ? 'ok' : health >= 60 ? 'warn' : 'bad';
+    const rlTxt   = apiStatus.isRateLimited
+      ? `<span class="api-val bad">🚫 Rate limited — wait ${apiStatus.rateLimitWaitSec}s</span>`
+      : (apiStatus.dailyQuotaExceeded
+          ? `<span class="api-val bad">🚫 Daily quota exceeded</span>`
+          : `<span class="api-val ok">✓ OK</span>`);
+    const age     = Math.round((Date.now() - new Date(apiStatus.timestamp).getTime()) / 1000);
+    const ageStr  = age < 120 ? `${age}s ago` : `${Math.round(age/60)}m ago`;
+    return `<div class="api-card">
+      <div class="api-card-title">🌐 API Usage (Viessmann limit: ${apiStatus.dailyLimitTotal ?? 1450} req/day)</div>
+      <div class="api-row">
+        <span class="api-lbl">Daily usage (est.)</span>
+        <span class="api-val">
+          <span class="bar-wrap"><span class="bar-fill ${pctCls}" style="width:${Math.min(pct,100)}%"></span></span>
+          <span class="${pctCls}">${pct}%</span>
+          &nbsp;<span style="color:var(--muted);font-size:10px">(~${apiStatus.dailyEstimatedReqs ?? '?'} req/day)</span>
+        </span>
+      </div>
+      <div class="api-row">
+        <span class="api-lbl">Health score</span>
+        <span class="api-val">
+          <span class="bar-wrap"><span class="bar-fill ${hCls}" style="width:${health}%"></span></span>
+          <span class="${hCls}">${health}/100</span>
+          &nbsp;<span style="color:var(--muted);font-size:10px">${apiStatus.healthStatus ?? ''}</span>
+        </span>
+      </div>
+      <div class="api-row"><span class="api-lbl">Rate limit</span>${rlTxt}</div>
+      <div class="api-row"><span class="api-lbl">Avg response</span><span class="api-val">${apiStatus.avgResponseTime ?? 0} ms</span></div>
+      <div class="api-row"><span class="api-lbl">Error rate</span><span class="api-val ${apiStatus.errorRate > 10 ? 'bad' : apiStatus.errorRate > 5 ? 'warn' : 'ok'}">${apiStatus.errorRate ?? 0}%</span></div>
+      <div class="api-row"><span class="api-lbl">Last updated</span><span class="api-val" style="color:var(--muted)">${ageStr}</span></div>
+    </div>`;
+  })();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -256,6 +301,16 @@ input:focus,select:focus{outline:none;border-color:var(--accent)}
 @keyframes spin{to{transform:rotate(360deg)}}
 .spinner{display:inline-block;width:13px;height:13px;border:2px solid rgba(249,115,22,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
 footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);text-align:center;opacity:.4}
+.api-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 20px;width:100%;max-width:560px;margin-bottom:14px}
+.api-card-title{font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--accent);margin-bottom:12px}
+.api-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.api-row:last-child{border-bottom:none}
+.api-lbl{color:var(--muted);font-family:'Space Mono',monospace;font-size:11px}
+.api-val{font-weight:600;font-family:'Space Mono',monospace;font-size:11px}
+.api-val.ok{color:var(--good)}.api-val.warn{color:var(--warn)}.api-val.bad{color:var(--bad)}
+.bar-wrap{width:100px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.bar-fill{height:100%;border-radius:3px}
+.bar-fill.ok{background:var(--good)}.bar-fill.warn{background:var(--warn)}.bar-fill.bad{background:var(--bad)}
 </style>
 </head>
 <body>
@@ -345,6 +400,7 @@ footer{margin-top:36px;font-family:'Space Mono',monospace;font-size:10px;color:v
   Generate Report
 </button>
 <div id="status"></div>
+${apiCardHtml}
 <footer>homebridge-viessmann-vicare &nbsp;·&nbsp; report server &nbsp;·&nbsp; ${HB_PATH} &nbsp;·&nbsp; ${LAN_IP}:${PORT}</footer>
 
 <script>
@@ -424,7 +480,8 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/' || pathname === '') {
     const installations = detectInstallations();
-    const html = buildUI(installations);
+    const apiStatus = readApiStatus(HB_PATH);
+    const html = buildUI(installations, apiStatus);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
     dbg(`← 200 / (${Date.now()-t0}ms, ${installations.length} installation(s))`);
