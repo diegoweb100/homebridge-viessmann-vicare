@@ -792,7 +792,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       this.writeDeviceMessages(features, installation.id, device.id);
 
       // ViCare Smart Climate rooms (one accessory per room) — issue #4
-      if ((this.config as any).features?.enableRoomSensors) {
+      if ((this.config as any).features?.enableRoomSensors !== false) {   // on by default: only rooms that really exist are created
         await this.setupRoomAccessories(installation, gateway, device, features);
       }
 

@@ -165,6 +165,7 @@ export class ViessmannEnergyAccessory {
       this.detectCapabilities(features);
       this.setupServices();
       await this.updateFromFeatures(features);
+      this.refreshPowerSensors();
 
     } catch (error) {
       this.platform.log.error(
@@ -331,6 +332,37 @@ export class ViessmannEnergyAccessory {
 
   // ── Service creation ───────────────────────────────────────────────────────
 
+  // ── Power sensors (W) ──────────────────────────────────────────────────────
+  // HomeKit has no "power" service. Light sensors (lux = W) are the de-facto standard in Homebridge:
+  // they show the number, never appear among the lights, cannot be switched by scenes or Siri and
+  // CAN trigger Apple Home automations ("when PV production rises above 3000 → start the dishwasher").
+  // The pre-2.0.80 light bulbs (brightness = power %) are only kept with enableLegacyDiagnosticSensors.
+  private powerSensors: Array<{ svc: Service; get: () => number }> = [];
+  private legacy(): boolean { return (this.platform.config as any).features?.enableLegacyDiagnosticSensors === true; }
+
+  private addPowerSensor(name: string, subtype: string, get: () => number) {
+    const svc = this.accessory.getServiceById(this.platform.Service.LightSensor, subtype)
+      || this.accessory.addService(this.platform.Service.LightSensor, name, subtype);
+    svc.setCharacteristic(this.platform.Characteristic.Name, name);
+    svc.getCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel)
+      .setProps({ minValue: 0.0001, maxValue: 100000 })
+      .onGet(() => Math.max(0.0001, Number(get()) || 0));
+    this.powerSensors.push({ svc, get });
+  }
+
+  private refreshPowerSensors() {
+    for (const p of this.powerSensors) {
+      p.svc.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, Math.max(0.0001, Number(p.get()) || 0));
+    }
+  }
+
+  private removeLegacyBulb(subtype: string) {
+    if (this.legacy()) return false;
+    const old = this.accessory.services.find(x => x.subtype === subtype);
+    if (old) { this.accessory.removeService(old); this.platform.log.info(`[EnergyAccessory] Removed legacy light-bulb service "${old.displayName}" (now a power sensor)`); }
+    return true;
+  }
+
   private setupServices(): void {
     if (this.isHeatPump) {
       this.setupHeatPumpServices();
@@ -405,7 +437,12 @@ export class ViessmannEnergyAccessory {
       .setProps({ minValue: -30, maxValue: 50, minStep: 0.5 })
       .onGet(() => this.states.hpOutsideTemp);
 
-    // COP as Lightbulb brightness (COP 1.0→5.0 mapped to 20→100%)
+    // COP as a sensor (value = COP); legacy light bulb only on request
+    if (this.removeLegacyBulb('heatpump-cop')) {
+      this.addPowerSensor('COP', 'heatpump-cop-sensor', () => this.states.hpCOP);
+      this.platform.log.debug('[EnergyAccessory] Heat pump services created');
+      return;
+    }
     this.heatpumpCOPService =
       this.accessory.getService('COP') ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'COP', 'heatpump-cop');
@@ -440,6 +477,10 @@ export class ViessmannEnergyAccessory {
   // ── PV ─────────────────────────────────────────────────────────────────────
 
   private setupPVServices(): void {
+    if (this.removeLegacyBulb('pv-production')) {
+      this.addPowerSensor('PV Production', 'pv-power-w', () => this.states.pvProductionW);
+      return;
+    }
     this.pvProductionService =
       this.accessory.getService('PV Production') ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'PV Production', 'pv-production');
@@ -500,6 +541,11 @@ export class ViessmannEnergyAccessory {
           : this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL,
       );
 
+    if (this.removeLegacyBulb('battery-power')) {
+      this.addPowerSensor('Battery Charging', 'battery-charging-w', () => this.states.batteryChargingW);
+      this.addPowerSensor('Battery Discharging', 'battery-discharging-w', () => this.states.batteryDischargingW);
+      return;
+    }
     this.batteryPowerService =
       this.accessory.getService('Battery Power') ||
       this.accessory.addService(this.platform.Service.Lightbulb, 'Battery Power', 'battery-power');
@@ -572,6 +618,7 @@ export class ViessmannEnergyAccessory {
       .getCharacteristic(this.platform.Characteristic.OutletInUse)
       .onGet(() => this.states.wallboxChargingActive);
 
+    this.addPowerSensor('EV Charging Power', 'wallbox-power-w', () => this.states.wallboxChargingPowerW);
     this.platform.log.debug('[EnergyAccessory] Wallbox services created');
   }
 
@@ -641,6 +688,7 @@ export class ViessmannEnergyAccessory {
         this.device.id,
       );
       await this.updateFromFeatures(features);
+      this.refreshPowerSensors();
     } catch (error) {
       this.platform.log.warn(`[EnergyAccessory] Update failed for ${this.device.id}:`, error);
     }

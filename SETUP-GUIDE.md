@@ -1292,6 +1292,14 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.80 (2026-09-27)
+- feat: report redesigned for everyone (drawing of the system, scores, step-by-step advice with savings, explanations, glossary); values checked against the real gas bills; location-independent
+- feat (Apple Home): heating plans as in ViCare, one at a time (Off, Normal, Extended heating, Holiday at home, Holiday); hot water Comfort / Eco / Off one at a time
+- feat (Apple Home): Reduced / Normal / Comfort temperatures as separate tiles that follow the time schedule
+- feat (Apple Home): boiler alarm sensor (fault codes, pressure outside 0.8–3.0 bar) with optional Telegram/ntfy message; hot water temperature sensor; PV / battery / wallbox / COP power sensors; Smart Climate rooms on by default
+- fix: no more 37 °C Comfort from the old "alternative method" — check your Comfort temperature; "creative" sensors (air quality, humidity, leak, light bulbs) removed
+- Grafana: re-import `grafana/viessmann-dashboard.json` (ViCare names, pressure alarm band)
+
 ### v2.0.79 (2026-09-26)
 - feat: report gas forecast with real weather (Open-Meteo) and degree-day model calibrated on the boiler yearly counters; works with any amount of data
 

@@ -1,1712 +1,92 @@
 #!/usr/bin/env node
 /**
- * Viessmann History Report Generator
- * Reads viessmann-history.csv and generates an interactive HTML report
- * with Chart.js graphs (no extra dependencies — Chart.js loaded via CDN).
+ * Viessmann History Report Generator — v3 (homebridge-viessmann-vicare 2.0.80+)
+ *
+ * Reads viessmann-history-<ID>.csv (written by the plugin) and produces a single,
+ * self-contained HTML report for technicians AND for people who know nothing about boilers:
+ *   - illustrated system overview and health score
+ *   - assistant advice: why, what to do, who does it, estimated savings
+ *   - every value explained in plain language
+ *   - gas & costs, weather-normalised forecast, heating, curve, burner, hot water,
+ *     house heat loss, official API counters, energy devices, device messages, glossary
  *
  * Usage:
- *   node viessmann-report.js --installation YOUR_INSTALLATION_ID
- *   node viessmann-report.js --installation YOUR_INSTALLATION_ID --days 7
- *   node viessmann-report.js --installation YOUR_INSTALLATION_ID --days 30 --out /tmp/report.html
+ *   node viessmann-report.js --installation YOUR_INSTALLATION_ID [--days 30] [--lang it|en]
  *
- * --installation <ID>  Installation ID (creates viessmann-history-<ID>.csv)
- * --days <N>           Number of days to include (default: 7)
- * --path <dir>         Homebridge storage path (default: /var/lib/homebridge)
- * --out <file>         Output HTML file path
+ * Options:
+ *   --installation <ID>  installation ID (reads viessmann-history-<ID>.csv)
+ *   --days <N>           period in days (default 7)
+ *   --path <dir>         Homebridge storage path (default /var/lib/homebridge)
+ *   --out <file>         output HTML file
+ *   --lang it|en         report language (default en)
+ *   --gasPriceEur <n>    gas price in €/m³ including taxes (default 1.10)
+ *   --elPriceEur <n>     electricity price in €/kWh (default 0.30)
+ *   --boilerKW <n>       boiler nominal power (kW) — enables sizing checks
+ *   --designTemp <n>     design outdoor temperature (°C, default -7)
+ *   --curveSlope / --curveShift  heating curve if not available from the API
+ *   --lat / --lon        location for weather data (default: read from ViCare)
+ *   --hddBase <n>        degree-day base temperature (°C, default 16)
  *
- * No extra dependencies needed — open the generated HTML in any browser.
+ * Data rules (see CHANGELOG 2.0.80):
+ *   - Only "snapshot" rows describe the system state; burner_on rows are S.6 ignition events.
+ *   - Snapshot values can be stale (cloud value repeated). Burner hours/starts come from counters.
+ *   - Daily gas is derived from the MONTHLY counters (the daily ones reset hours late).
+ *   - The boiler outdoor sensor can be biased; real temperatures come from Open-Meteo.
+ *   - Device message timestamps are local time labelled "Z".
  */
 
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
+// ─── CLI ────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
-const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i+1] ? args[i+1] : def; };
-const DAYS = parseInt(getArg('--days', '7'), 10);
-const LANG = getArg('--lang', process.env.REPORT_LANG || 'en').toLowerCase();
-
-// ═══════════════════════════════════════════════════════════════════════════
-// i18n — Internationalization
-// Add new languages by extending the STRINGS object below.
-// Supported: 'en' (default), 'it'
-// Usage: --lang it  or  env REPORT_LANG=it
-// ═══════════════════════════════════════════════════════════════════════════
-const STRINGS = {
-  en: {
-    // ── Section titles ──────────────────────────────────────────────────
-    reportTitle:        'Viessmann ViCare — History Report',
-    sectionOverview:    '📈 Overview',
-    sectionBoiler:      '🔥 Boiler — Burner',
-    sectionHC0:         '🌡️ Heating Circuit (HC0)',
-    sectionSystemAnalysis: '🔍 System Analysis',
-    sectionDHW:         '🚿 Domestic Hot Water (DHW)',
-    sectionEnergySummary: '📊 Energy Summary (from Viessmann API)',
-    sectionEnergySystem: '⚡ Energy System (PV / Battery / Grid)',
-    sectionGasForecast: '⛽ Gas Forecast',
-    sectionDeviceMessages: '🔔 Device Messages',
-
-    // ── KPI labels ──────────────────────────────────────────────────────
-    cyclesInPeriod:     'CYCLES IN PERIOD',
-    startsPerHour:      'STARTS/HOUR',
-    avgCycleDuration:   'AVG CYCLE DURATION',
-    burnerRuntime:      'BURNER RUNTIME',
-    lifetimeStarts:     'LIFETIME STARTS',
-    lifetimeHours:      'LIFETIME HOURS',
-    avgModulation:      'AVG MODULATION (ACTIVE)',
-    maxModulation:      'MAX MODULATION',
-    avgHeatDemand:      'AVG HEAT DEMAND',
-    gasHeatingToday:    'GAS HEATING TODAY',
-    gasDhwToday:        'GAS DHW TODAY',
-    gasTotalToday:      'GAS TOTAL TODAY',
-    avgRoomTemp:        'AVG ROOM TEMP',
-    avgSetpoint:        'AVG SETPOINT',
-    maxFlowTemp:        'MAX FLOW TEMP',
-    condensingMode:     'CONDENSING MODE',
-    avgFlowTemp:        'AVG FLOW TEMP',
-    todaySchedule:      "TODAY'S SCHEDULE",
-    programDist:        'PROGRAM DISTRIBUTION',
-    heatLossCoeff:      'HEAT LOSS COEFF.',
-    estPeakLoad:        'EST. PEAK LOAD',
-    boilerNominal:      'BOILER NOMINAL',
-    houseEfficiency:    'HOUSE EFFICIENCY',
-    cyclingScore:       'CYCLING SCORE',
-    comfortStability:   'COMFORT STABILITY',
-    estEfficiency:      'EST. EFFICIENCY',
-    heatingCurveLabel:  'HEATING CURVE',
-
-    // ── Ratings ─────────────────────────────────────────────────────────
-    condensing:         'Condensing ✓',
-    excellent:          'Excellent',
-    good:               'Good',
-    average:            'Average',
-    poor:               'Poor',
-    oversized:          'Oversized',
-    weatherComp:        'Weather-compensated ✓',
-    fixedFlow:          'Fixed flow temp',
-    checkCurve:         'Check curve config',
-    atOutdoor:          'at {temp}°C outdoor',
-
-    // ── Chart notes ─────────────────────────────────────────────────────
-    cycleApiNote:       'Cycle count uses <strong>API firmware counters</strong> (burner_starts delta) — captures all ignitions regardless of 15-min CSV sample rate. CSV edge detection would miss ~{pct}% of cycles at this cycle frequency.',
-    burnerBarsNote:     'Burner ON/OFF bars show only cycles visible within 15-min sampling interval. Actual cycle count ({n}) is {mult}× higher — see API counter KPIs above.',
-    histNote:           'Distribution of burner ON durations visible in CSV samples. Actual cycle duration from API counters: avg {dur} min. Histogram shows only ~{vis} of {real} real cycles.',
-    flowTempNote:       'Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.',
-    heatDemandTitle:    'Heat Demand vs Outdoor Temperature',
-    heatDemandNote:     'Each point = one burner-active sample. Red line = linear regression.{bp} <em>Scroll to zoom · Drag to pan · Double-click to reset.</em>',
-    balancePoint:       ' Balance point (estimated): {bp}°C outdoor.',
-    flowCurveTitle:     '🌡️ Flow Temperature vs Outdoor — Actual vs Heating Curve',
-    flowCurveNote:      'Blue dots = measured flow temp when burner active. Orange dashed = programmed heating curve (slope={slope}, shift={shift}). Gap between dots and curve indicates deviation from the set curve. <em>Scroll to zoom · Drag to pan · Double-click to reset.</em>',
-    zoomReset:          '⟳ Reset zoom',
-    scrollZoom:         'Scroll to zoom · Drag to pan · Double-click to reset.',
-
-    // ── KPI label lookup (used by sc() in HTML template) ──────────────────
-    kpiLabels: {
-      'Cycles in period':        'CYCLES IN PERIOD',
-      'Starts/hour':             'STARTS/HOUR',
-      'Avg cycle duration':      'AVG CYCLE DURATION',
-      'Burner runtime':          'BURNER RUNTIME',
-      'Lifetime starts':         'LIFETIME STARTS',
-      'Lifetime hours':          'LIFETIME HOURS',
-      'Avg modulation (active)': 'AVG MODULATION (ACTIVE)',
-      'Max modulation':          'MAX MODULATION',
-      'Avg heat demand':         'AVG HEAT DEMAND',
-      'Gas heating today':       'GAS HEATING TODAY',
-      'Gas DHW today':           'GAS DHW TODAY',
-      'Gas total today':         'GAS TOTAL TODAY',
-      'Avg room temp':           'AVG ROOM TEMP',
-      'Avg setpoint':            'AVG SETPOINT',
-      'Max flow temp':           'MAX FLOW TEMP',
-      'Condensing mode':         'CONDENSING MODE',
-      'Avg flow temp':           'AVG FLOW TEMP',
-      'Heat loss coeff.':        'HEAT LOSS COEFF.',
-      'Est. peak load':          'EST. PEAK LOAD',
-      'Boiler nominal':          'BOILER NOMINAL',
-      'House efficiency':        'HOUSE EFFICIENCY',
-      'Cycling score':           'CYCLING SCORE',
-      'Comfort stability':       'COMFORT STABILITY',
-      'Est. efficiency':         'EST. EFFICIENCY',
-      'Heating curve':           'HEATING CURVE',
-      'Avg temp':                'AVG TEMP',
-      'Avg setpoint (DHW)':      'AVG SETPOINT',
-    },
-
-    // ── Insights — existing ─────────────────────────────────────────────
-    insightNoIssues:    'No issues detected. System appears to be operating normally.',
-    insightAddBoilerKW: 'Add --boilerKW <nominal_kW> to enable heat demand, peak load and house efficiency calculations (e.g. --boilerKW 19).',
-    insightShortCycling: 'Short cycling detected — avg cycle {dur} min (ideal > 6 min). With {sph} starts/hour, the boiler is cycling too frequently. Check minimum modulation setting (technician), system hydraulic balance, and pump speed.',
-    insightHighCycling: 'High cycling rate — {sph} starts/hour. Consider raising the heating curve setpoint or requesting minimum burner runtime calibration.',
-    insightLowMod:      'Boiler running at low modulation (avg {mod}%) with short cycles. Consider lowering the heating curve to reduce cycling.',
-    insightHighFlow:    'Flow temperature (avg {flow}°C) is higher than necessary for current outdoor conditions ({out}°C). Lowering the heating curve improves condensing efficiency.',
-    insightOversized:   'Boiler nominal power ({kw} kW) is more than twice the estimated peak load (~{peak} kW). Oversizing is common for combi boilers but contributes to cycling.',
-    insightGoodHouse:   'Building thermal efficiency rated {rating} (heat loss {coeff} kW/°C). Good insulation reduces heating demand.',
-    insightCyclingSevere: 'Cycling severity score {score} — severe. Boiler starts {sph} times/hour with avg cycle {dur} min. Technician calibration of minimum modulation recommended.',
-    insightCyclingHigh: 'Cycling severity score {score} — high. Boiler starts {sph} times/hour (avg cycle {dur} min). Consider requesting minimum modulation calibration.',
-    insightMinMod:      'Boiler frequently operating near minimum modulation (avg {mod}%). Combined with short cycles, this suggests oversizing or flow temperature set too high.',
-    insightFixedFlow:   'Flow temperature appears fixed (r={r}). Consider enabling weather compensation on your boiler controller to improve efficiency.',
-    insightCurveMiscfg: 'Heating curve may be misconfigured — flow temperature correlates positively with outdoor temperature (r={r}). Expected: flow should rise when outdoor drops.',
-
-    // ── Insights — NEW: recommendations with actions ────────────────────
-
-    // ── Comfort efficiency strings ────────────────────────────────────────
-    ceTitle:            '⚖️ Comfort vs Efficiency',
-    ceNotEnoughData:    'Accumulating data — this analysis will be available after {need} days of monitoring ({have} of {need} collected so far).',
-    ceNoHeating:        'No space heating in the selected period (summer / hot water only): comfort vs efficiency cannot be evaluated.',
-    ceStabilityLabel:   'Temperature stability',
-    ceGasNormLabel:     'Normalised gas consumption',
-    ceTrendStability:   'Comfort trend',
-    ceTrendGas:         'Gas trend',
-    ceInsightGasNoComfort: 'Gas consumption increased without comfort improvement — consider reviewing flow temperature or schedule.',
-    ceInsightComfortFree:  'Comfort improved with no significant gas increase — system optimisation is working.',
-    ceInsightBothWorse:    'Both comfort and efficiency worsened — configuration change or external factor detected.',
-    ceInsightStable:       'No significant trend — system is stable.',
-    ceImproved:         'improved',
-    ceWorsened:         'worsened',
-    ceUnchanged:        'stable',
-
-    // ── Condensing score strings ──────────────────────────────────────────
-    csTitle:            'Est. condensing score',
-    csLabel:            'Return temp < 55°C',
-    csNote:             'Estimated from flow temp and modulation (model-based, not measured).',
-    csNotEnough:        'Insufficient burner data',
-
-    // ── Heat loss line string ─────────────────────────────────────────────
-    hlLineLabel:        'Theoretical heat loss (H={h} kW/°C)',
-
-
-    // ── Additional untranslated strings ────────────────────────────────────
-    heatingScheduleLabel:    'Heating schedule',
-    leftAxisNote:            'Left axis: temperatures (°C) — Right axis: modulation, burner & outdoor humidity (% / 0–100)',
-    cyclePerformanceTitle:   'Cycle performance (from API counters — precise)',
-    modGasTitle:             'Modulation & gas (period)',
-    todayScheduleKey:        "TODAY'S SCHEDULE",
-    programDistKey:          'Program distribution',
-    burnerBarsTitle:         'Cycle duration histogram (sampled)',
-    heatmapTitle:            '🕐 Burner activity by hour of day',
-    heatmapNote:             "Each cell = % of snapshots in that hour where burner was ON. Darker = more active. Hover for details.",
-    heatmapLow:              'Low',
-    heatmapHigh:             'High',
-    heatmapBurnerPct:        'Burner ON %',
-    gasChartTitle:           '📊 Daily gas consumption (m³)',
-    gasChartNote:            "Stacked bars: heating (dark blue) + DHW (teal). Red line: daily total. Today's bar shows current accumulated value.",
-    effChartTitle:           '📐 Daily thermal efficiency (heat produced / gas input)',
-    effChartNote:            'Calculated from CSV columns: heat_heating_day_kwh ÷ (gas_heating_day_m3 × 10.55 kWh/m³). Condensing boilers can exceed 100%.',
-    flowTempChartNote:       'Flow temperature (supply) — proxy for condensing efficiency. Below 55°C = condensing range.',
-    energySummaryNote:       'Official aggregated data from Viessmann cloud API. Data snapshot: {ts}. Run viessmann-explore-history.js to refresh.',
-    energySummaryStale:      'Data snapshot: {ts}.',
-    gasSectionHeating:       'GAS CONSUMPTION (M³)',
-    heatSectionTitle:        'HEAT PRODUCED (KWH)',
-    thermalEffTitle:         'THERMAL EFFICIENCY (HEAT PRODUCED / GAS INPUT × PCS 10.55 KWH/M³)',
-    thermalEffNote:          'Thermal efficiency >100% is possible for condensing boilers (latent heat recovery). Values >105% may indicate rounding in Viessmann API data.',
-    forecastNote:            'Annual estimate requires at least {min} days of gas data (currently {n}). Run with --days {min} or more. Use --gasPriceEur to set your tariff.',
-    forecastProjectionNote:  'Projection based on last {n} day(s) of data · gas price: €{price}/m³ · {trend}',
-    fcModelNote:             'Model from {n} days of gas data (since {from}): {base} m³/day hot water + {k} m³ per degree-day (heating, base 16 °C, R² {r2}) · price €{price}/m³ (--gasPriceEur)',
-    fcNoHeatingNote:         '{n} days of gas data without heating days yet: only hot water is projected ({base} m³/day) · price €{price}/m³ (--gasPriceEur)',
-    fcWeatherNote:           'Real outdoor temperatures from Open-Meteo: next 30 days use the weather forecast ({f} days) and the same dates of last year; the annual estimate uses the weather of the last 365 days.',
-    fcNoLocation:            'Installation location unknown: add --lat and --lon to include the weather in the forecast.',
-    fcWeatherDown:           'Weather service not reachable: heating is not included in the projection.',
-    fcNeedHeating:           'needs some heating days',
-    fcCalNote:               'Degree-day model calibrated on the boiler yearly counters (Viessmann API): {base} m³/day hot water + {k} m³ per degree-day (heating, base 16 °C) · {n} days of detailed data · price €{price}/m³ (--gasPriceEur)',
-    fcRecentNote:            'Average of the last {n} days of gas data ({base} m³/day), without weather correction · price €{price}/m³ (--gasPriceEur)',
-    fcNeedWeather:           'needs weather data',
-    forecastTrendRising:     '↑ Rising',
-    forecastTrendFalling:    '↓ Falling',
-    forecastTrendStable:     '→ Stable',
-    deviceMessagesNote:      'Status, info and fault codes reported by the device. Translated from Viessmann service documentation.',
-    deviceMessagesNoFile:    'No messages file found yet. Messages will appear here once the plugin writes the messages file.',
-    annualEstLabel:          'ANNUAL ESTIMATE',
-    avgConsPerDay:           'AVG CONSUMPTION/DAY',
-    projNext30:              'PROJECTED NEXT 30 DAYS',
-    needDays:                'Need {min} days (have {n})',
-    heatingLastNDays:        'HEATING LAST {n} DAYS',
-    heatingThisMonth:        'HEATING THIS MONTH',
-    heatingThisYear:         'HEATING THIS YEAR',
-    dhwThisMonth:            'DHW THIS MONTH',
-    dhwThisYear:             'DHW THIS YEAR',
-    totalThisMonth:          'TOTAL THIS MONTH',
-    totalThisYear:           'TOTAL THIS YEAR',
-    pumpPowerMonth:          'PUMP POWER MONTH',
-    pumpPowerYear:           'PUMP POWER YEAR',
-    effThisMonth:            'EFFICIENCY THIS MONTH',
-    effThisYear:             'EFFICIENCY THIS YEAR',
-
-
-    // ── Boiler section notes ─────────────────────────────────────────────
-    cycleApiNoteShort:  '⚡ Cycle count uses <strong>API firmware counters</strong> (burner_starts delta) — captures all ignitions regardless of 15-min CSV sample rate. CSV edge detection would miss ~97% of cycles at this cycle frequency.',
-    burnerBarNote:      '⚠️ Burner ON/OFF bars show only cycles visible within 15-min sampling interval. Actual cycle count ({n}) is {mult}× higher — see API counter KPIs above.',
-    histogramNote:      'Distribution of burner ON durations visible in CSV samples. Actual cycle duration from API counters: avg {dur} min. Histogram shows only ~{vis} of {real} real cycles.',
-    onlySamplesNote:    "Only {n} samples — data will accumulate over time (~1 every 15 min).",
-    heatDemandSTitle:   'Heat Demand vs Outdoor Temperature',
-    flowCurveSTitle:    '🌡️ Flow Temperature vs Outdoor — Actual vs Heating Curve',
-    needDaysShort:      'Need {min} days (have {n})',
-
-
-    // ── Badge labels ──────────────────────────────────────────────────────
-    badgeLowDemand:     'Low demand',
-    badgeNormal:        'Normal',
-    badgeHigh:          'High',
-    badgeSevere:        'Severe',
-    badgeOK:            'OK',
-    badgeShort:         'Short',
-    badgeVeryShort:     'Very short',
-    badgeCondensing:    'Condensing ✓',
-    badgeBorderline:    'Borderline',
-    badgeNotCond:       'Not condensing',
-    badgeExcellent:     'Excellent',
-    badgeOversized:     'Oversized',
-    badgeLowMod:        'Low mod',
-    badgeCheck:         'Check',
-
-
-    heatDemandNote1:    'Each point = one burner-active sample. Red line = linear regression.',
-    scrollZoomNote:     '<em>Scroll to zoom · Drag to pan · Double-click to reset.</em>',
-
-
-    balancePoint:       'Balance point (estimated): {bp}°C outdoor.',
-    hlLineLabelShort:   'Green line = theoretical heat loss curve (H={h} kW/°C).',
-
-
-    condensingTimePct:  '{pct}% time',
-    atOutdoorTemp:      'at {temp}°C outdoor',
-    hoverDetails:       'Passa il cursore per dettagli.',
-    noMessagesFile:     'No messages file found yet. Messages will appear here once the plugin writes',
-
-
-    oneFilePerDevice:   '(one file per device per installation).',
-
-    periodLabel:        'Period',
-    generatedLabel:     'Generated',
-    lastNDays:          'last {n} days',
-    samplesLabel:       '{n} samples',
-    progHeating:        'Heating',
-    progReduced:        'Reduced',
-    progNormal:         'Normal',
-    progOff:            'Off',
-    progComfort:        'Comfort',
-
-
-    // ── Chart.js dataset labels ───────────────────────────────────────────
-    chartRoomTemp:        'Room temp (°C)',
-    chartHC0Setpoint:     'HC0 setpoint (°C)',
-    chartFlowTemp:        'Flow temp (°C)',
-    chartDHWTemp:         'DHW temp (°C)',
-    chartDHWSetpoint:     'DHW setpoint (°C)',
-    chartOutdoorTemp:     'Outdoor temp (°C)',
-    chartOutdoorHum:      'Outdoor humidity (%)',
-    chartModulation:      'Modulation (%)',
-    chartBurnerBar:       'Burner (0/100)',
-    chartBurnerOnOff:     'Burner (1=ON 0=OFF)',
-    chartHeatDemand:      'Heat demand (kW)',
-    chartTrend:           'Trend',
-    chartHeatLossLine:    'Heat loss Q=H\u00d7\u0394T (H={h} kW/\u00b0C)',
-    chartActualFlow:      'Actual flow temp (°C)',
-    chartHeatingCurve:    'Heating curve (slope={slope}, shift={shift})',
-    chartCondensingLimit: 'Condensing limit (55°C)',
-    chartThermalEff:      'Thermal efficiency (%)',
-    chartSetpoint:        'Setpoint (°C)',
-    chartHeatingM3:       'Heating (m\u00b3)',
-    chartDHWM3:           'DHW (m\u00b3)',
-    chartTotalM3:         'Total (m\u00b3)',
-    chartCycles:          'Cycles',
-    chartPV:              '\u2600\ufe0f PV (W)',
-    chartPVProd:          'PV production (W)',
-    chartBattLevel:       'Battery level (%)',
-    chartBattCharge:      '\uD83D\uDD0B Batt. charging (W)',
-    chartBattChargeW:     'Charging (W)',
-    chartBattDischarge:   'Discharging (W)',
-    chartGridDraw:        '\uD83D\uDD0C Grid draw (W)',
-    chartWallbox:         '\uD83D\uDE97 Wallbox (W)',
-    chartWallboxW:        'Wallbox power (W)',
-
-
-    // ── Program / schedule labels ─────────────────────────────────────────
-    unstable:           'Unstable',
-    progNormal:         'Normal',
-    progComfort:        'Comfort',
-    progReduced:        'Reduced',
-    progOff:            'Off',
-    progHeating:        'Heating',
-    legendNormal:       'Normal',
-    legendComfort:      'Comfort',
-    legendReduced:      'Reduced',
-    legendOff:          'Off',
-    periodLabel:        'Period',
-    generatedLabel:     'Generated',
-    samplesLabel:       '{n} samples',
-    lastNDays:          'last {n} days',
-
-
-    // ── Axis labels & tooltip strings ────────────────────────────────────
-    axisOutdoorTemp:    'Outdoor temperature (°C)',
-    axisHeatDemand:     'Heat demand (kW)',
-    axisFlowTemp:       'Flow temperature (°C)',
-    axisAvgW:           'Avg W',
-    tooltipOutdoor:     'outdoor: {x}°C  demand: {y} kW',
-    tooltipFlowActual:  'outdoor: {x}°C  flow: {y}°C',
-    tooltipFlowCurve:   'curve: {y}°C at {x}°C outdoor',
-
-
-    axisCycles:         '# cycles',
-    axisM3:             'm³',
-
-    recTitle:           '💡 Recommended actions',
-    recImpact:          'Estimated impact',
-    recActionsLabel:    'Recommended actions',
-    recOversizingActions: {
-      title:   '⚠️ Boiler oversized ({ratio}×) — structural cycling',
-      body:    'Minimum boiler power (~{minPow} kW) exceeds avg heat demand ({demand} kW). The boiler physically cannot modulate low enough — cycling is inevitable.',
-      actions: [
-        'Lower flow temperature setpoint → reduces heat demand per cycle',
-        'Enable weather compensation (slope {slope}, shift {shift} → already set)',
-        'Ask technician to calibrate minimum modulation to lowest possible value',
-        'Consider hydraulic separator if not present',
-      ],
-      impact:  '−20–35% cycles · +2–4% efficiency',
-    },
-    recHighFlow: {
-      title:   '⚠️ Flow temperature too high for outdoor conditions',
-      body:    'Current avg flow {flow}°C with outdoor {out}°C. The heating curve prescribes {curve}°C — you are running {delta}°C above curve.',
-      actions: [
-        'Reduce curve shift by {suggestShift} points (from {shift} to {newShift})',
-        'Or reduce slope slightly (from {slope} to {newSlope})',
-        'Monitor room temperature over 2–3 days — reduce further if comfortable',
-      ],
-      impact:  '+3–5% condensing efficiency · −10–15% gas',
-    },
-    recNoWeatherComp: {
-      title:   'ℹ️ Weather compensation not active',
-      body:    'Flow temperature is fixed regardless of outdoor temperature (r={r}). In mild weather the boiler overheats — in cold weather it may underheat.',
-      actions: [
-        'Enable weather compensation on boiler controller (ViCare app → Heating → Curve)',
-        'Recommended starting point: slope {slope}, shift {shift} (already programmed)',
-        'Re-evaluate after 1 week of data',
-      ],
-      impact:  '−5–10% gas consumption · reduced cycling',
-    },
-  },
-
-  it: {
-    // ── Section titles ──────────────────────────────────────────────────
-    reportTitle:        'Viessmann ViCare — Report Storico',
-    sectionOverview:    '📈 Panoramica',
-    sectionBoiler:      '🔥 Caldaia — Bruciatore',
-    sectionHC0:         '🌡️ Circuito di Riscaldamento (HC0)',
-    sectionSystemAnalysis: '🔍 Analisi Sistema',
-    sectionDHW:         '🚿 Acqua Calda Sanitaria (ACS)',
-    sectionEnergySummary: '📊 Riepilogo Energetico (da API Viessmann)',
-    sectionEnergySystem: '⚡ Sistema Energetico (PV / Batteria / Rete)',
-    sectionGasForecast: '⛽ Previsione Gas',
-    sectionDeviceMessages: '🔔 Messaggi Dispositivo',
-
-    // ── KPI labels ──────────────────────────────────────────────────────
-    cyclesInPeriod:     'CICLI NEL PERIODO',
-    startsPerHour:      'ACCENSIONI/ORA',
-    avgCycleDuration:   'DURATA MEDIA CICLO',
-    burnerRuntime:      'RUNTIME BRUCIATORE',
-    lifetimeStarts:     'ACCENSIONI LIFETIME',
-    lifetimeHours:      'ORE LIFETIME',
-    avgModulation:      'MODULAZIONE MEDIA (ATTIVA)',
-    maxModulation:      'MODULAZIONE MASSIMA',
-    avgHeatDemand:      'DOMANDA TERMICA MEDIA',
-    gasHeatingToday:    'GAS RISCALDAMENTO OGGI',
-    gasDhwToday:        'GAS ACS OGGI',
-    gasTotalToday:      'GAS TOTALE OGGI',
-    avgRoomTemp:        'TEMP. MEDIA AMBIENTE',
-    avgSetpoint:        'SETPOINT MEDIO',
-    maxFlowTemp:        'TEMP. MANDATA MAX',
-    condensingMode:     'MODALITÀ CONDENSAZIONE',
-    avgFlowTemp:        'TEMP. MANDATA MEDIA',
-    todaySchedule:      'PROGRAMMA ODIERNO',
-    programDist:        'DISTRIBUZIONE PROGRAMMI',
-    heatLossCoeff:      'COEFF. DISPERSIONE',
-    estPeakLoad:        'CARICO DI PUNTA STIMATO',
-    boilerNominal:      'POTENZA CALDAIA',
-    houseEfficiency:    'EFFICIENZA EDIFICIO',
-    cyclingScore:       'INDICE DI CICLAGGIO',
-    comfortStability:   'STABILITÀ COMFORT',
-    estEfficiency:      'EFFICIENZA STIMATA',
-    heatingCurveLabel:  'CURVA DI RISCALDAMENTO',
-
-    // ── Ratings ─────────────────────────────────────────────────────────
-    condensing:         'Condensazione ✓',
-    excellent:          'Eccellente',
-    good:               'Buono',
-    average:            'Medio',
-    poor:               'Scarso',
-    oversized:          'Sovradimensionata',
-    weatherComp:        'Compensazione clima ✓',
-    fixedFlow:          'Mandata fissa',
-    checkCurve:         'Verificare curva',
-    atOutdoor:          'a {temp}°C esterna',
-
-    // ── Chart notes ─────────────────────────────────────────────────────
-    cycleApiNote:       'Il conteggio cicli usa i <strong>contatori firmware API</strong> (delta burner_starts) — cattura tutte le accensioni indipendentemente dal campionamento CSV a 15 min. Il rilevamento da CSV mancherebbe il ~{pct}% dei cicli a questa frequenza.',
-    burnerBarsNote:     'Le barre ON/OFF mostrano solo i cicli visibili nell\'intervallo di campionamento a 15 min. Il conteggio reale ({n}) è {mult}× superiore — vedi KPI contatori API sopra.',
-    histNote:           'Distribuzione delle durate ON visibili nei campioni CSV. Durata media reale da API: {dur} min. L\'istogramma mostra solo ~{vis} dei {real} cicli reali.',
-    flowTempNote:       'Temperatura di mandata (mandata) — indicatore dell\'efficienza di condensazione. Sotto 55°C = modalità condensazione.',
-    heatDemandTitle:    'Domanda Termica vs Temperatura Esterna',
-    heatDemandNote:     'Ogni punto = un campione con bruciatore attivo. Linea rossa = regressione lineare.{bp} <em>Scroll per zoom · Trascina per spostare · Doppio click per reset.</em>',
-    balancePoint:       ' Balance point (stimato): {bp}°C esterna.',
-    flowCurveTitle:     '🌡️ Temp. Mandata vs Esterna — Reale vs Curva',
-    flowCurveNote:      'Punti blu = temperatura mandata misurata con bruciatore attivo. Linea arancione = curva programmata (pendenza={slope}, livello={shift}). Il gap indica la deviazione dalla curva impostata. <em>Scroll per zoom · Trascina per spostare · Doppio click per reset.</em>',
-        zoomReset:          '⟳ Reimposta zoom', scrollZoom:         'Scroll per zoom · Trascina · Doppio click per reset.',
-
-    // ── KPI label lookup ────────────────────────────────────────────────────
-    kpiLabels: {
-      'Cycles in period':        'CICLI NEL PERIODO',
-      'Starts/hour':             'ACCENSIONI/ORA',
-      'Avg cycle duration':      'DURATA MEDIA CICLO',
-      'Burner runtime':          'RUNTIME BRUCIATORE',
-      'Lifetime starts':         'ACCENSIONI LIFETIME',
-      'Lifetime hours':          'ORE LIFETIME',
-      'Avg modulation (active)': 'MODULAZIONE MEDIA (ATTIVA)',
-      'Max modulation':          'MODULAZIONE MASSIMA',
-      'Avg heat demand':         'DOMANDA TERMICA MEDIA',
-      'Gas heating today':       'GAS RISCALDAMENTO OGGI',
-      'Gas DHW today':           'GAS ACS OGGI',
-      'Gas total today':         'GAS TOTALE OGGI',
-      'Avg room temp':           'TEMP. MEDIA AMBIENTE',
-      'Avg setpoint':            'SETPOINT MEDIO',
-      'Max flow temp':           'TEMP. MANDATA MAX',
-      'Condensing mode':         'MODALITÀ CONDENSAZIONE',
-      'Avg flow temp':           'TEMP. MANDATA MEDIA',
-      'Heat loss coeff.':        'COEFF. DISPERSIONE',
-      'Est. peak load':          'CARICO DI PUNTA STIMATO',
-      'Boiler nominal':          'POTENZA CALDAIA',
-      'House efficiency':        'EFFICIENZA EDIFICIO',
-      'Cycling score':           'INDICE DI CICLAGGIO',
-      'Comfort stability':       'STABILITÀ COMFORT',
-      'Est. efficiency':         'EFFICIENZA STIMATA',
-      'Heating curve':           'CURVA DI RISCALDAMENTO',
-      'Avg temp':                'TEMP. MEDIA',
-      'Avg setpoint (DHW)':      'SETPOINT MEDIO',
-    },
-
-    // ── Insights — existing ─────────────────────────────────────────────
-    insightNoIssues:    'Nessun problema rilevato. Il sistema sembra funzionare normalmente.',
-    insightAddBoilerKW: 'Aggiungi --boilerKW <kW_nominali> per abilitare il calcolo della domanda termica, del carico di punta e dell\'efficienza edificio.',
-    insightShortCycling: 'Ciclaggio breve rilevato — ciclo medio {dur} min (ideale > 6 min). Con {sph} accensioni/ora, la caldaia cicla troppo frequentemente. Verificare modulazione minima (tecnico), bilanciamento idraulico e velocità pompa.',
-    insightHighCycling: 'Frequenza di ciclaggio elevata — {sph} accensioni/ora. Valutare di alzare il setpoint della curva o richiedere la calibrazione del runtime minimo del bruciatore.',
-    insightLowMod:      'Caldaia che lavora a bassa modulazione (media {mod}%) con cicli brevi. Abbassare la curva di riscaldamento per ridurre il ciclaggio.',
-    insightHighFlow:    'Temperatura di mandata (media {flow}°C) superiore al necessario per le condizioni esterne ({out}°C). Abbassare la curva migliora l\'efficienza di condensazione.',
-    insightOversized:   'La potenza nominale della caldaia ({kw} kW) è più del doppio del carico di punta stimato (~{peak} kW). Il sovradimensionamento è comune nelle caldaie a condensazione ma contribuisce al ciclaggio.',
-    insightGoodHouse:   'Efficienza termica edificio: {rating} (dispersione {coeff} kW/°C). Buona coibentazione riduce la domanda di calore.',
-    insightCyclingSevere: 'Indice di ciclaggio {score} — grave. La caldaia si accende {sph} volte/ora con ciclo medio {dur} min. Calibrazione della modulazione minima da parte di un tecnico raccomandata.',
-    insightCyclingHigh: 'Indice di ciclaggio {score} — alto. La caldaia si accende {sph} volte/ora (ciclo medio {dur} min). Valutare la calibrazione della modulazione minima.',
-    insightMinMod:      'Caldaia spesso vicina alla modulazione minima (media {mod}%). Combinato con cicli brevi, indica sovradimensionamento o temperatura di mandata troppo alta.',
-    insightFixedFlow:   'Temperatura di mandata apparentemente fissa (r={r}). Considerare l\'attivazione della compensazione climatica sul regolatore della caldaia.',
-    insightCurveMiscfg: 'Curva di riscaldamento probabilmente non configurata correttamente — la temperatura di mandata correla positivamente con la temperatura esterna (r={r}). Atteso: la mandata dovrebbe salire quando la temperatura esterna scende.',
-
-    // ── Insights — NEW: recommendations with actions ────────────────────
-
-    // ── Comfort efficiency strings ────────────────────────────────────────
-    ceTitle:            '⚖️ Comfort vs Efficienza',
-    ceNotEnoughData:    "Dati in accumulo — questa analisi sarà disponibile dopo {need} giorni di monitoraggio ({have} di {need} raccolti finora).",
-    ceNoHeating:        "Nessun riscaldamento ambiente nel periodo selezionato (estate / solo acqua calda): comfort ed efficienza non sono valutabili.",
-    ceStabilityLabel:   'Stabilità temperatura',
-    ceGasNormLabel:     'Consumo gas normalizzato',
-    ceTrendStability:   'Trend comfort',
-    ceTrendGas:         'Trend gas',
-    ceInsightGasNoComfort: "Il consumo di gas è aumentato senza miglioramenti al comfort — verificare la temperatura di mandata o il programma.",
-    ceInsightComfortFree:  "Il comfort è migliorato senza aumento significativo del gas — l'ottimizzazione del sistema funziona.",
-    ceInsightBothWorse:    "Sia il comfort che l'efficienza sono peggiorati — rilevato cambiamento di configurazione o fattore esterno.",
-    ceInsightStable:       'Nessun trend significativo — il sistema è stabile.',
-    ceImproved:         'migliorato',
-    ceWorsened:         'peggiorato',
-    ceUnchanged:        'stabile',
-
-    // ── Condensing score strings ──────────────────────────────────────────
-    csTitle:            'Indice condensazione stimato',
-    csLabel:            'Temp. ritorno < 55°C',
-    csNote:             "Stimato da temperatura mandata e modulazione (basato su modello, non misurato).",
-    csNotEnough:        'Dati bruciatore insufficienti',
-
-    // ── Heat loss line string ─────────────────────────────────────────────
-    hlLineLabel:        'Dispersione termica teorica (H={h} kW/°C)',
-
-
-    // ── Additional untranslated strings ────────────────────────────────────
-    heatingScheduleLabel:    'Programma riscaldamento',
-    leftAxisNote:            'Asse sinistro: temperature (°C) — Asse destro: modulazione, bruciatore e umidità esterna (% / 0–100)',
-    cyclePerformanceTitle:   'Performance cicli (da contatori API — precisi)',
-    modGasTitle:             'Modulazione e gas (periodo)',
-    todayScheduleKey:        'PROGRAMMA ODIERNO',
-    programDistKey:          'Distribuzione programmi',
-    burnerBarsTitle:         'Istogramma durata cicli (campionato)',
-    heatmapTitle:            '🕐 Attività bruciatore per ora del giorno',
-    heatmapNote:             'Ogni cella = % di campioni in quell\'ora con bruciatore ON. Più scuro = più attivo. Passa il cursore per dettagli.',
-    heatmapLow:              'Basso',
-    heatmapHigh:             'Alto',
-    heatmapBurnerPct:        'Bruciatore ON %',
-    gasChartTitle:           '📊 Consumo gas giornaliero (m³)',
-    gasChartNote:            'Barre: riscaldamento (blu scuro) + ACS (turchese). Linea rossa: totale giornaliero. La barra di oggi mostra il valore accumulato.',
-    effChartTitle:           '📐 Efficienza termica giornaliera (calore prodotto / gas consumato)',
-    effChartNote:            'Calcolato dalle colonne CSV: heat_heating_day_kwh ÷ (gas_heating_day_m3 × 10.55 kWh/m³). Le caldaie a condensazione possono superare il 100%.',
-    flowTempChartNote:       'Temperatura di mandata — indicatore dell\'efficienza di condensazione. Sotto 55°C = modalità condensazione.',
-    energySummaryNote:       'Dati aggregati ufficiali dall\'API cloud Viessmann. Snapshot: {ts}. Esegui viessmann-explore-history.js per aggiornare.',
-    energySummaryStale:      'Snapshot: {ts}.',
-    gasSectionHeating:       'CONSUMO GAS (M³)',
-    heatSectionTitle:        'CALORE PRODOTTO (KWH)',
-    thermalEffTitle:         'EFFICIENZA TERMICA (CALORE PRODOTTO / GAS × PCS 10.55 KWH/M³)',
-    thermalEffNote:          'Efficienza >100% possibile nelle caldaie a condensazione (recupero calore latente). Valori >105% possono indicare arrotondamenti nei dati API Viessmann.',
-    forecastNote:            'La stima annuale richiede almeno {min} giorni di dati gas (attualmente {n}). Usa --days {min} o più. Usa --gasPriceEur per impostare la tariffa.',
-    forecastProjectionNote:  'Proiezione basata sugli ultimi {n} giorni · prezzo gas: €{price}/m³ · {trend}',
-    fcModelNote:             'Modello da {n} giorni di dati gas (dal {from}): {base} m³/giorno acqua calda + {k} m³ per grado-giorno (riscaldamento, base 16 °C, R² {r2}) · prezzo €{price}/m³ (--gasPriceEur)',
-    fcNoHeatingNote:         '{n} giorni di dati gas ancora senza giorni di riscaldamento: si proietta solo l\'acqua calda ({base} m³/giorno) · prezzo €{price}/m³ (--gasPriceEur)',
-    fcWeatherNote:           'Temperature esterne reali da Open-Meteo: i prossimi 30 giorni usano le previsioni meteo ({f} giorni) e le stesse date dell\'anno scorso; la stima annuale usa il meteo degli ultimi 365 giorni.',
-    fcNoLocation:            'Posizione dell\'impianto sconosciuta: aggiungi --lat e --lon per includere il meteo nella previsione.',
-    fcWeatherDown:           'Servizio meteo non raggiungibile: il riscaldamento non è incluso nella proiezione.',
-    fcNeedHeating:           'servono giorni di riscaldamento',
-    fcCalNote:               'Modello a gradi-giorno calibrato sui contatori annui della caldaia (API Viessmann): {base} m³/giorno acqua calda + {k} m³ per grado-giorno (riscaldamento, base 16 °C) · {n} giorni di dati dettagliati · prezzo €{price}/m³ (--gasPriceEur)',
-    fcRecentNote:            'Media degli ultimi {n} giorni di dati gas ({base} m³/giorno), senza correzione meteo · prezzo €{price}/m³ (--gasPriceEur)',
-    fcNeedWeather:           'servono i dati meteo',
-    forecastTrendRising:     '↑ In aumento',
-    forecastTrendFalling:    '↓ In calo',
-    forecastTrendStable:     '→ Stabile',
-    deviceMessagesNote:      'Codici di stato, info e guasto riportati dal dispositivo. Tradotti dalla documentazione di servizio Viessmann.',
-    deviceMessagesNoFile:    'Nessun file messaggi trovato. I messaggi appariranno qui una volta che il plugin ha scritto il file.',
-    annualEstLabel:          'STIMA ANNUALE',
-    avgConsPerDay:           'CONSUMO MEDIO/GIORNO',
-    projNext30:              'PROIEZIONE 30 GIORNI',
-    needDays:                'Necessari {min} giorni (disponibili {n})',
-    heatingLastNDays:        'RISCALDAMENTO ULTIMI {n} GIORNI',
-    heatingThisMonth:        'RISCALDAMENTO QUESTO MESE',
-    heatingThisYear:         'RISCALDAMENTO QUEST\'ANNO',
-    dhwThisMonth:            'ACS QUESTO MESE',
-    dhwThisYear:             'ACS QUEST\'ANNO',
-    totalThisMonth:          'TOTALE QUESTO MESE',
-    totalThisYear:           'TOTALE QUEST\'ANNO',
-    pumpPowerMonth:          'POMPA QUESTO MESE',
-    pumpPowerYear:           'POMPA QUEST\'ANNO',
-    effThisMonth:            'EFFICIENZA QUESTO MESE',
-    effThisYear:             'EFFICIENZA QUEST\'ANNO',
-
-
-    // ── Boiler section notes ─────────────────────────────────────────────
-    cycleApiNoteShort:  '⚡ Il conteggio cicli usa i <strong>contatori firmware API</strong> (delta burner_starts) — cattura tutte le accensioni indipendentemente dal campionamento CSV a 15 min. Il rilevamento da CSV mancherebbe il ~97% dei cicli.',
-    burnerBarNote:      '⚠️ Le barre ON/OFF mostrano solo i cicli visibili nell\'intervallo a 15 min. Il conteggio reale ({n}) è {mult}× superiore — vedi KPI sopra.',
-    histogramNote:      'Distribuzione durate ON visibili nei campioni CSV. Durata media reale da API: {dur} min. Istogramma: ~{vis} dei {real} cicli reali.',
-    onlySamplesNote:    'Solo {n} campioni — i dati si accumuleranno nel tempo (~1 ogni 15 min).',
-    heatDemandSTitle:   'Domanda Termica vs Temperatura Esterna',
-    flowCurveSTitle:    '🌡️ Temp. Mandata vs Esterna — Reale vs Curva',
-    needDaysShort:      'Necessari {min} giorni (disponibili {n})',
-
-
-    // ── Badge labels ──────────────────────────────────────────────────────
-    badgeLowDemand:     'Bassa richiesta',
-    badgeNormal:        'Normale',
-    badgeHigh:          'Alto',
-    badgeSevere:        'Grave',
-    badgeOK:            'OK',
-    badgeShort:         'Corto',
-    badgeVeryShort:     'Molto corto',
-    badgeCondensing:    'Condensazione ✓',
-    badgeBorderline:    'Limite',
-    badgeNotCond:       'Non condensante',
-    badgeExcellent:     'Eccellente',
-    badgeOversized:     'Sovradimensionata',
-    badgeLowMod:        'Bassa mod.',
-    badgeCheck:         'Verificare',
-
-
-    heatDemandNote1:    'Ogni punto = campione con bruciatore attivo. Linea rossa = regressione lineare.',
-    scrollZoomNote:     '<em>Scroll per zoom · Trascina · Doppio click per reset.</em>',
-
-
-    balancePoint:       'Punto di bilanciamento (stimato): {bp}°C esterna.',
-    hlLineLabelShort:   'Linea verde = curva di dispersione termica teorica (H={h} kW/°C).',
-
-
-    condensingTimePct:  '{pct}% del tempo',
-    atOutdoorTemp:      'a {temp}°C esterna',
-    hoverDetails:       'Passa il cursore per dettagli.',
-    noMessagesFile:     'File messaggi non ancora creato. I messaggi appariranno qui una volta che il plugin scriverà il file',
-
-
-    oneFilePerDevice:   '(un file per dispositivo per installazione).',
-
-    periodLabel:        'Periodo',
-    generatedLabel:     'Generato',
-    lastNDays:          'ultimi {n} giorni',
-    samplesLabel:       '{n} campioni',
-    progHeating:        'Riscaldamento',
-    progReduced:        'Ridotto',
-    progNormal:         'Normale',
-    progOff:            'Off',
-    progComfort:        'Comfort',
-
-
-    // ── Chart.js dataset labels ───────────────────────────────────────────
-    chartRoomTemp:        'Temp. ambiente (°C)',
-    chartHC0Setpoint:     'Setpoint HC0 (°C)',
-    chartFlowTemp:        'Temp. mandata (°C)',
-    chartDHWTemp:         'Temp. ACS (°C)',
-    chartDHWSetpoint:     'Setpoint ACS (°C)',
-    chartOutdoorTemp:     'Temp. esterna (°C)',
-    chartOutdoorHum:      'Umidità esterna (%)',
-    chartModulation:      'Modulazione (%)',
-    chartBurnerBar:       'Bruciatore (0/100)',
-    chartBurnerOnOff:     'Bruciatore (1=ON 0=OFF)',
-    chartHeatDemand:      'Domanda termica (kW)',
-    chartTrend:           'Tendenza',
-    chartHeatLossLine:    'Dispersione termica Q=H\u00d7\u0394T (H={h} kW/\u00b0C)',
-    chartActualFlow:      'Temp. mandata reale (°C)',
-    chartHeatingCurve:    'Curva riscaldamento (pendenza={slope}, livello={shift})',
-    chartCondensingLimit: 'Limite condensazione (55°C)',
-    chartThermalEff:      'Efficienza termica (%)',
-    chartSetpoint:        'Setpoint (°C)',
-    chartHeatingM3:       'Riscaldamento (m\u00b3)',
-    chartDHWM3:           'ACS (m\u00b3)',
-    chartTotalM3:         'Totale (m\u00b3)',
-    chartCycles:          'Cicli',
-    chartPV:              '\u2600\ufe0f FV (W)',
-    chartPVProd:          'Produzione FV (W)',
-    chartBattLevel:       'Livello batteria (%)',
-    chartBattCharge:      '\uD83D\uDD0B Carica batt. (W)',
-    chartBattChargeW:     'Carica (W)',
-    chartBattDischarge:   'Scarica (W)',
-    chartGridDraw:        '\uD83D\uDD0C Prelievo rete (W)',
-    chartWallbox:         '\uD83D\uDE97 Wallbox (W)',
-    chartWallboxW:        'Potenza Wallbox (W)',
-
-
-    // ── Program / schedule labels ─────────────────────────────────────────
-    unstable:           'Instabile',
-    progNormal:         'Normale',
-    progComfort:        'Comfort',
-    progReduced:        'Ridotto',
-    progOff:            'Spento',
-    progHeating:        'Riscaldamento',
-    legendNormal:       'Normale',
-    legendComfort:      'Comfort',
-    legendReduced:      'Ridotto',
-    legendOff:          'Spento',
-    periodLabel:        'Periodo',
-    generatedLabel:     'Generato',
-    samplesLabel:       '{n} campioni',
-    lastNDays:          'ultimi {n} giorni',
-
-
-    // ── Axis labels & tooltip strings ────────────────────────────────────
-    axisOutdoorTemp:    'Temperatura esterna (°C)',
-    axisHeatDemand:     'Domanda termica (kW)',
-    axisFlowTemp:       'Temperatura mandata (°C)',
-    axisAvgW:           'Media W',
-    tooltipOutdoor:     'esterna: {x}°C  domanda: {y} kW',
-    tooltipFlowActual:  'esterna: {x}°C  mandata: {y}°C',
-    tooltipFlowCurve:   'curva: {y}°C a {x}°C esterna',
-
-
-    axisCycles:         '# cicli',
-    axisM3:             'm³',
-
-    recTitle:           '💡 Azioni consigliate',
-    recImpact:          'Impatto stimato',
-    recActionsLabel:    'Azioni consigliate',
-    recOversizingActions: {
-      title:   '⚠️ Caldaia sovradimensionata ({ratio}×) — ciclaggio strutturale',
-      body:    'La potenza minima della caldaia (~{minPow} kW) supera la domanda termica media ({demand} kW). La caldaia non riesce fisicamente a modulare abbastanza in basso — il ciclaggio è inevitabile.',
-      actions: [
-        'Abbassare il setpoint della temperatura di mandata → riduce la domanda termica per ciclo',
-        'Attivare la compensazione climatica (pendenza {slope}, livello {shift} → già impostati)',
-        'Chiedere al tecnico di calibrare la modulazione minima al valore più basso possibile',
-        'Verificare la presenza di un separatore idraulico',
-      ],
-      impact:  '−20–35% cicli · +2–4% efficienza',
-    },
-    recHighFlow: {
-      title:   '⚠️ Temperatura di mandata troppo alta per le condizioni esterne',
-      body:    'Mandata media {flow}°C con esterno a {out}°C. La curva prescrive {curve}°C — stai lavorando {delta}°C sopra la curva.',
-      actions: [
-        'Ridurre il livello della curva di {suggestShift} punti (da {shift} a {newShift})',
-        'Oppure ridurre leggermente la pendenza (da {slope} a {newSlope})',
-        'Monitorare la temperatura ambiente per 2–3 giorni e ridurre ulteriormente se il comfort lo permette',
-      ],
-      impact:  '+3–5% efficienza condensazione · −10–15% gas',
-    },
-    recNoWeatherComp: {
-      title:   'ℹ️ Compensazione climatica non attiva',
-      body:    'La temperatura di mandata è fissa indipendentemente dalla temperatura esterna (r={r}). Nelle giornate miti la caldaia surriscalda, in quelle fredde potrebbe non bastare.',
-      actions: [
-        'Attivare la compensazione climatica sul regolatore (app ViCare → Riscaldamento → Curva)',
-        'Punto di partenza consigliato: pendenza {slope}, livello {shift} (già programmati)',
-        'Rivalutare dopo 1 settimana di dati',
-      ],
-      impact:  '−5–10% consumo gas · riduzione ciclaggio',
-    },
-  },
-};
-
-// Helper: get string with variable substitution
-// Usage: T('insightOversized', {kw:25, peak:9.9})
-function T(key, vars) {
-  const lang = STRINGS[LANG] || STRINGS['en'];
-  let s = lang[key] ?? STRINGS['en'][key] ?? key;
-  if (vars && typeof s === 'string') {
-    Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll('{'+k+'}', v); });
-  }
-  return s;
-}
-
-// Helper for nested objects (recommendations)
-function TR(key) {
-  const lang = STRINGS[LANG] || STRINGS['en'];
-  return lang[key] ?? STRINGS['en'][key] ?? {};
-}
-
-
-// ── Fast nearest-row lookup (binary search) ──────────────────────────────────
-// Several analyses need "the boiler row closest in time to this HC row". Doing it
-// with a linear scan per row was O(n²): a 90-day report took minutes on a Pi.
-const _nearestIndex = new WeakMap();
-function nearestRow(rows, ts) {
-  let idx = _nearestIndex.get(rows);
-  if (!idx) {
-    idx = rows.map(r => ({ t: new Date(r.timestamp).getTime(), r }))
-              .filter(x => !isNaN(x.t)).sort((a, b) => a.t - b.t);
-    _nearestIndex.set(rows, idx);
-  }
-  if (!idx.length) return { row: null, diff: Infinity };
-  const t = typeof ts === 'number' ? ts : new Date(ts).getTime();
-  let lo = 0, hi = idx.length - 1;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (idx[mid].t < t) lo = mid + 1; else hi = mid; }
-  let best = idx[lo];
-  if (lo > 0 && Math.abs(idx[lo - 1].t - t) <= Math.abs(best.t - t)) best = idx[lo - 1];
-  return { row: best.r, diff: Math.abs(best.t - t) };
-}
-
-
-const HB_PATH = getArg('--path', '/var/lib/homebridge');
-const INSTALLATION_ID = getArg('--installation', '');
-const csvSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
-const CSV_FILE = path.join(HB_PATH, `viessmann-history${csvSuffix}.csv`);
-const SCHED_FILE_PATH = INSTALLATION_ID
-  ? path.join(HB_PATH, `viessmann-schedule-${INSTALLATION_ID}.json`)
-  : path.join(HB_PATH, 'viessmann-schedule.json');
-const today = new Date().toISOString().slice(0, 10);
-const outSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
-const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report${outSuffix}-${today}.html`));
+const num0 = (v) => { if (v === undefined || v === null || v === '') return null; const n = parseFloat(v); return isFinite(n) ? n : null; };
+const getArg = (flag, def) => { const i = args.indexOf(flag); return i !== -1 && args[i + 1] !== undefined ? args[i + 1] : def; };
+const DAYS         = Math.max(1, parseInt(getArg('--days', '7'), 10) || 7);
+const LANG         = (getArg('--lang', process.env.REPORT_LANG || 'en') || 'en').toLowerCase().startsWith('it') ? 'it' : 'en';
+const HB_PATH      = getArg('--path', '/var/lib/homebridge');
+const INSTALLATION = getArg('--installation', '');
+const PRICE_SET    = args.includes('--gasPriceEur') || !!process.env.GAS_PRICE_EUR;
+const GAS_PRICE    = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '1.10')) || 1.10;
+const EL_PRICE     = parseFloat(getArg('--elPriceEur', '0.30')) || 0.30;
+const BOILER_KW    = parseFloat(getArg('--boilerKW', process.env.BOILER_KW || '0')) || 0;
+const DESIGN_ARG   = num0(getArg('--designTemp', process.env.DESIGN_TEMP || ''));   // null = derive from local climate
+let   DESIGN_TEMP  = DESIGN_ARG ?? -7;
+let   DESIGN_AUTO  = false;
+const HDD_BASE     = parseFloat(getArg('--hddBase', '16')) || 16;
+const KWH_PER_M3   = 10.5;   // usable (net) energy per m³ of natural gas
+const sfx          = INSTALLATION ? `-${INSTALLATION}` : '';
+const CSV_FILE     = path.join(HB_PATH, `viessmann-history${sfx}.csv`);
+const todayIso     = new Date().toISOString().slice(0, 10);
+const OUT_FILE     = getArg('--out', path.join(HB_PATH, `viessmann-report${sfx}-${todayIso}.html`));
 
 if (!fs.existsSync(CSV_FILE)) {
-  const hint = INSTALLATION_ID ? '' : '\nTip: use --installation <ID> to specify an installation (e.g. --installation YOUR_INSTALLATION_ID)';
-  console.error(`ERROR: CSV not found: ${CSV_FILE}${hint}\nStart Homebridge with the plugin to begin collecting data.`);
+  console.error(`ERROR: CSV not found: ${CSV_FILE}\nStart Homebridge with the plugin to begin collecting data (use --installation <ID>).`);
   process.exit(1);
 }
 
-const lines = fs.readFileSync(CSV_FILE, 'utf8').trim().split('\n');
-const headers = lines[0].split(',').map(h => h.trim());
-const rows = lines.slice(1).map(line => {
-  const vals = line.split(',');
-  const obj = {};
-  headers.forEach((h, i) => { obj[h] = vals[i]?.trim() || ''; });
-  return obj;
-});
+// ─── i18n & formatting ──────────────────────────────────────────────────────
+const tr = (it, en) => (LANG === 'it' ? it : en);
+const LOCALE = LANG === 'it' ? 'it-IT' : 'en-GB';
+const nf = (n, d = 1) => (n === null || n === undefined || !isFinite(n)) ? '—'
+  : Number(n).toLocaleString(LOCALE, { minimumFractionDigits: d, maximumFractionDigits: d });
+const ni = (n) => (n === null || n === undefined || !isFinite(n)) ? '—' : Math.round(n).toLocaleString(LOCALE);
+const eur = (n) => (n === null || n === undefined || !isFinite(n)) ? '—' : `${ni(n)} €`;
+const sgn = (n, d = 1) => (n > 0 ? '+' : '') + nf(n, d);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+const localDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return localDay(d); };
+const num = (v) => { if (v === undefined || v === null || v === '') return null; const n = parseFloat(v); return isFinite(n) ? n : null; };
+const mean = (a) => a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
+const sd = (a) => { if (a.length < 2) return null; const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length); };
+const median = (a) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); const m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
+const fmtDate = (ds) => new Date(ds + 'T12:00:00').toLocaleDateString(LOCALE, { day: '2-digit', month: '2-digit', year: 'numeric' });
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - DAYS);
-const filtered = rows.filter(r => r.timestamp && new Date(r.timestamp) >= cutoff);
-if (!filtered.length) { console.error(`ERROR: No data in the last ${DAYS} days.`); process.exit(1); }
-
-console.log(`Generating HTML report for last ${DAYS} days (${filtered.length} data points)...`);
-
-const toNum = v => parseFloat(v) || 0;
-const avg = (arr, key) => { const v = arr.map(r => toNum(r[key])).filter(x => x > 0); return v.length ? (v.reduce((a,b)=>a+b,0)/v.length).toFixed(1) : null; };
-const maxVal = (arr, key) => { const v = arr.map(r => toNum(r[key])).filter(x => x > 0); return v.length ? Math.max(...v).toFixed(1) : null; };
-
-const boilerRows = filtered.filter(r => r.accessory === 'boiler');
-const hcRows     = filtered.filter(r => r.accessory === 'hc0');
-const dhwRows    = filtered.filter(r => r.accessory === 'dhw');
-const energyRows = filtered.filter(r => r.accessory === 'energy');
-
-const burnerOnPct   = boilerRows.length ? ((boilerRows.filter(r => r.burner_active==='true').length/boilerRows.length)*100).toFixed(0) : null;
-const avgMod        = avg(boilerRows, 'modulation');
-const maxMod        = maxVal(boilerRows, 'modulation');
-const avgRoom       = avg(hcRows, 'room_temp');
-const avgTarget     = avg(hcRows, 'target_temp');
-const avgDhw        = avg(dhwRows, 'dhw_temp');
-const avgDhwTarget  = avg(dhwRows, 'dhw_target');
-
-// Energy stats
-const hasPV      = energyRows.some(r => r.pv_production_w !== '');
-const hasBattery = energyRows.some(r => r.battery_level !== '');
-const hasWallbox = energyRows.some(r => r.wallbox_charging !== '');
-const avgPV      = avg(energyRows, 'pv_production_w');
-const maxPV      = maxVal(energyRows, 'pv_production_w');
-const latestEnergy = energyRows[energyRows.length-1] || {};
-const lastPvDaily   = latestEnergy.pv_daily_kwh   || null;
-const lastBattLevel = latestEnergy.battery_level  || null;
-const avgWallboxPwr = avg(energyRows.filter(r => r.wallbox_charging==='true'), 'wallbox_power_w');
-
-const lb = boilerRows[boilerRows.length-1] || {};
-const burnerStarts  = lb.burner_starts || null;
-const burnerHours   = lb.burner_hours  || null;
-
-// Use DELTA of burner_starts/hours within the report period — not the lifetime ratio.
-// The CSV has a column mapping issue in early rows (starts=hours value) and the
-// 15-min sample rate misses ~97% of real cycles. API counter delta is the only
-// reliable source.
-// Guard: only rows that have BOTH columns (plugin >= v2.0.40).
-const validBurnerRows = boilerRows.filter(r => r.burner_starts && r.burner_hours && parseFloat(r.burner_hours) > 0);
-const firstVBR = validBurnerRows[0]   || null;
-const lastVBR  = validBurnerRows[validBurnerRows.length-1] || null;
-const deltaStarts = (firstVBR && lastVBR) ? Math.max(0, parseInt(lastVBR.burner_starts) - parseInt(firstVBR.burner_starts)) : null;
-const deltaHours  = (firstVBR && lastVBR) ? Math.max(0, parseFloat(lastVBR.burner_hours)  - parseFloat(firstVBR.burner_hours))  : null;
-
-// Starts per wall-clock hour (NOT per runtime hour):
-//   sph = deltaStarts / period_hours  →  e.g. 353 starts / 130h = 2.7/h
-//   NOT deltaStarts / deltaHours (353/36 = 9.8 would mean starts per burner-running hour)
-// Avg cycle duration = deltaHours(runtime) * 60 / deltaStarts  →  6.1 min
-// Runtime % = deltaHours / period_hours * 100  →  28%
-const periodHours = (firstVBR && lastVBR)
-  ? Math.max(1, (new Date(lastVBR.timestamp) - new Date(firstVBR.timestamp)) / 3600000)
-  : null;
-const sph = (deltaStarts !== null && periodHours !== null && periodHours > 0)
-  ? (deltaStarts / periodHours).toFixed(1)
-  : null;
-// burner_hours from the API is an INTEGER counter (1 h resolution). With less than
-// 2 h of runtime in the period the delta is 0/1 and duration/runtime would be
-// meaningless (e.g. "0.0 min" → false short-cycling alarm) — report them as N/A.
-const hoursLowRes = deltaHours !== null && deltaHours < 2;
-const avgCycleDurReal = (!hoursLowRes && deltaStarts !== null && deltaHours !== null && deltaStarts > 0)
-  ? (deltaHours * 60 / deltaStarts).toFixed(1)
-  : null;
-const burnerRuntimePct = (!hoursLowRes && deltaHours !== null && periodHours !== null && periodHours > 0)
-  ? (deltaHours / periodHours * 100).toFixed(deltaHours / periodHours * 100 < 1 ? 1 : 0)
-  : null;
-const realCycleCount = deltaStarts;
-const realAvgDur     = avgCycleDurReal;
-
-// Thresholds for wall-clock starts/hour:
-//   < 2/h = normal (long cycles, low demand)
-//   2–4/h = acceptable
-//   > 4/h = high cycling concern
-const effCls   = sph ? (parseFloat(sph) < 2 ? 'good' : parseFloat(sph) < 4 ? 'warn' : 'bad') : 'neutral';
-const effLabel = sph ? (parseFloat(sph) < 2 ? T('badgeNormal') : parseFloat(sph) < 4 ? T('badgeHigh') : T('badgeSevere')) : 'N/A';
-
-// --- Flow temperature stats (from hc0 rows) ---
-const avgFlow  = avg(hcRows, 'flow_temp');
-const maxFlow  = maxVal(hcRows, 'flow_temp');
-// Condensing efficiency: flow < 55°C means returning in condensing range (proxy, no return sensor)
-const flowVals = hcRows.map(r => parseFloat(r.flow_temp)).filter(v => !isNaN(v) && v > 0);
-const condensingPct = flowVals.length ? ((flowVals.filter(v => v < 55).length / flowVals.length) * 100).toFixed(0) : null;
-const condensingCls = condensingPct !== null ? (parseFloat(condensingPct) >= 80 ? 'good' : parseFloat(condensingPct) >= 40 ? 'warn' : 'neutral') : 'neutral';
-const condensingLabel = condensingPct !== null ? (parseFloat(condensingPct) >= 80 ? T('badgeCondensing') : parseFloat(condensingPct) >= 40 ? T('badgeBorderline') : T('badgeNotCond')) : 'N/A';
-
-// --- Gas consumption (real data from API, m³/day) ---
-const hasGasData = boilerRows.some(r => r.gas_heating_day_m3 !== '' && r.gas_heating_day_m3 !== undefined);
-const latestGasRow = [...boilerRows].reverse().find(r => r.gas_heating_day_m3 !== '' && r.gas_heating_day_m3 !== undefined) || {};
-const gasHeatingToday  = latestGasRow.gas_heating_day_m3  || null;
-const gasDhwToday      = latestGasRow.gas_dhw_day_m3      || null;
-const gasTotalToday    = (gasHeatingToday && gasDhwToday) ? (parseFloat(gasHeatingToday) + parseFloat(gasDhwToday)).toFixed(2) : gasHeatingToday || null;
-
-// --- Daily gas aggregation (max per calendar day = total consumption for that day) ---
-const gasPerDay = {};
-boilerRows.forEach(r => {
-  if (!r.gas_heating_day_m3 && !r.gas_dhw_day_m3) return;
-  const day = r.timestamp.slice(0, 10);
-  if (!gasPerDay[day]) gasPerDay[day] = { heating: 0, dhw: 0 };
-  gasPerDay[day].heating = Math.max(gasPerDay[day].heating, parseFloat(r.gas_heating_day_m3) || 0);
-  gasPerDay[day].dhw     = Math.max(gasPerDay[day].dhw,     parseFloat(r.gas_dhw_day_m3)     || 0);
-});
-const gasDays         = Object.keys(gasPerDay).sort();
-const gasBarLabels    = gasDays.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; });
-const gasBarHeating   = gasDays.map(d => +gasPerDay[d].heating.toFixed(2));
-const gasBarDhw       = gasDays.map(d => +gasPerDay[d].dhw.toFixed(2));
-const gasLineTotal    = gasDays.map(d => +(gasPerDay[d].heating + gasPerDay[d].dhw).toFixed(2));
-const hasGasChart     = gasDays.length >= 1;
-
-// --- API Summary data (from viessmann-history-explore-*.json if present) ---
-let apiSummary = null;
-try {
-  const exploreFile = require('path').join(HB_PATH, `viessmann-history-explore-${INSTALLATION_ID || 'all'}.json`);
-  if (require('fs').existsSync(exploreFile)) {
-    const raw = JSON.parse(require('fs').readFileSync(exploreFile, 'utf8'));
-    // Find device with heating features (device id = '0' usually)
-    const devKey = Object.keys(raw.devices || {}).find(k => {
-      const d = raw.devices[k];
-      return d.historyFeatures && d.historyFeatures.some(f => f.feature.includes('gas.consumption'));
-    });
-    if (devKey) {
-      const dev = raw.devices[devKey];
-      const feat = (name) => dev.historyFeatures.find(f => f.feature === name);
-      const val  = (name, prop) => { const f = feat(name); return f?.samples?.[prop]?.value ?? null; };
-      const unit = (name, prop) => { const f = feat(name); return f?.samples?.[prop]?.unit ?? ''; };
-      apiSummary = {
-        timestamp:        raw.timestamp,
-        gasHeatMonth:     val('heating.gas.consumption.summary.heating', 'currentMonth'),
-        gasHeatYear:      val('heating.gas.consumption.summary.heating', 'currentYear'),
-        gasHeat7d:        val('heating.gas.consumption.summary.heating', 'lastSevenDays'),
-        gasDhwMonth:      val('heating.gas.consumption.summary.dhw',     'currentMonth'),
-        gasDhwYear:       val('heating.gas.consumption.summary.dhw',     'currentYear'),
-        heatProdHeatMonth:val('heating.heat.production.summary.heating', 'currentMonth'),
-        heatProdHeatYear: val('heating.heat.production.summary.heating', 'currentYear'),
-        heatProdDhwMonth: val('heating.heat.production.summary.dhw',     'currentMonth'),
-        heatProdDhwYear:  val('heating.heat.production.summary.dhw',     'currentYear'),
-        pwrConsHeatMonth: val('heating.power.consumption.summary.heating','currentMonth'),
-        pwrConsHeatYear:  val('heating.power.consumption.summary.heating','currentYear'),
-        burnerLifeStarts: val('heating.burners.0.statistics', 'starts'),
-        burnerLifeHours:  val('heating.burners.0.statistics', 'hours'),
-      };
-      // Thermal efficiency = heat produced / (gas consumed × PCS)
-      const GAS_PCS_EFF = 10.55;
-      if (apiSummary.heatProdHeatYear && apiSummary.gasHeatYear && apiSummary.gasHeatYear > 0) {
-        apiSummary.thermalEffYear = Math.min(110, Math.round(
-          (apiSummary.heatProdHeatYear / (apiSummary.gasHeatYear * GAS_PCS_EFF)) * 100
-        ));
-      }
-      if (apiSummary.heatProdHeatMonth && apiSummary.gasHeatMonth && apiSummary.gasHeatMonth > 0) {
-        apiSummary.thermalEffMonth = Math.min(110, Math.round(
-          (apiSummary.heatProdHeatMonth / (apiSummary.gasHeatMonth * GAS_PCS_EFF)) * 100
-        ));
-      }
-    }
-  }
-} catch(e) { /* explore file not present — skip */ }
-
-// --- Heating schedule ---
-const SCHED_FILE = SCHED_FILE_PATH;
-let heatingSchedule = null;
-try {
-  if (fs.existsSync(SCHED_FILE)) {
-    heatingSchedule = JSON.parse(fs.readFileSync(SCHED_FILE, 'utf8'));
-  }
-} catch(_) {}
-
-// Given a Date, return expected program from schedule ('normal'|'reduced'|'comfort'|null)
-function expectedProgram(dt) {
-  if (!heatingSchedule?.entries) return null;
-  const days = ['sun','mon','tue','wed','thu','fri','sat'];
-  const dayKey = days[dt.getDay()];
-  const slots = heatingSchedule.entries[dayKey] || [];
-  const hhmm = dt.getHours() * 60 + dt.getMinutes();
-  for (const s of slots) {
-    const [sh, sm] = s.start.split(':').map(Number);
-    const [eh, em] = s.end.split(':').map(Number);
-    if (hhmm >= sh * 60 + sm && hhmm < eh * 60 + em) return s.mode;
-  }
-  return 'reduced';
-}
-
-// Build today's schedule slots as human-readable string
-function todayScheduleText() {
-  if (!heatingSchedule?.entries) return null;
-  const days = ['sun','mon','tue','wed','thu','fri','sat'];
-  const dayKey = days[new Date().getDay()];
-  const slots = heatingSchedule.entries[dayKey] || [];
-  if (!slots.length) return 'reduced (all day)';
-  const parts = slots.map(s => `${s.start}–${s.end} ${s.mode}`);
-  return parts.join(', ') + ' · rest: reduced';
-}
-
-// Build background annotation bands for overview chart (one band per normal slot today)
-function schedBands() {
-  if (!heatingSchedule?.entries) return [];
-  const days = ['sun','mon','tue','wed','thu','fri','sat'];
-  const bands = [];
-  // For each day in the report period build bands
-  const now = new Date();
-  for (let i = DAYS - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dayKey = days[d.getDay()];
-    const dateStr = d.toISOString().slice(0,10);
-    const slots = heatingSchedule.entries[dayKey] || [];
-    for (const s of slots) {
-      bands.push({ date: dateStr, start: s.start, end: s.end, mode: s.mode });
-    }
-  }
-  return bands;
-}
-
-const scheduleToday = todayScheduleText();
-const schedBandData = schedBands();
-
-// --- Schedule bar HTML (pre-computed server-side, injected as static HTML) ---
-function buildScheduleBarHtml() {
-  if (!heatingSchedule?.entries) return '';
-  const COLORS = { normal:'#4caf50', comfort:'#ff9800', reduced:'#90a4ae', off:'#ef5350' };
-  const DAYS = ['sun','mon','tue','wed','thu','fri','sat'];
-  const entries = heatingSchedule.entries;
-  const totalMins = 24 * 60;
-
-  // Get unique days present in the report (from ovLabels)
-  const daySet = [...new Set(ovLabels.map(l => {
-    const dp = l.split(' ')[0].split('/'); // [dd, MM]
-    return dp[1] + '-' + dp[0]; // YYYY-MM format compatible
-  }))];
-
-  let segments = [];
-  for (const ds of daySet) {
-    const [mo, dd] = ds.split('-');
-    const dt = new Date(new Date().getFullYear(), parseInt(mo)-1, parseInt(dd));
-    const dayKey = DAYS[dt.getDay()];
-    const slots = [...(entries[dayKey] || [])].sort((a, b) => {
-      const am = parseInt(a.start)*60 + parseInt(a.start.split(':')[1]);
-      const bm = parseInt(b.start)*60 + parseInt(b.start.split(':')[1]);
-      return am - bm;
-    });
-    let prev = 0;
-    for (const s of slots) {
-      const sm = parseInt(s.start.split(':')[0])*60 + parseInt(s.start.split(':')[1]);
-      const em = parseInt(s.end.split(':')[0])*60   + parseInt(s.end.split(':')[1]);
-      if (sm > prev) segments.push({ mode:'reduced', mins: sm - prev });
-      segments.push({ mode: s.mode, mins: em - sm });
-      prev = em;
-    }
-    if (prev < totalMins) segments.push({ mode:'reduced', mins: totalMins - prev });
-  }
-
-  const totalSegMins = segments.reduce((a, b) => a + b.mins, 0);
-  const bars = segments.map(s => {
-    const pct = (s.mins / totalSegMins * 100).toFixed(3);
-    const color = COLORS[s.mode] || COLORS.reduced;
-    const modeKey = 'prog'+s.mode.charAt(0).toUpperCase()+s.mode.slice(1); const label = T(modeKey) || s.mode.charAt(0).toUpperCase()+s.mode.slice(1);
-    const hrs = Math.round(s.mins / 60 * 10) / 10;
-    return `<div title="${label} (${hrs}h)" style="width:${pct}%;background:${color};height:100%"></div>`;
-  }).join('');
-
-  const legend = Object.entries(COLORS).map(([mode, color]) =>
-    `<span style="font-size:10px;color:#888"><span style="display:inline-block;width:10px;height:10px;background:${color};border-radius:2px;margin-right:3px;vertical-align:middle"></span>${T('legend'+mode.charAt(0).toUpperCase()+mode.slice(1)) || mode.charAt(0).toUpperCase()+mode.slice(1)}</span>`
-  ).join('<span style="margin:0 8px"></span>');
-
-  return `<div style="margin-top:6px">
-    <div style="font-size:11px;color:#888;margin-bottom:3px">${T('heatingScheduleLabel')}</div>
-    <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;width:100%">${bars}</div>
-    <div style="display:flex;gap:12px;margin-top:4px;flex-wrap:wrap">${legend}</div>
-  </div>`;
-}
-
-// --- Heat demand: avg modulation × nominal power ---
-const NOMINAL_KW = typeof process.env.NOMINAL_KW !== 'undefined' ? parseFloat(process.env.NOMINAL_KW) : 24;
-const activeBurnerRows = boilerRows.filter(r => r.burner_active === 'true' && toNum(r.modulation) > 0);
-const avgHeatDemand = activeBurnerRows.length
-  ? ((activeBurnerRows.reduce((s,r) => s + toNum(r.modulation), 0) / activeBurnerRows.length / 100) * NOMINAL_KW).toFixed(1)
-  : null;
-
-// --- Burner cycle analysis ---
-// PRIMARY source: API counter delta (burner_starts / burner_hours) — captures ALL ignitions.
-// CSV edge detection misses ~97% of cycles because refresh is 15 min but cycles avg 6 min.
-// We keep edge detection only for the histogram (visual distribution of detected cycles).
-const sortedBoiler = [...boilerRows].sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
-const cycles = [];
-let cycleStart = null;
-for (let i = 0; i < sortedBoiler.length; i++) {
-  const on = sortedBoiler[i].burner_active === 'true';
-  if (on && cycleStart === null) cycleStart = new Date(sortedBoiler[i].timestamp);
-  if (!on && cycleStart !== null) {
-    const durationMin = (new Date(sortedBoiler[i].timestamp) - cycleStart) / 60000;
-    if (durationMin >= 1) cycles.push(durationMin);
-    cycleStart = null;
-  }
-}
-// cycleCount from CSV edges (used only for histogram — severely underestimates real count)
-const cycleCount      = cycles.length;
-const avgCycleDur     = cycleCount ? (cycles.reduce((a,b)=>a+b,0)/cycleCount).toFixed(0) : null;
-const shortestCycle   = cycleCount ? Math.min(...cycles).toFixed(0) : null;
-const shortCycleCls   = shortestCycle ? (parseFloat(shortestCycle) < 5 ? 'warn' : 'good') : 'neutral';
-
-// realCycleCount, realAvgDur, sph already defined above from delta calculation
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HEATING SYSTEM ASSISTANT
-// boilerNominalPowerKW: CLI param > env var > default 0 (kW-based cards hidden)
-// designOutdoorTemp:    CLI param > env var > default -7°C (Europe central)
-// ─────────────────────────────────────────────────────────────────────────────
-const BOILER_KW   = parseFloat(getArg('--boilerKW',   process.env.BOILER_KW   || '0'));
-const DESIGN_TEMP = parseFloat(getArg('--designTemp', process.env.DESIGN_TEMP || '-7'));
-// Heating curve: CLI overrides > explore JSON > 0 (disabled)
-const _curveCli_slope = parseFloat(getArg('--curveSlope', process.env.CURVE_SLOPE || '0'));
-const _curveCli_shift = getArg('--curveShift', process.env.CURVE_SHIFT || '');
-const _curveFromExplore = (() => {
-  try {
-    const _ePath = require('path').join(HB_PATH, `viessmann-history-explore-${INSTALLATION_ID || 'all'}.json`);
-    if (!require('fs').existsSync(_ePath)) return null;
-    const _raw = JSON.parse(require('fs').readFileSync(_ePath, 'utf8'));
-    for (const _dk of Object.keys(_raw.devices || {})) {
-      const _circuits = _raw.devices[_dk].heatingCircuits || {};
-      const _ck = '0' in _circuits ? '0' : Object.keys(_circuits)[0];
-      if (_ck !== undefined) return _circuits[_ck];
-    }
-  } catch(_) {}
-  return null;
-})();
-const CURVE_SLOPE = _curveCli_slope > 0 ? _curveCli_slope : (_curveFromExplore?.slope ?? 0);
-const CURVE_SHIFT = _curveCli_shift !== '' ? parseFloat(_curveCli_shift) : (_curveFromExplore?.shift ?? 0);
-const hasBoilerKW = BOILER_KW > 0;
-const hasCurve    = CURVE_SLOPE > 0;
-
-// --- Heating curve: Viessmann uses a non-linear curve fitted from ViCare app data ---
-// Real app points for slope=1.3,shift=6: (+20°,29°),(+10°,45°),(0°,57°),(-10°,68°),(-20°,80°),(-30°,82°)
-// Cubic fit coefficients are computed from the 6 known points for the reference slope=1.3,shift=6
-// For other slope/shift values we scale around the reference and apply shift offset
-const heatingCurveLine = (() => {
-  if (!hasCurve) return null;
-  // Reference cubic coefficients (slope=1.3, shift=6, from ViCare app)
-  // p(t) = 2.222e-4*t^3 - 9.167e-3*t^2 - 1.309*t + 57.52
-  const refSlope = 1.3, refShift = 6;
-  const refCoeffs = [2.222e-4, -9.167e-3, -1.309, 57.52];
-  const poly = (t, c) => c[0]*t**3 + c[1]*t**2 + c[2]*t + c[3];
-  const pts = [];
-  for (let t = -30; t <= 22; t += 1) {
-    // Scale: adjust for different slope (linear scaling of the curve steepness)
-    // and shift (vertical offset adjustment)
-    const refVal = poly(t, refCoeffs);
-    // Slope adjustment: scale the deviation from room temp (20°C) by slope ratio
-    const slopeAdj = (CURVE_SLOPE / refSlope);
-    const shiftAdj = CURVE_SHIFT - refShift;
-    const val = 20 + (refVal - 20) * slopeAdj + shiftAdj;
-    pts.push({ x: t, y: +val.toFixed(1) });
-  }
-  return pts;
-})();
-
-// Override avgHeatDemand with correct nominal power if provided
-const avgModActive = activeBurnerRows.length
-  ? activeBurnerRows.reduce((s,r) => s + toNum(r.modulation), 0) / activeBurnerRows.length
-  : null;
-const heatDemandKW = (hasBoilerKW && avgModActive !== null)
-  ? (BOILER_KW * avgModActive / 100).toFixed(1)
-  : null;
-
-// House heat loss coefficient  [kW/°C]
-const avgRoomNum    = avgRoom    ? parseFloat(avgRoom)    : null;
-const avgOutsideNum = avg(boilerRows, 'outside_temp') ? parseFloat(avg(boilerRows, 'outside_temp')) : null;
-const deltaT        = (avgRoomNum !== null && avgOutsideNum !== null) ? avgRoomNum - avgOutsideNum : null;
-const heatLossCoeff = (heatDemandKW !== null && deltaT !== null && deltaT > 0)
-  ? (parseFloat(heatDemandKW) / deltaT).toFixed(2)
-  : null;
-
-// House efficiency rating
-function houseEffRating(coeff) {
-  if (coeff === null) return null;
-  const c = parseFloat(coeff);
-  if (c < 0.25) return { label: T('excellent'), cls: 'good' };
-  if (c < 0.40) return { label: T('good'),      cls: 'good' };
-  if (c < 0.60) return { label: T('average'),   cls: 'warn' };
-  return             { label: T('poor'),        cls: 'bad'  };
-}
-const houseEff = houseEffRating(heatLossCoeff);
-
-// Estimated peak load at design temperature
-const peakLoadKW = (heatLossCoeff !== null && avgRoomNum !== null)
-  ? (parseFloat(heatLossCoeff) * (avgRoomNum - DESIGN_TEMP)).toFixed(1)
-  : null;
-
-// Boiler sizing check
-const boilerOversized = (hasBoilerKW && peakLoadKW !== null && BOILER_KW > parseFloat(peakLoadKW) * 2);
-
-// Cycle diagnostics — use API delta values (real), not CSV edge counts (severely undersampled)
-const reportHours   = DAYS * 24;
-// cyclesPerHour: prefer real API delta; CSV edge fallback only if no delta available
-const cyclesPerHour = sph || (cycleCount && reportHours ? (cycleCount / reportHours).toFixed(2) : null);
-// avgCycleDurNum: prefer real API-derived value
-// When the hours counter resolution is too coarse, do not fall back to the CSV-sampled
-// estimate either (15-min snapshots cannot measure cycle length).
-const avgCycleDurNum  = realAvgDur ? parseFloat(realAvgDur) : (!hoursLowRes && avgCycleDur ? parseFloat(avgCycleDur) : null);
-const shortCycling    = avgCycleDurNum !== null && avgCycleDurNum < 5;
-const excessiveCycling = cyclesPerHour !== null && parseFloat(cyclesPerHour) > 6;
-// Note: with real API data, Vitodens typically shows 6-12 starts/hour in partial load,
-// which is expected behavior. Only flag if combined with short avg duration.
-
-// Flow temp heuristic
-const avgFlowNum    = avgFlow ? parseFloat(avgFlow) : null;
-const avgOutNum     = avgOutsideNum;
-const highFlowTemp  = avgFlowNum !== null && avgOutNum !== null && avgFlowNum > 55 && avgOutNum > 5;
-
-// Inefficient operation: low modulation + short cycles
-const avgModNum = avgMod ? parseFloat(avgMod) : null;
-const inefficientOp = avgModNum !== null && avgCycleDurNum !== null && avgModNum < 25 && avgCycleDurNum < 6;
-
-// Build assistant insights
-const insights = [];
-if (shortCycling || excessiveCycling)
-  insights.push({ type:'warn', text: shortCycling
-    ? T('insightShortCycling', {dur: realAvgDur ?? avgCycleDur, sph: cyclesPerHour})
-    : T('insightHighCycling',  {sph: cyclesPerHour}) });
-if (inefficientOp)
-  insights.push({ type:'warn', text: T('insightLowMod', {mod: avgMod}) });
-if (highFlowTemp)
-  insights.push({ type:'warn', text: T('insightHighFlow', {flow: avgFlow, out: avgOutsideNum?.toFixed(1)}) });
-if (boilerOversized)
-  insights.push({ type:'info', text: T('insightOversized', {kw: BOILER_KW, peak: peakLoadKW}) });
-if (houseEff && (houseEff.cls === 'good'))
-  insights.push({ type:'good', text: T('insightGoodHouse', {rating: houseEff.label, coeff: heatLossCoeff}) });
-if (!hasBoilerKW)
-  insights.push({ type:'info', text: T('insightAddBoilerKW') });
-if (insights.length === 0 && hasBoilerKW)
-  insights.push({ type:'good', text: T('insightNoIssues') });
-
-// ── Comfort stability: stddev of room temperature ────────────────────────────
-const roomTemps = hcRows.map(r => parseFloat(r.room_temp)).filter(v => !isNaN(v) && v > 0);
-let comfortStddev = null, comfortRating = null, comfortCls = 'neutral';
-if (roomTemps.length >= 10) {
-  const mean = roomTemps.reduce((a,b) => a+b, 0) / roomTemps.length;
-  comfortStddev = Math.sqrt(roomTemps.reduce((a,v) => a + (v-mean)**2, 0) / roomTemps.length).toFixed(2);
-  const sd = parseFloat(comfortStddev);
-  if (sd < 0.2)      { comfortRating = T('excellent'); comfortCls = 'good'; }
-  else if (sd < 0.5) { comfortRating = T('good');      comfortCls = 'good'; }
-  else               { comfortRating = T('unstable');  comfortCls = 'warn'; }
-}
-
-// ── Cycling severity score ───────────────────────────────────────────────────
-// score = cyclesPerHour × (10 / avgCycleDuration)  →  <1 excellent, 1-3 ok, >3 severe
-let cyclingScore = null, cyclingSeverity = null, cyclingSeverityCls = 'neutral';
-if (cyclesPerHour && avgCycleDurNum && avgCycleDurNum > 0) {
-  // Score uses real API counter data — not CSV edge count
-  // cyclingScore: starts/hour × (6 / avgCycleDur) — normalized to 6-min reference cycle
-  // sph is wall-clock starts/hour; avgCycleDurNum is actual avg duration
-  cyclingScore = (parseFloat(cyclesPerHour) * (6 / Math.max(1, avgCycleDurNum))).toFixed(1);
-  const sc2 = parseFloat(cyclingScore);
-  if (sc2 < 1.5)    { cyclingSeverity = T('good');       cyclingSeverityCls = 'good'; }
-  else if (sc2 < 3) { cyclingSeverity = T('average');   cyclingSeverityCls = 'warn'; }
-  else if (sc2 < 6) { cyclingSeverity = T('badgeHigh');        cyclingSeverityCls = 'warn'; }
-  else              { cyclingSeverity = T('badgeSevere');      cyclingSeverityCls = 'bad';  }
-  if (sc2 >= 6)
-    insights.push({ type:'warn', text: T('insightCyclingSevere', {score: cyclingScore, sph: cyclesPerHour, dur: avgCycleDurNum.toFixed(1)}) });
-  else if (sc2 >= 3)
-    insights.push({ type:'warn', text: T('insightCyclingHigh', {score: cyclingScore, sph: cyclesPerHour, dur: avgCycleDurNum.toFixed(1)}) });
-}
-
-// ── Min modulation check ─────────────────────────────────────────────────────
-const minModCheck = (avgModNum !== null && avgModNum < 20 && avgCycleDurNum !== null && avgCycleDurNum < 10);
-if (minModCheck)
-  insights.push({ type:'warn', text: T('insightMinMod', {mod: avgMod}) });
-
-// ── Minimum boiler power estimate ────────────────────────────────────────────
-// Viessmann Vitodens 100: min modulation typically 10–15%
-const MIN_MOD_PCT = 10; // conservative estimate
-const minBoilerPow = hasBoilerKW ? +(BOILER_KW * MIN_MOD_PCT / 100).toFixed(1) : null;
-const demandKW = heatDemandKW ? parseFloat(heatDemandKW) : null;
-const oversizingRatio = (minBoilerPow && demandKW && demandKW > 0)
-  ? (minBoilerPow / demandKW).toFixed(1) : null;
-const structuralCycling = oversizingRatio && parseFloat(oversizingRatio) > 1.0;
-
-// ── Build recommendations (actionable, structured) ────────────────────────────
-const recommendations = [];
-
-// Rec 1: Structural cycling due to oversizing
-if (structuralCycling && hasBoilerKW) {
-  const rec = TR('recOversizingActions');
-  const suggestedShift = CURVE_SHIFT > 0 ? Math.max(0, CURVE_SHIFT - 3) : null;
-  const suggestedSlope = CURVE_SLOPE > 0 ? Math.max(0.5, CURVE_SLOPE - 0.2).toFixed(1) : null;
-  recommendations.push({
-    type: 'warn',
-    title: rec.title
-      ?.replaceAll('{ratio}', oversizingRatio),
-    body: rec.body
-      ?.replaceAll('{minPow}', minBoilerPow)
-       .replaceAll('{demand}', demandKW?.toFixed(1)),
-    actions: rec.actions?.map(a => a
-      .replaceAll('{slope}', CURVE_SLOPE || '—')
-      .replaceAll('{shift}', CURVE_SHIFT ?? '—')
-    ),
-    impact: rec.impact,
-  });
-}
-
-// Rec 2: Flow temp above curve
-if (hasCurve && avgFlowNum && avgOutNum !== null) {
-  const theoreticalFlow = heatingCurveLine?.find(p => Math.abs(p.x - Math.round(avgOutNum)) <= 0.5)?.y;
-  const delta = theoreticalFlow ? (avgFlowNum - theoreticalFlow).toFixed(1) : null;
-  if (delta && parseFloat(delta) > 5) {
-    const rec = TR('recHighFlow');
-    const suggestShift = Math.round(parseFloat(delta));
-    const newShift = CURVE_SHIFT !== undefined ? CURVE_SHIFT - suggestShift : null;
-    const newSlope = CURVE_SLOPE ? Math.max(0.5, CURVE_SLOPE - 0.2).toFixed(1) : null;
-    recommendations.push({
-      type: 'warn',
-      title: rec.title,
-      body: rec.body
-        ?.replaceAll('{flow}', avgFlowNum.toFixed(1))
-         .replaceAll('{out}', avgOutNum.toFixed(1))
-         .replaceAll('{curve}', theoreticalFlow)
-         .replaceAll('{delta}', delta),
-      actions: rec.actions?.map(a => a
-        .replaceAll('{suggestShift}', suggestShift)
-        .replaceAll('{shift}', CURVE_SHIFT ?? '—')
-        .replaceAll('{newShift}', newShift ?? '—')
-        .replaceAll('{slope}', CURVE_SLOPE || '—')
-        .replaceAll('{newSlope}', newSlope ?? '—')
-      ),
-      impact: rec.impact,
-    });
-  }
-}
-
-// ── Gas efficiency: estimated kWh produced per m³ gas ───────────────────────
-// heatProduced (kWh) = avgHeatDemand(kW) × burnerRuntime(h)
-// gasUsed (m³) from latest daily reading × days
-// 1 m³ natural gas ≈ 10.6 kWh (lower heating value)
-const GAS_KWH_PER_M3 = 10.6;
-let gasEfficiencyPct = null;
-if (hasBoilerKW && heatDemandKW && burnerHours && hasGasData) {
-  // total gas used in period: sum of daily maxes
-  const totalGasM3 = gasDays.reduce((sum, d) => sum + gasPerDay[d].heating + gasPerDay[d].dhw, 0);
-  // burner runtime in period (hours): use last - first burner_hours from boilerRows
-  const firstBH = parseFloat(boilerRows[0]?.burner_hours || 0);
-  const lastBH  = parseFloat(lb.burner_hours || 0);
-  const runtimeH = lastBH - firstBH;
-  if (totalGasM3 > 0 && runtimeH > 0) {
-    const heatProduced = parseFloat(heatDemandKW) * runtimeH;
-    const gasInputKwh  = totalGasM3 * GAS_KWH_PER_M3;
-    gasEfficiencyPct   = Math.min(110, (heatProduced / gasInputKwh * 100)).toFixed(0);
-  }
-}
-
-// ── Heating curve behaviour: correlation flow vs outdoor ─────────────────────
-// Pearson correlation: negative = correct curve, ~0 = fixed flow, positive = misconfigured
-let heatCurveCorr = null, heatCurveBehaviour = null, heatCurveCls = 'neutral';
-// Only samples where the heating circuit is actually heating: in standby (summer)
-// the flow temperature follows DHW production and says nothing about the curve.
-const hcHeatingRows = hcRows.filter(r => (r.mode || '').toLowerCase().includes('heating'));
-const corrPairs = hcHeatingRows
-  .map(r => {
-    const flow = parseFloat(r.flow_temp);
-    const out  = parseFloat(r.outside_temp) || parseFloat(
-      (nearestRow(boilerRows, r.timestamp).diff === 0 ? nearestRow(boilerRows, r.timestamp).row.outside_temp : '') || ''
-    );
-    return (isNaN(flow) || isNaN(out) || flow <= 0 || out === 0 || out >= 16) ? null : [out, flow];
-  })
-  .filter(Boolean);
-
-// Also try matching outdoor from boilerRows by nearest timestamp
-const corrPairs2 = (() => {
-  return hcHeatingRows.map(r => {
-    const flow = parseFloat(r.flow_temp);
-    if (isNaN(flow) || flow <= 0) return null;
-    const { row: best, diff: bd } = nearestRow(boilerRows, r.timestamp);
-    const out = best && bd < 30*60*1000 ? parseFloat(best.outside_temp) : NaN;
-    // Heating season only: above ~16 °C outdoor the circuit is in summer/ECO
-    // standby and the flow temperature follows DHW, not the heating curve.
-    return (!isNaN(out) && out !== 0 && out < 16) ? [out, flow] : null;
-  }).filter(Boolean);
-})();
-
-const usePairs = corrPairs2.length >= corrPairs.length ? corrPairs2 : corrPairs;
-if (usePairs.length >= 20) {
-  const n  = usePairs.length;
-  const mx = usePairs.reduce((a,p) => a+p[0], 0) / n;
-  const my = usePairs.reduce((a,p) => a+p[1], 0) / n;
-  const num = usePairs.reduce((a,p) => a + (p[0]-mx)*(p[1]-my), 0);
-  const den = Math.sqrt(usePairs.reduce((a,p) => a+(p[0]-mx)**2, 0) * usePairs.reduce((a,p) => a+(p[1]-my)**2, 0));
-  heatCurveCorr = den > 0 ? (num/den).toFixed(2) : null;
-  if (heatCurveCorr !== null) {
-    const c = parseFloat(heatCurveCorr);
-    if (c < -0.3)      { heatCurveBehaviour = T('weatherComp'); heatCurveCls = 'good'; }
-    else if (c < 0.1)  { heatCurveBehaviour = T('fixedFlow');        heatCurveCls = 'warn'; }
-    else               { heatCurveBehaviour = T('checkCurve');     heatCurveCls = 'bad';  }
-    if (c >= 0.1)
-      insights.push({ type:'warn', text: T('insightCurveMiscfg', {r: heatCurveCorr}) });
-    else if (c > -0.3 && c < 0.1)
-      insights.push({ type:'info', text: T('insightFixedFlow', {r: heatCurveCorr}) });
-    // Rec 3: weather comp not active — add to recommendations (only when it is NOT active)
-    const rec3 = TR('recNoWeatherComp');
-    if (c >= -0.3) recommendations.push({
-      type: 'info',
-      title: rec3.title,
-      body: rec3.body?.replaceAll('{r}', heatCurveCorr),
-      actions: rec3.actions?.map(a => a
-        .replaceAll('{slope}', CURVE_SLOPE || '—')
-        .replaceAll('{shift}', CURVE_SHIFT ?? '—')
-      ),
-      impact: rec3.impact,
-    });
-  }
-}
-
-// ── Scatter data: heat demand vs outdoor temp ─────────────────────────────────
-// Each point: x=outside_temp, y=heatDemand(kW) when burner active
-const scatterData = (() => {
-  if (!hasBoilerKW) return [];
-  return boilerRows
-    .filter(r => r.burner_active === 'true' && parseFloat(r.modulation) > 0)
-    .map(r => {
-      // find nearest boilerRow with outside_temp
-      const out = parseFloat(r.outside_temp);
-      const mod = parseFloat(r.modulation);
-      if (isNaN(out) || out === 0 || isNaN(mod)) return null;
-      return { x: out, y: +(BOILER_KW * mod / 100).toFixed(2) };
-    })
-    .filter(Boolean);
-})();
-
-// Linear regression on scatter for trendline
-const scatterRegression = (() => {
-  if (scatterData.length < 10) return null;
-  const n  = scatterData.length;
-  const mx = scatterData.reduce((a,p) => a+p.x, 0) / n;
-  const my = scatterData.reduce((a,p) => a+p.y, 0) / n;
-  const num = scatterData.reduce((a,p) => a + (p.x-mx)*(p.y-my), 0);
-  const den = scatterData.reduce((a,p) => a + (p.x-mx)**2, 0);
-  if (den === 0) return null;
-  const slope     = num / den;
-  const intercept = my - slope * mx;
-  // balance point: outdoor temp where heat demand = 0
-  const balancePoint = slope !== 0 ? (-intercept / slope).toFixed(1) : null;
-  // trendline: two points covering outdoor range
-  const xs = scatterData.map(p => p.x);
-  const xMin = Math.min(...xs), xMax = Math.max(...xs);
-  return {
-    slope: slope.toFixed(3), intercept: intercept.toFixed(2), balancePoint,
-    line: [
-      { x: xMin, y: +(slope*xMin + intercept).toFixed(2) },
-      { x: xMax, y: +(slope*xMax + intercept).toFixed(2) }
-    ]
-  };
-})();
-
-// Histogram buckets: 0-5, 5-10, 10-20, 20-40, 40+
-const histBuckets = [
-  { label:'0–5 min',  min:0,  max:5  },
-  { label:'5–10 min', min:5,  max:10 },
-  { label:'10–20 min',min:10, max:20 },
-  { label:'20–40 min',min:20, max:40 },
-  { label:'40+ min',  min:40, max:Infinity }
-];
-const histData = histBuckets.map(b => cycles.filter(d => d >= b.min && d < b.max).length);
-
-const programs = {};
-hcRows.forEach(r => { if (r.program) programs[r.program] = (programs[r.program]||0)+1; });
-const totalProg = Object.values(programs).reduce((a,b)=>a+b,0);
-const progDist = Object.entries(programs).map(([k,v]) => { const key = 'prog'+k.charAt(0).toUpperCase()+k.slice(1); return { label: T(key) || k.charAt(0).toUpperCase()+k.slice(1), cssKey: k, pct: ((v/totalProg)*100).toFixed(0) }; });
-
-function subsample(arr, max=200) {
-  if (arr.length <= max) return arr;
-  const step = Math.ceil(arr.length/max);
-  return arr.filter((_,i) => i%step===0);
-}
-function chartData(arr, key) {
-  const s = subsample(arr);
-  return {
-    labels: s.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; }),
-    values: s.map(r => toNum(r[key])||null)
-  };
-}
-
-const modChart    = chartData(boilerRows, 'modulation');
-const roomChart   = chartData(hcRows, 'room_temp');
-const targetChart = chartData(hcRows, 'target_temp');
-const flowChart   = chartData(hcRows, 'flow_temp');
-const dhwChart    = chartData(dhwRows, 'dhw_temp');
-const dhwTgtChart = chartData(dhwRows, 'dhw_target');
-const outsideChart = chartData(boilerRows, 'outside_temp');
-// Energy charts
-const pvChart      = chartData(energyRows, 'pv_production_w');
-const battChart    = chartData(energyRows, 'battery_level');
-const battChrChart = chartData(energyRows, 'battery_charging_w');
-const battDisChart = chartData(energyRows, 'battery_discharging_w');
-const wallboxChart = chartData(energyRows, 'wallbox_power_w');
-const sBurner     = subsample(boilerRows);
-const burnerChart = {
-  labels: sBurner.map(r => { const d=new Date(r.timestamp); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; }),
-  values: sBurner.map(r => r.burner_active==='true' ? 1 : 0)
-};
-
-// --- Overview chart: merge all rows on a unified timeline ---
-// Build a time-indexed map for each series, then interpolate to a shared timeline
-const allTimes = [...new Set(filtered.map(r => r.timestamp))].sort();
-const overviewTimes = subsample(allTimes, 200);
-// Linear interpolation on a sorted array of rows
-function interpolate(arr, ts, key) {
-  const t = new Date(ts).getTime();
-  const valid = arr.filter(r => r[key] !== '' && r[key] !== undefined && !isNaN(toNum(r[key])));
-  if (!valid.length) return null;
-  // exact match
-  const exact = valid.find(r => new Date(r.timestamp).getTime() === t);
-  if (exact) return toNum(exact[key]);
-  // find prev and next
-  let prev = null, next = null;
-  for (const r of valid) {
-    const rt = new Date(r.timestamp).getTime();
-    if (rt <= t) prev = r;
-    else if (rt > t && !next) next = r;
-  }
-  if (prev && next) {
-    const t0 = new Date(prev.timestamp).getTime();
-    const t1 = new Date(next.timestamp).getTime();
-    const ratio = (t - t0) / (t1 - t0);
-    return +(toNum(prev[key]) + ratio * (toNum(next[key]) - toNum(prev[key]))).toFixed(2);
-  }
-  // extrapolate up to 1 hour at edges
-  if (prev && (t - new Date(prev.timestamp).getTime()) < 60*60*1000) return toNum(prev[key]);
-  if (next && (new Date(next.timestamp).getTime() - t) < 60*60*1000) return toNum(next[key]);
-  return null;
-}
-// Burner is stepped (boolean) — use nearest within 20 min, no interpolation
-function lookupBurner(arr, ts) {
-  const t = new Date(ts).getTime();
-  let best = null, bestDiff = Infinity;
-  for (const r of arr) {
-    const diff = Math.abs(new Date(r.timestamp).getTime() - t);
-    if (diff < bestDiff) { bestDiff = diff; best = r; }
-  }
-  return (best && bestDiff < 20*60*1000) ? (best.burner_active==='true' ? 100 : 0) : null;
-}
-
-const ovLabels   = overviewTimes.map(ts => { const d=new Date(ts); return `${d.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}`; });
-const scheduleBarHtml = buildScheduleBarHtml();
-const ovRoom     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'room_temp'));
-const ovSetpoint = overviewTimes.map(ts => interpolate(hcRows,    ts, 'target_temp'));
-const ovFlow     = overviewTimes.map(ts => interpolate(hcRows,    ts, 'flow_temp'));
-const ovDhw      = overviewTimes.map(ts => interpolate(dhwRows,   ts, 'dhw_temp'));
-const ovOutside  = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_temp'));
-const ovOutsideHum = overviewTimes.map(ts => interpolate(boilerRows, ts, 'outside_humidity'));
-const ovMod      = overviewTimes.map(ts => interpolate(boilerRows,ts, 'modulation'));
-const ovBurner   = overviewTimes.map(ts => lookupBurner(boilerRows, ts));
-
-
-
-// ── D: Estimated return temperature + condensing score ──────────────────────
-// T_return ≈ T_flow - ΔT(modulation)  — model-based, not measured
-// ΔT = clamp(5, 15, 5 + 0.1 × modulation)
-const MIN_DATA_DAYS = 30;  // threshold for statistically meaningful analysis
-
-const condensingScore = (() => {
-  const samples = hcRows
-    .map(r => {
-      const flow = parseFloat(r.flow_temp);
-      const ts   = r.timestamp;
-      // find nearest boiler row for modulation
-      const b = nearestRow(boilerRows, ts).row;
-      const mod = b ? parseFloat(b.modulation) : NaN;
-      if (isNaN(flow) || flow <= 0 || isNaN(mod)) return null;
-      const deltaT = Math.max(5, Math.min(15, 5 + 0.1 * mod));
-      const tReturn = flow - deltaT;
-      return { tReturn, flow, mod };
-    })
-    .filter(Boolean);
-
-  if (samples.length < 10) return null;
-  const condensing = samples.filter(s => s.tReturn < 55).length;
-  return {
-    pct:     Math.round(condensing / samples.length * 100),
-    samples: samples.length,
-    avgReturn: (samples.reduce((s,r) => s + r.tReturn, 0) / samples.length).toFixed(1),
-  };
-})();
-
-// ── B: Heat loss line for scatter (Q = H × (T_indoor - T_outdoor)) ──────────
-// Uses heatLossCoeff already computed above
-const heatLossLine = (() => {
-  if (!heatLossCoeff || !avgRoomNum) return null;
-  const H = parseFloat(heatLossCoeff);
-  const Ti = avgRoomNum;
-  // Generate line from -15°C to +20°C outdoor
-  return Array.from({length: 36}, (_, i) => {
-    const tout = i - 15;
-    const q = Math.max(0, H * (Ti - tout));
-    return { x: tout, y: +q.toFixed(2) };
-  });
-})();
-
-// ── E: Comfort vs efficiency (rolling 12h windows, normalised for outdoor temp) ─
-const MIN_DAYS_COMFORT = 30;
-const dataDays = [...new Set(boilerRows.map(r => r.timestamp.slice(0,10)))].length;
-const hasEnoughForComfort = dataDays >= MIN_DAYS_COMFORT;
-
-const comfortEfficiency = (() => {
-  if (!hasEnoughForComfort) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
-
-  const WINDOW_MS = 12 * 60 * 60 * 1000;
-  const INDOOR_SET = avgRoomNum || 20;
-
-  // Build merged timeline: timestamp, roomTemp, gasDelta, outdoorTemp
-  const timeline = hcRows
-    .map(r => {
-      const ts  = new Date(r.timestamp).getTime();
-      const rt  = parseFloat(r.room_temp);
-      if (isNaN(rt) || rt <= 0) return null;
-      // nearest boiler row
-      const b = nearestRow(boilerRows, ts).row;
-      const out = b ? parseFloat(b.outside_temp) : NaN;
-      const gas = b ? parseFloat(b.gas_heating_day_m3) : NaN;
-      return { ts, rt, out: isNaN(out) ? null : out, gas: isNaN(gas) ? null : gas };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.ts - b.ts);
-
-  if (timeline.length < 20) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
-
-  const windows = [];
-  let wEnd = 0; // timeline is sorted: sliding window with two pointers (was O(n²))
-  for (let i = 0; i < timeline.length; i++) {
-    if (wEnd < i) wEnd = i;
-    while (wEnd < timeline.length && timeline[wEnd].ts < timeline[i].ts + WINDOW_MS) wEnd++;
-    const win = timeline.slice(i, wEnd);
-    if (win.length < 5) continue;
-
-    const temps = win.map(p => p.rt).filter(v => v != null);
-    if (temps.length < 3) continue;
-    const mean = temps.reduce((a,b) => a+b, 0) / temps.length;
-    const stddev = Math.sqrt(temps.reduce((a,v) => a+(v-mean)**2, 0) / temps.length);
-
-    // Gas normalised by heating degree
-    let gasSum = 0, dtSum = 0;
-    for (const p of win) {
-      if (p.gas == null || p.out == null) continue;
-      const dt = INDOOR_SET - p.out;
-      if (dt <= 0) continue;
-      gasSum += p.gas; dtSum += dt;
-    }
-    if (dtSum === 0) continue;
-    const gasNorm = gasSum / dtSum;
-
-    windows.push({ ts: timeline[i].ts, stability: stddev, gasNorm });
-  }
-
-  if (windows.length < 10) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
-  // No space-heating gas in the period (summer): the comparison is meaningless
-  if (!windows.some(w => w.gasNorm > 0)) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT, noHeating: true };
-
-  // Split into first/second half for trend
-  const half = Math.floor(windows.length / 2);
-  const avg  = (arr, k) => arr.reduce((s,v) => s + v[k], 0) / arr.length;
-  const s1   = avg(windows.slice(0, half), 'stability');
-  const s2   = avg(windows.slice(half),    'stability');
-  const g1   = avg(windows.slice(0, half), 'gasNorm');
-  const g2   = avg(windows.slice(half),    'gasNorm');
-  const dStability = ((s1 - s2) / Math.max(s1, 0.001) * 100).toFixed(1); // positive = improved
-  const dGas       = ((g2 - g1) / Math.max(g1, 0.001) * 100).toFixed(1); // positive = more gas
-
-  // Insight
-  let insight = null;
-  const ds = parseFloat(dStability), dg = parseFloat(dGas);
-  if (Math.abs(ds) < 5 && dg > 5)
-    insight = { type:'warn', key:'ceInsightGasNoComfort' };
-  else if (ds > 5 && Math.abs(dg) < 10)
-    insight = { type:'good', key:'ceInsightComfortFree' };
-  else if (ds < -5 && dg > 5)
-    insight = { type:'warn', key:'ceInsightBothWorse' };
-  else
-    insight = { type:'info', key:'ceInsightStable' };
-
-  return {
-    available: true,
-    windows,
-    dStability, dGas,
-    avgStability: (windows.reduce((s,w) => s+w.stability, 0) / windows.length).toFixed(3),
-    avgGasNorm:   (windows.reduce((s,w) => s+w.gasNorm, 0) / windows.length).toFixed(3),
-    insight,
-  };
-})();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GAS FORECAST
-// Uses gasPerDay (already computed above) to project monthly/annual consumption.
-// Strategy: linear regression on last N days → extrapolate to 30/365 days.
-// ─────────────────────────────────────────────────────────────────────────────
-let gasForecast = null;
-// ─────────────────────────────────────────────────────────────────────────────
-// GAS FORECAST (v2.0.78) — weather-normalised degree-day model
-//   gas/day = base (hot water) + k × HDD,  HDD = max(0, 16 °C − real daily mean)
-// • Daily gas comes from the boiler MONTHLY counters (day counters reset hours late
-//   and under-count), using ALL CSV history, not only the report period.
-// • Real outdoor temperatures come from Open-Meteo for the installation location
-//   (the boiler outdoor sensor is often biased by sun/wall heat).
-// • Next 30 days: 16-day weather forecast + same dates last year.
-// • Annual estimate: base × 365 + k × degree-days of the last 365 days.
-// Works with any amount of data; without heating days only hot water is projected.
-// ─────────────────────────────────────────────────────────────────────────────
-const { spawnSync } = require('child_process');
 function httpJson(url, headers) {
   const code = `fetch(${JSON.stringify(url)},{headers:${JSON.stringify(headers || {})}})` +
     `.then(r=>r.ok?r.text():Promise.reject(new Error('HTTP '+r.status)))` +
@@ -1715,1103 +95,928 @@ function httpJson(url, headers) {
   if (r.status !== 0) throw new Error((r.stderr || 'fetch failed').slice(0, 200));
   return JSON.parse(r.stdout);
 }
-const localDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; };
-const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return localDay(d); };
+const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } };
 
-function getLocation() {
-  const cliLat = parseFloat(getArg('--lat', '')), cliLon = parseFloat(getArg('--lon', ''));
-  if (!isNaN(cliLat) && !isNaN(cliLon)) return { lat: cliLat, lon: cliLon, src: 'cli' };
-  const locFile = path.join(HB_PATH, `viessmann-location-${INSTALLATION_ID || 'default'}.json`);
-  try { const l = JSON.parse(fs.readFileSync(locFile, 'utf8')); if (l.lat && l.lon) return { ...l, src: 'cache' }; } catch (_) {}
-  if (!INSTALLATION_ID) return null;
-  try {
-    const tokens = JSON.parse(fs.readFileSync(path.join(HB_PATH, 'viessmann-tokens.json'), 'utf8'));
-    const find = (o) => { if (o && typeof o === 'object') { for (const [k, v] of Object.entries(o)) { if ((k === 'accessToken' || k === 'access_token') && typeof v === 'string') return v; const r = find(v); if (r) return r; } } return null; };
-    const tok = find(tokens);
-    if (!tok) return null;
-    const j = httpJson(`https://api.viessmann-climatesolutions.com/iot/v2/equipment/installations/${INSTALLATION_ID}`, { Authorization: 'Bearer ' + tok });
-    const g = j?.data?.address?.geolocation;
-    if (g?.latitude && g?.longitude) {
-      const loc = { lat: +(+g.latitude).toFixed(3), lon: +(+g.longitude).toFixed(3) };
-      try { fs.writeFileSync(locFile, JSON.stringify(loc)); } catch (_) {}
-      return { ...loc, src: 'api' };
+// ─── Load CSV ───────────────────────────────────────────────────────────────
+const lines = fs.readFileSync(CSV_FILE, 'utf8').split('\n').filter(l => l.trim());
+const headers = lines[0].split(',').map(h => h.trim());
+const rows = [];
+for (let i = 1; i < lines.length; i++) {
+  const v = lines[i].split(',');
+  const o = {};
+  headers.forEach((h, j) => { o[h] = (v[j] ?? '').trim(); });
+  const t = Date.parse(o.timestamp);
+  if (!isFinite(t)) continue;
+  o.t = t;
+  // Skip the few rows written by very old plugin versions with a different column order
+  if (o.accessory === 'boiler' && /^\d+$/.test(o.mode)) continue;
+  if (o.accessory === 'hc0' && o.dhw_target && !isFinite(parseFloat(o.dhw_target))) continue;
+  if (o.accessory === 'dhw' && o.outside_humidity && !o.dhw_target) continue;
+  rows.push(o);
+}
+rows.sort((a, b) => a.t - b.t);
+const isSnap = (r) => !r.event_type || r.event_type === 'snapshot';
+
+const NOW = Date.now();
+const firstDataT = rows.length ? rows[0].t : NOW;
+const reqStart = NOW - DAYS * 86400000;
+const startT = Math.max(reqStart, firstDataT);
+const coveredDays = Math.max(1, Math.round((NOW - startT) / 86400000));
+const clamped = reqStart < firstDataT - 86400000;
+const inP = (r) => r.t >= startT;
+
+const snaps = { boiler: [], hc0: [], dhw: [], energy: [] };
+const roomRows = {};
+const ignitionsAll = [];
+for (const r of rows) {
+  if (r.accessory === 'boiler' && r.event_type === 'burner_on') { ignitionsAll.push(r); continue; }
+  if (!isSnap(r)) continue;
+  if (snaps[r.accessory]) snaps[r.accessory].push(r);
+  else if (/^room/.test(r.accessory)) (roomRows[r.accessory] = roomRows[r.accessory] || []).push(r);
+}
+const ignitions = ignitionsAll.filter(inP);
+const P = { boiler: snaps.boiler.filter(inP), hc0: snaps.hc0.filter(inP), dhw: snaps.dhw.filter(inP), energy: snaps.energy.filter(inP) };
+const sampleCount = P.boiler.length + P.hc0.length + P.dhw.length + P.energy.length;
+
+function nearestBoiler(t) {
+  const a = snaps.boiler; if (!a.length) return null;
+  let lo = 0, hi = a.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m].t < t) lo = m + 1; else hi = m; }
+  let b = a[lo]; if (lo > 0 && Math.abs(a[lo - 1].t - t) < Math.abs(b.t - t)) b = a[lo - 1];
+  return Math.abs(b.t - t) < 5 * 60000 ? b : null;
+}
+
+// ─── Gas per day from monthly counters (increment method, whole history) ────
+const gasDay = {};
+(() => {
+  let ph = null, pw = null, pt = null;
+  for (const r of snaps.boiler) {
+    const h = num(r.gas_heating_month_m3), w = num(r.gas_dhw_month_m3);
+    if (h === null && w === null) continue;
+    const hv = h ?? 0, wv = w ?? 0;
+    if (ph !== null && r.t - pt < 3 * 86400000) {
+      const dh = hv >= ph ? hv - ph : hv, dw = wv >= pw ? wv - pw : wv;   // drop = monthly reset
+      if (dh < 60 && dw < 30) {
+        const d = localDay(r.t);
+        (gasDay[d] = gasDay[d] || { h: 0, w: 0 });
+        gasDay[d].h += dh; gasDay[d].w += dw;
+      }
     }
-  } catch (e) { process.stderr.write(`[forecast] location lookup failed: ${e.message}\n`); }
+    ph = hv; pw = wv; pt = r.t;
+  }
+})();
+const periodDays = []; for (let d = localDay(startT); d <= localDay(NOW); d = addDays(d, 1)) periodDays.push(d);
+const gasP = periodDays.reduce((a, d) => { const g = gasDay[d]; if (g) { a.h += g.h; a.w += g.w; } return a; }, { h: 0, w: 0 });
+gasP.tot = gasP.h + gasP.w;
+const monthly = {};
+for (const d of periodDays) { const g = gasDay[d]; if (!g) continue; const m = d.slice(0, 7); (monthly[m] = monthly[m] || { h: 0, w: 0 }); monthly[m].h += g.h; monthly[m].w += g.w; }
+const firstGasDay = Object.keys(gasDay).sort()[0] || '';
+const isPartial = (m) => m === localDay(NOW).slice(0, 7) || localDay(startT) > m + '-01' || firstGasDay > m + '-01';
+
+// ─── API summary (explore JSON) ─────────────────────────────────────────────
+const explore = readJson(path.join(HB_PATH, `viessmann-history-explore-${INSTALLATION || 'all'}.json`));
+let api = null, curve = { slope: null, shift: null }, summerEco = false;
+if (explore?.devices) {
+  for (const dev of Object.values(explore.devices)) {
+    const f = (n) => (dev.historyFeatures || []).find(x => x.feature === n)?.samples || {};
+    const v = (n, p) => { const x = f(n)?.[p]?.value; return typeof x === 'number' ? x : null; };
+    if (v('heating.gas.consumption.summary.heating', 'currentYear') !== null && !api) {
+      const blk = (n) => ({ d7: v(n, 'lastSevenDays'), month: v(n, 'currentMonth'), lastMonth: v(n, 'lastMonth'), year: v(n, 'currentYear'), lastYear: v(n, 'lastYear') });
+      api = {
+        ts: explore.timestamp,
+        gasH: blk('heating.gas.consumption.summary.heating'), gasW: blk('heating.gas.consumption.summary.dhw'),
+        heatH: blk('heating.heat.production.summary.heating'), heatW: blk('heating.heat.production.summary.dhw'),
+        elH: blk('heating.power.consumption.summary.heating'), elW: blk('heating.power.consumption.summary.dhw'),
+        starts: v('heating.burners.0.statistics', 'starts'), hours: v('heating.burners.0.statistics', 'hours'),
+      };
+    }
+    if (f('heating.circuits.0.operating.programs.normalEnergySaving')?.reason?.value === 'summerEco') summerEco = true;
+    const hc = dev.heatingCircuits || {};
+    const c = hc['0'] || hc[Object.keys(hc)[0]];
+    if (c && curve.slope === null) curve = { slope: c.slope ?? null, shift: c.shift ?? 0 };
+  }
+}
+const cliSlope = num(getArg('--curveSlope', '')), cliShift = num(getArg('--curveShift', ''));
+if (cliSlope) curve.slope = cliSlope;
+if (cliShift !== null) curve.shift = cliShift;
+
+// ─── Weather (Open-Meteo) ───────────────────────────────────────────────────
+function getLocation() {
+  const la = num(getArg('--lat', '')), lo = num(getArg('--lon', ''));
+  if (la !== null && lo !== null) return { lat: la, lon: lo };
+  const file = path.join(HB_PATH, `viessmann-location-${INSTALLATION || 'default'}.json`);
+  const c = readJson(file); if (c?.lat && c?.lon) return c;
+  if (!INSTALLATION) return null;
+  try {
+    const tokens = readJson(path.join(HB_PATH, 'viessmann-tokens.json'));
+    const find = (o) => { if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) { if ((k === 'accessToken' || k === 'access_token') && typeof v === 'string') return v; const r = find(v); if (r) return r; } return null; };
+    const tok = find(tokens); if (!tok) return null;
+    const g = httpJson(`https://api.viessmann-climatesolutions.com/iot/v2/equipment/installations/${INSTALLATION}`, { Authorization: 'Bearer ' + tok })?.data?.address?.geolocation;
+    if (g?.latitude && g?.longitude) { const loc = { lat: +(+g.latitude).toFixed(3), lon: +(+g.longitude).toFixed(3) }; try { fs.writeFileSync(file, JSON.stringify(loc)); } catch (_) {} return loc; }
+  } catch (e) { process.stderr.write(`[weather] location lookup failed: ${e.message}\n`); }
   return null;
 }
-
-// Daily mean temperatures (real), cached on disk: { 'YYYY-MM-DD': °C }
-function getDailyTemps(loc, fromDay, toDay) {
+const loc = getLocation();
+let temps = {}, forecastDays = 0;
+if (loc) {
   const cacheFile = path.join(HB_PATH, `viessmann-weather-${loc.lat}_${loc.lon}.json`);
-  let cache = {};
-  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
-  const today = localDay(new Date());
+  const cache = readJson(cacheFile) || {};
+  const today = localDay(NOW);
   const q = `latitude=${loc.lat}&longitude=${loc.lon}&daily=temperature_2m_mean&timezone=auto`;
-  // Archive (final data) for days older than 7 days that are not cached yet
-  const archEnd = addDays(today, -7);
-  let missingFrom = null;
-  for (let d = fromDay; d <= archEnd; d = addDays(d, 1)) { if (cache[d] === undefined) { missingFrom = d; break; } }
-  if (missingFrom) {
-    try {
-      const j = httpJson(`https://archive-api.open-meteo.com/v1/archive?${q}&start_date=${missingFrom}&end_date=${archEnd}`);
-      (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) cache[t] = v; });
-    } catch (e) { process.stderr.write(`[forecast] archive fetch failed: ${e.message}\n`); }
+  const archEnd = addDays(today, -7), archStart = addDays(today, -400);
+  let missing = null;
+  for (let d = archStart; d <= archEnd; d = addDays(d, 1)) if (cache[d] === undefined) { missing = d; break; }
+  if (missing) {
+    try { const j = httpJson(`https://archive-api.open-meteo.com/v1/archive?${q}&start_date=${missing}&end_date=${archEnd}`); (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) cache[t] = v; }); }
+    catch (e) { process.stderr.write(`[weather] archive: ${e.message}\n`); }
+    try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch (_) {}
   }
-  // Recent days + 16-day forecast (not cached: values change)
   const recent = {};
-  try {
-    const j = httpJson(`https://api.open-meteo.com/v1/forecast?${q}&past_days=10&forecast_days=16`);
-    (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) recent[t] = v; });
-  } catch (e) { process.stderr.write(`[forecast] forecast fetch failed: ${e.message}\n`); }
-  try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch (_) {}
-  return { ...cache, ...recent };
+  try { const j = httpJson(`https://api.open-meteo.com/v1/forecast?${q}&past_days=10&forecast_days=16`); (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) recent[t] = v; }); }
+  catch (e) { process.stderr.write(`[weather] forecast: ${e.message}\n`); }
+  temps = { ...cache, ...recent };
+  for (let i = 1; i <= 30; i++) if (recent[addDays(today, i)] !== undefined) forecastDays++;
+}
+const hasWeather = Object.keys(temps).length > 30;
+const hdd = (t) => Math.max(0, HDD_BASE - t);
+// Location-dependent values come from this installation's own weather, never from fixed numbers.
+let warmDaysYear = null;
+if (hasWeather) {
+  const today = localDay(NOW), last = [];
+  for (let i = 1; i <= 365; i++) { const t = temps[addDays(today, -i)]; if (t !== undefined) last.push([addDays(today, -i), t]); }
+  if (last.length >= 330) {
+    last.sort((a, b) => a[0] < b[0] ? -1 : 1);
+    let coldest = Infinity;   // coldest 3-day mean of the last 12 months ≈ local design temperature
+    for (let i = 2; i < last.length; i++) coldest = Math.min(coldest, (last[i][1] + last[i - 1][1] + last[i - 2][1]) / 3);
+    if (DESIGN_ARG === null && isFinite(coldest)) { DESIGN_TEMP = Math.floor(coldest); DESIGN_AUTO = true; }
+    warmDaysYear = last.filter(([, t]) => t >= HDD_BASE).length * 365 / last.length;
+  }
 }
 
-// Daily gas (heating + DHW) from monthly counters, over the WHOLE CSV history
-const gasDailyAll = (() => {
-  const last = {};
-  for (const r of rows) {
-    if (r.accessory !== 'boiler' || (r.event_type && r.event_type !== 'snapshot') || !r.timestamp) continue;
-    if (r.gas_heating_month_m3 === '' && r.gas_dhw_month_m3 === '') continue;
-    const d = localDay(r.timestamp);
-    const v = (parseFloat(r.gas_heating_month_m3) || 0) + (parseFloat(r.gas_dhw_month_m3) || 0);
-    if (!last[d] || r.timestamp > last[d].ts) last[d] = { ts: r.timestamp, v };
+// ─── Forecast (degree-day model) ────────────────────────────────────────────
+let fc = null;
+{
+  const today = localDay(NOW);
+  const days = Object.keys(gasDay).sort();
+  let a = null, b = null, calibrated = false, r2 = null;
+  if (hasWeather && days.length) {
+    const pts = days.filter(d => temps[d] !== undefined).map(d => [hdd(temps[d]), gasDay[d].h + gasDay[d].w]);
+    const warm = pts.filter(p => p[0] === 0).map(p => p[1]);
+    if (pts.filter(p => p[0] >= 3).length >= 3) {
+      const mx = mean(pts.map(p => p[0])), my = mean(pts.map(p => p[1]));
+      const sxy = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0), sxx = pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
+      const syy = pts.reduce((s, p) => s + (p[1] - my) ** 2, 0);
+      b = sxx > 0 ? Math.max(0, sxy / sxx) : 0; a = Math.max(0, my - b * mx);
+      r2 = sxx > 0 && syy > 0 ? (sxy * sxy) / (sxx * syy) : null;
+    }
+    if (warm.length >= 5) a = mean(warm);
+    if (api?.ts) {   // calibrate on the boiler yearly counters
+      const end = localDay(api.ts); let sh = 0, cnt = 0, tot = 0;
+      for (let d = `${end.slice(0, 4)}-01-01`; d <= end; d = addDays(d, 1)) { tot++; if (temps[d] !== undefined) { sh += hdd(temps[d]); cnt++; } }
+      if (api.gasH.year > 0 && cnt >= tot * 0.9 && sh > 50) { b = api.gasH.year / (sh * tot / cnt); calibrated = true; }
+      if (api.gasW.year > 0 && tot > 0) a = api.gasW.year / tot;
+    }
+    if (a === null) a = mean(pts.map(p => p[1])) ?? 0;
   }
-  const days = Object.keys(last).sort();
-  const out = {};
-  for (let i = 1; i < days.length; i++) {
-    const d = days[i], p = days[i - 1];
-    if (addDays(p, 1) !== d) continue;                       // gap in data: skip
-    const newMonth = d.slice(0, 7) !== p.slice(0, 7);
-    const delta = newMonth ? last[d].v : last[d].v - last[p].v;
-    if (delta >= 0 && delta < 50) out[d] = delta;             // ignore glitches
+  if (a === null && days.length) a = mean(days.slice(-30).map(d => gasDay[d].h + gasDay[d].w));
+  if (a !== null) {
+    let m30 = 0, m30h = 0;
+    for (let i = 1; i <= 30; i++) { const d = addDays(today, i); let t = temps[d]; if (t === undefined) t = temps[addDays(d, -365)]; const h = b !== null && t !== undefined ? b * hdd(t) : 0; m30 += a + h; m30h += h; }
+    let yr = null, yrH = null, hy = 0, n = 0;
+    for (let i = 1; i <= 365; i++) { const t = temps[addDays(today, -i)]; if (t !== undefined) { hy += hdd(t); n++; } }
+    if (b !== null && n >= 330) { yrH = b * hy * 365 / n; yr = a * 365 + yrH; }
+    const Hkw = b !== null ? b * KWH_PER_M3 * 0.95 / 24 : null;            // kW per K of cold
+    const need = Hkw !== null && isFinite(DESIGN_TEMP) ? Hkw * hdd(DESIGN_TEMP) : null;
+    fc = { a, b, r2, calibrated, m30, m30h, yr, yrH, Hkw, need };
+  }
+}
+
+// ─── Outdoor sensor bias ────────────────────────────────────────────────────
+const sensorDay = {};
+for (const r of snaps.boiler) { const v = num(r.outside_temp); if (v === null) continue; const d = localDay(r.t); (sensorDay[d] = sensorDay[d] || []).push(v); }
+let sensorBias = null, biasDays = 0;
+if (hasWeather) {
+  const diffs = Object.entries(sensorDay).filter(([d, v]) => d >= localDay(NOW - 90 * 86400000) && temps[d] !== undefined && v.length >= 24).map(([d, v]) => mean(v) - temps[d]);
+  if (diffs.length >= 5) { sensorBias = mean(diffs); biasDays = diffs.length; }
+}
+const realP = periodDays.map(d => temps[d]).filter(v => v !== undefined);
+const sensP = P.boiler.map(r => num(r.outside_temp)).filter(v => v !== null);
+
+// ─── Heating analysis ───────────────────────────────────────────────────────
+// A heating day is a day on which the boiler really burned gas for heating (>= 0.3 m³).
+const gasHeatDays = new Set(Object.keys(gasDay).filter(d => gasDay[d].h >= 0.3));
+const isHeatRow = (r) => gasHeatDays.has(localDay(r.t)) && (r.mode || 'heating').toLowerCase() !== 'standby';
+const normalSet = median(snaps.hc0.filter(r => r.program === 'normal').slice(-2000).map(r => num(r.target_temp)).filter(v => v !== null && v > 0));
+const reducedSet = median(snaps.hc0.filter(r => r.program === 'reduced').slice(-2000).map(r => num(r.target_temp)).filter(v => v !== null && v > 0));
+function heatStats(hcHeat) {
+  if (hcHeat.length < 12) return null;
+  const pairs = hcHeat.map(r => [num(r.room_temp), num(r.target_temp), r.program]).filter(([a, b]) => a !== null && b !== null && a > 0 && b > 0);
+  const byDay = {};
+  for (const r of hcHeat) { const v = num(r.room_temp); if (v !== null && v > 0) (byDay[localDay(r.t)] = byDay[localDay(r.t)] || []).push(v); }
+  const daySd = Object.values(byDay).filter(a => a.length >= 8).map(sd).filter(v => v !== null);
+  const flows = [], curvePts = [];
+  let flowMax = null;
+  for (const r of hcHeat) {
+    const f = num(r.flow_temp); if (f === null || f <= 0) continue;
+    const b = nearestBoiler(r.t);
+    if (b && b.burner_active === 'true') {
+      flows.push(f); flowMax = flowMax === null ? f : Math.max(flowMax, f);
+      const o = num(b.outside_temp); if (o !== null) curvePts.push({ x: o, y: f });
+    }
+  }
+  const prog = {}; for (const r of hcHeat) { const p = r.program || 'other'; prog[p] = (prog[p] || 0) + 1; }
+  const normPairs = pairs.filter(p => p[2] === 'normal'), redPairs = pairs.filter(p => p[2] === 'reduced');
+  const dayList = [...new Set(hcHeat.map(r => localDay(r.t)))].sort();
+  return {
+    days: dayList.length, from: dayList[0], to: dayList[dayList.length - 1], daySet: new Set(dayList),
+    room: mean(pairs.map(p => p[0])), set: mean(pairs.map(p => p[1])), diff: mean(pairs.map(p => p[0] - p[1])),
+    roomNormal: mean(normPairs.map(p => p[0])), roomReduced: mean(redPairs.map(p => p[0])),
+    comfortPct: pairs.length ? 100 * pairs.filter(p => Math.abs(p[0] - p[1]) <= 1).length / pairs.length : null,
+    stab: mean(daySd), flow: mean(flows), flowN: flows.length, flowMax,
+    condPct: flows.length ? 100 * flows.filter(f => f < 55).length / flows.length : null,
+    curvePts: curvePts.slice(-800), prog, progN: hcHeat.length,
+  };
+}
+const heat = heatStats(P.hc0.filter(isHeatRow));
+const heatDaysSet = heat ? heat.daySet : new Set();
+// When the chosen period has no heating (e.g. summer), the assistant still uses the
+// whole history (last heating season) so its advice stays useful all year round.
+const seasonHeat = heat ? null : heatStats(snaps.hc0.filter(isHeatRow));
+const heatAdv = heat || seasonHeat;
+const curveLine = (() => {
+  if (!curve.slope) return null;
+  const rt = normalSet ?? 20, out = [];
+  for (let x = -15; x <= 22; x++) {
+    const dar = x - rt;
+    const y = clamp(rt + curve.shift - curve.slope * dar * (1.4347 + 0.021 * dar + 247.9e-6 * dar * dar), rt, 85);
+    out.push({ x, y: +y.toFixed(1) });
   }
   return out;
 })();
+const curveAt = (x) => { if (!curveLine) return null; const p = curveLine.find(q => q.x === Math.round(x)); return p ? p.y : null; };
 
-const HDD_BASE = parseFloat(getArg('--hddBase', '16'));
-const GAS_PRICE_EUR = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
-const gasModelDays = Object.keys(gasDailyAll).sort();
-if (gasModelDays.length >= 1) {
-  let loc = null, temps = {};
-  try { loc = getLocation(); } catch (_) {}
-  const today = localDay(new Date());
-  if (loc) {
-    try { temps = getDailyTemps(loc, addDays(today, -400), today); } catch (_) {}
+// ─── Burner (counters) ──────────────────────────────────────────────────────
+const cnt = P.boiler.filter(r => num(r.burner_starts) > 0);
+let burner = null;
+if (cnt.length >= 2) {
+  const f = cnt[0], l = cnt[cnt.length - 1];
+  const starts = num(l.burner_starts) - num(f.burner_starts);
+  const hours = num(l.burner_hours) - num(f.burner_hours);
+  const spanDays = Math.max(1 / 24, (l.t - f.t) / 86400000);
+  const lastOfDay = {};
+  for (const r of snaps.boiler) if (num(r.burner_starts) > 0) lastOfDay[localDay(r.t)] = num(r.burner_starts);
+  const dKeys = Object.keys(lastOfDay).sort();
+  const perDay = {};
+  for (let i = 1; i < dKeys.length; i++) if (addDays(dKeys[i - 1], 1) === dKeys[i] && dKeys[i] >= localDay(startT)) perDay[dKeys[i]] = Math.max(0, lastOfDay[dKeys[i]] - lastOfDay[dKeys[i - 1]]);
+  const heatStarts = Object.entries(perDay).filter(([d]) => heatDaysSet.has(d)).map(([, v]) => v);
+  if (seasonHeat) {
+    const all = [];
+    for (let i = 1; i < dKeys.length; i++) if (addDays(dKeys[i - 1], 1) === dKeys[i] && seasonHeat.daySet.has(dKeys[i])) all.push(Math.max(0, lastOfDay[dKeys[i]] - lastOfDay[dKeys[i - 1]]));
+    if (all.length) seasonHeat.startsPerDay = mean(all);
   }
-  const hdd = (t) => Math.max(0, HDD_BASE - t);
-  // Fit gas = a + b·HDD on days with both gas and temperature
-  const pts = gasModelDays.filter(d => temps[d] !== undefined).map(d => [hdd(temps[d]), gasDailyAll[d]]);
-  const heatingDays = pts.filter(p => p[0] >= 3).length;
-  let a, b = null, r2 = null;
-  const summer = pts.filter(p => p[0] === 0).map(p => p[1]);
-  if (heatingDays >= 3) {
-    const n = pts.length, mx = pts.reduce((s, p) => s + p[0], 0) / n, my = pts.reduce((s, p) => s + p[1], 0) / n;
-    const sxy = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0), sxx = pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
-    b = sxx > 0 ? Math.max(0, sxy / sxx) : 0;
-    a = Math.max(0, my - b * mx);
-    if (summer.length >= 5) a = summer.reduce((s, v) => s + v, 0) / summer.length; // hot water base from warm days
-    const syy = pts.reduce((s, p) => s + (p[1] - my) ** 2, 0);
-    const sse = pts.reduce((s, p) => s + (p[1] - (a + b * p[0])) ** 2, 0);
-    r2 = syy > 0 ? Math.max(0, 1 - sse / syy) : null;
-  } else if (pts.length) {
-    // weather available but no heating days yet: hot water only
-    const vals = summer.length ? summer : pts.map(p => p[1]);
-    a = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const warmStarts = Object.entries(perDay).filter(([d]) => !gasHeatDays.has(d)).map(([, v]) => v);
+  burner = {
+    starts, hours, perDay: starts / spanDays, spanDays,
+    runtimePct: 100 * hours / (spanDays * 24),
+    cycleMin: hours >= 10 && starts > 0 ? hours * 60 / starts : null,
+    avgKw: hours >= 10 ? gasP.tot * KWH_PER_M3 / hours : null,
+    dayMap: perDay, heatStartsPerDay: heatStarts.length ? mean(heatStarts) : null, warmStartsPerDay: warmStarts.length ? mean(warmStarts) : null,
+    lifeStarts: num(l.burner_starts), lifeHours: num(l.burner_hours),
+  };
+}
+const heatmap = Array.from({ length: 7 }, () => new Array(24).fill(0));
+for (const r of ignitions) { const d = new Date(r.t); heatmap[(d.getDay() + 6) % 7][d.getHours()]++; }
+const heatmapMax = Math.max(1, ...heatmap.flat());
+const modSeries = [];
+{ let prev = null; for (const r of P.boiler) { const m = num(r.modulation); if (r.burner_active === 'true' && m !== null && m > 0) { if (m !== prev) modSeries.push({ x: r.t, y: m }); prev = m; } else prev = null; } }
+const modVals = modSeries.map(p => p.y);
+
+// ─── Hot water ──────────────────────────────────────────────────────────────
+let dhw = null;
+if (P.dhw.length) {
+  const on = P.dhw.filter(r => (r.mode || '') !== 'off');
+  const temp = on.map(r => num(r.dhw_temp)).filter(v => v !== null && v > 0);
+  const target = median(on.map(r => num(r.dhw_target)).filter(v => v !== null && v > 0));
+  const reach = on.filter(r => num(r.dhw_temp) !== null && target !== null && num(r.dhw_temp) >= target - 5).length;
+  const modes = {}; for (const r of P.dhw) { const m = r.mode || 'other'; modes[m] = (modes[m] || 0) + 1; }
+  const sorted = [...temp].sort((a, b) => a - b);
+  const p90 = sorted.length ? sorted[Math.floor(sorted.length * 0.9)] : null;
+  const peak = sorted.length ? sorted[sorted.length - 1] : null;
+  dhw = {
+    onShare: temp.length ? on.length / P.dhw.length : 0, avg: mean(temp), target, peak, modes, n: P.dhw.length,
+    reachPct: on.length ? 100 * reach / on.length : null,
+    instant: target !== null && p90 !== null && p90 < target - 5 && peak >= target - 5,
+    neverReached: target !== null && peak !== null && peak < target - 5,
+    gasPerDay: gasP.w / coveredDays,
+  };
+}
+
+// ─── Messages ───────────────────────────────────────────────────────────────
+const CODES = {
+  'S.0': ['Standby', 'Standby'], 'S.1': ['Riscaldamento acqua calda', 'DHW heating'], 'S.2': ['Riscaldamento', 'Central heating'],
+  'S.3': ['Bruciatore acceso', 'Burner on'], 'S.4': ['Bruciatore spento', 'Burner off'], 'S.5': ['Prelavaggio ventilatore', 'Fan pre-purge'],
+  'S.6': ['Accensione', 'Ignition'], 'S.7': ['Fiamma rilevata', 'Flame detected'], 'S.8': ['Postventilazione', 'Fan post-purge'],
+  'S.10': ['Antigelo attivo', 'Frost protection'], 'S.12': ['Pompa di circolazione attiva', 'Circulation pump active'],
+  'S.20': ['Protezione caldaia (sovratemperatura)', 'Boiler protection (overtemperature)'], 'S.24': ['Postcircolazione pompa', 'Pump overrun'],
+  'S.29': ['Richiesta riscaldamento', 'Central heating demand'], 'S.31': ['Eco estivo', 'Summer eco'], 'S.32': ['Circuito in standby', 'Circuit standby'],
+  'S.39': ['Richiesta di calore', 'Heat demand'],
+  'F.1': ['Guasto bruciatore: nessuna accensione', 'Burner fault: no ignition'], 'F.2': ['Segnale fiamma perso', 'Flame signal lost'],
+  'F.3': ['Errore di accensione', 'Ignition fault'], 'F.4': ['Catena di sicurezza aperta', 'Safety chain open'], 'F.5': ['Guasto valvola gas', 'Gas valve fault'],
+  'F.9': ['Sensore mandata guasto', 'Flow sensor fault'], 'F.10': ['Sonda esterna guasta', 'Outdoor sensor fault'], 'F.11': ['Sensore ritorno guasto', 'Return sensor fault'],
+  'F.12': ['Sensore acqua calda guasto', 'DHW sensor fault'], 'F.20': ['Termostato di sicurezza', 'Safety temperature limiter'],
+  'F.22': ['Mancanza acqua / pressione bassa', 'Low water pressure'], 'F.28': ['Accensione fallita (gas)', 'Ignition failure (gas)'],
+  'F.29': ['Fiamma persa dopo accensione', 'Flame lost after ignition'], 'F.30': ['Blocco di sicurezza', 'Safety shutdown'],
+  'F.73': ['Pressione acqua troppo alta', 'Water pressure too high'], 'F.74': ['Pressione acqua troppo bassa', 'Water pressure too low'],
+};
+const codeText = (c) => CODES[c] ? CODES[c][LANG === 'it' ? 0 : 1] : tr('codice non documentato da Viessmann', 'code not documented by Viessmann');
+const messages = [];
+try {
+  const pre = `viessmann-messages-${INSTALLATION ? INSTALLATION + '-' : ''}`;
+  for (const f of fs.readdirSync(HB_PATH).filter(f => f.startsWith(pre) && f.endsWith('.json'))) {
+    const arr = readJson(path.join(HB_PATH, f)); if (!Array.isArray(arr)) continue;
+    for (const m of arr) {
+      const t = Date.parse(String(m.timestamp || '').replace(/Z$/, ''));   // local time labelled "Z"
+      if (isFinite(t)) messages.push({ code: m.errorCode || m.code || '', t });
+    }
+  }
+} catch (_) {}
+messages.sort((a, b) => b.t - a.t);
+const faultsP = messages.filter(m => /^F\./.test(m.code) && m.t >= startT);
+const codeCount = {}; for (const m of messages.filter(m => m.t >= startT)) codeCount[m.code] = (codeCount[m.code] || 0) + 1;
+
+// ─── Schedule ───────────────────────────────────────────────────────────────
+const sched = readJson(path.join(HB_PATH, `viessmann-schedule${sfx}.json`));
+const WEEK = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const WEEK_L = LANG === 'it' ? ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return (h || 0) + (m || 0) / 60; };
+const normalHoursWeek = sched?.entries ? WEEK.reduce((s, d) => s + (sched.entries[d] || []).filter(e => e.mode !== 'reduced').reduce((a, e) => a + Math.max(0, (hm(e.end) || 24) - hm(e.start)), 0), 0) : null;
+
+// ─── Energy & rooms ─────────────────────────────────────────────────────────
+const energy = P.energy.length ? {
+  pv: mean(P.energy.map(r => num(r.pv_production_w)).filter(v => v !== null)),
+  pvMax: Math.max(0, ...P.energy.map(r => num(r.pv_production_w)).filter(v => v !== null)),
+  batt: mean(P.energy.map(r => num(r.battery_level)).filter(v => v !== null)),
+  wall: mean(P.energy.map(r => num(r.wallbox_power_w)).filter(v => v !== null)),
+} : null;
+const rooms = Object.entries(roomRows).map(([k, a]) => { const p = a.filter(inP); return { k, avg: mean(p.map(r => num(r.room_temp)).filter(v => v !== null)), n: p.length }; }).filter(r => r.n);
+
+// ─── Assistant: scores, advice, positives ───────────────────────────────────
+const heatYearGas = fc?.yrH ?? (api?.gasH?.year ?? null);
+const advice = [], positives = [];
+const saving = (m3) => m3 !== null && isFinite(m3) && m3 > 0 ? { m3, eur: m3 * GAS_PRICE } : null;
+const scores = { comfort: null, efficiency: 100, boiler: 100, dhw: null, reliability: 100 };
+
+const H = heatAdv;
+if (H && H.diff !== null) {
+  const d = H.diff;
+  scores.comfort = clamp(Math.round(100 - Math.max(0, Math.abs(d) - 0.5) * 20 - (H.stab ?? 0) * 10), 0, 100);
+  if (d > 0.8) {
+    const excess = d - 0.3, pts = Math.max(1, Math.min(3, Math.round(d)));
+    scores.efficiency -= Math.min(25, Math.round(excess * 10));
+    advice.push({
+      prio: 'high', season: true, icon: 'thermo', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile · 2 minuti', 'Easy · 2 minutes'),
+      title: tr(`La casa è ${nf(d)} °C più calda del necessario`, `The house is ${nf(d)} °C warmer than needed`),
+      why: tr(`Nei ${H.days} giorni di riscaldamento le stanze erano in media a <b>${nf(H.room)} °C</b> mentre il programma chiedeva <b>${nf(H.set)} °C</b>. La caldaia non “sa” la temperatura delle stanze: decide quanto scaldare in base alla temperatura esterna e alla curva climatica (pendenza ${nf(curve.slope, 1)}, spostamento ${nf(curve.shift, 0)}). Se la curva è alta, la casa si scalda più del dovuto e il gas in più si paga.`,
+        `On the ${H.days} heating days rooms averaged <b>${nf(H.room)} °C</b> while the program asked for <b>${nf(H.set)} °C</b>. The boiler does not “know” the room temperature: it decides how much to heat from the outdoor temperature and the heating curve (slope ${nf(curve.slope, 1)}, shift ${nf(curve.shift, 0)}). If the curve is too high the house gets warmer than needed and you pay for the extra gas.`),
+      steps: [
+        tr(`Apri ViCare → Riscaldamento → Curva di riscaldamento e abbassa lo <b>spostamento</b> di ${pts} punt${pts > 1 ? 'i' : 'o'}${curve.shift !== null ? ` (da ${nf(curve.shift, 0)} a ${nf(curve.shift - pts, 0)})` : ''}. Ogni punto vale circa 1 °C in casa.`, `Open ViCare → Heating → Heating curve and lower the <b>shift</b> by ${pts} point${pts > 1 ? 's' : ''}${curve.shift !== null ? ` (from ${nf(curve.shift, 0)} to ${nf(curve.shift - pts, 0)})` : ''}. Each point is about 1 °C indoors.`),
+        tr('Aspetta 3–4 giorni (la casa reagisce lentamente) e rigenera questo report.', 'Wait 3–4 days (the house reacts slowly) and generate this report again.'),
+        tr('Se ti sembra troppo fresco, rialza di mezzo punto. Non cambiare pendenza e spostamento insieme.', 'If it feels too cool, raise it by half a point. Do not change slope and shift at the same time.'),
+      ],
+      save: saving(heatYearGas !== null ? heatYearGas * 0.06 * excess : null),
+    });
+  } else if (d < -0.8) {
+    advice.push({
+      prio: 'medium', season: true, icon: 'thermo', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile', 'Easy'),
+      title: tr(`La casa è ${nf(-d)} °C più fresca di quanto impostato`, `The house is ${nf(-d)} °C cooler than set`),
+      why: tr(`Stanze in media a ${nf(H.room)} °C con ${nf(H.set)} °C impostati.`, `Rooms averaged ${nf(H.room)} °C with ${nf(H.set)} °C set.`),
+      steps: [tr('Alza lo spostamento della curva di 1 punto e ricontrolla dopo qualche giorno.', 'Raise the curve shift by 1 point and check again after a few days.')],
+      save: null,
+    });
+  } else positives.push(tr(`Temperatura delle stanze in linea con le impostazioni (${sgn(d)} °C).`, `Room temperature matches the settings (${sgn(d)} °C).`));
+  if (H.stab !== null && H.stab < 0.5) positives.push(tr(`Temperatura molto stabile durante la giornata (±${nf(H.stab)} °C).`, `Very stable temperature during the day (±${nf(H.stab)} °C).`));
+}
+if (sensorBias !== null) {
+  if (Math.abs(sensorBias) > 1.5) {
+    scores.efficiency -= Math.min(20, Math.round(Math.abs(sensorBias) * 5));
+    advice.push({
+      prio: Math.abs(sensorBias) > 3 ? 'high' : 'medium', icon: 'sensor', who: tr('Tecnico o fai-da-te', 'Installer or DIY'), diff: tr('Media', 'Medium'),
+      title: sensorBias > 0 ? tr(`La sonda esterna segna ${nf(sensorBias)} °C in più del reale`, `The outdoor sensor reads ${nf(sensorBias)} °C too warm`) : tr(`La sonda esterna segna ${nf(-sensorBias)} °C in meno del reale`, `The outdoor sensor reads ${nf(-sensorBias)} °C too cold`),
+      why: tr(`Ho confrontato per ${biasDays} giorni la sonda della caldaia con la temperatura reale della tua zona (Open-Meteo). ${sensorBias > 0 ? 'La sonda “crede” che fuori faccia più caldo, quindi la caldaia manda acqua meno calda ai termosifoni. Probabilmente per compensare è stato alzato lo spostamento della curva: il risultato è che nelle giornate di sole o vicino a fonti di calore la regolazione sbaglia.' : 'La sonda “crede” che fuori faccia più freddo, quindi la caldaia scalda più del necessario.'} Tipiche cause: sonda al sole, sopra una finestra, vicino allo scarico fumi o su un muro caldo.`,
+        `For ${biasDays} days I compared the boiler sensor with the real local temperature (Open-Meteo). ${sensorBias > 0 ? 'The sensor “thinks” it is warmer outside, so the boiler sends cooler water to the radiators. The curve shift has probably been raised to compensate: on sunny days or near heat sources the control then goes wrong.' : 'The sensor “thinks” it is colder outside, so the boiler heats more than needed.'} Typical causes: sensor in the sun, above a window, near the flue or on a warm wall.`),
+      steps: [
+        tr('Controlla dove è montata la sonda: deve stare su un muro a nord o nord-ovest, a 2–2,5 m d’altezza, all’ombra, lontano da finestre, balconi e scarichi.', 'Check where the sensor is mounted: north or north-west wall, 2–2.5 m high, shaded, away from windows, balconies and flues.'),
+        tr('Se va spostata, chiedi al tecnico (è un cavo a bassa tensione).', 'If it must be moved, ask your installer (it is a low-voltage cable).'),
+        tr('Dopo lo spostamento abbassa lo spostamento della curva di 1–2 punti e ricontrolla il report.', 'After moving it, lower the curve shift by 1–2 points and check the report again.'),
+      ],
+      save: null,
+    });
+  } else positives.push(tr(`La sonda esterna è precisa (scarto medio ${sgn(sensorBias)} °C).`, `The outdoor sensor is accurate (average difference ${sgn(sensorBias)} °C).`));
+}
+if (burner) {
+  const hs = heat ? burner.heatStartsPerDay : (seasonHeat?.startsPerDay ?? null);
+  if (H && hs !== null && hs > 30) {
+    scores.boiler -= Math.min(50, Math.round((hs - 30) * 1.5));
+    advice.push({
+      prio: hs > 50 ? 'high' : 'medium', season: true, icon: 'flame', who: tr('Tecnico Viessmann', 'Viessmann installer'), diff: tr('Intervento tecnico', 'Service visit'),
+      title: tr(`La caldaia si accende troppo spesso (${ni(hs)} volte al giorno)`, `The boiler starts too often (${ni(hs)} times a day)`),
+      why: tr(`Nei giorni di riscaldamento la caldaia si è accesa in media ${ni(hs)} volte al giorno${burner.cycleMin !== null ? `, con accensioni di circa ${nf(burner.cycleMin)} minuti` : ''}. Succede quando la caldaia è molto più potente di quanto serve alla casa (qui servono circa ${nf(fc?.need)} kW con ${nf(DESIGN_TEMP, 0)} °C esterni): si accende, raggiunge subito la temperatura e si spegne. Ogni accensione spreca gas nella fase di avvio e consuma elettrodo e ventilatore.`,
+        `On heating days the boiler started ${ni(hs)} times a day on average${burner.cycleMin !== null ? `, with runs of about ${nf(burner.cycleMin)} minutes` : ''}. This happens when the boiler is far more powerful than the house needs (about ${nf(fc?.need)} kW at ${nf(DESIGN_TEMP, 0)} °C outside): it starts, reaches the temperature at once and stops. Every start wastes gas while warming up and wears the electrode and fan.`),
+      steps: [
+        tr('Chiedi al tecnico di <b>ridurre la potenza massima in riscaldamento</b> (parametro della caldaia) vicino al fabbisogno reale.', 'Ask your installer to <b>limit the maximum heating output</b> (boiler parameter) close to the real demand.'),
+        tr('Chiedi di verificare il <b>tempo di blocco anti-pendolamento</b> e la velocità della pompa.', 'Ask to check the <b>anti-cycling delay</b> and the pump speed.'),
+        tr('Tieni aperte le valvole dei termosifoni principali: se chiudono quasi tutte, la caldaia non riesce a “scaricare” il calore.', 'Keep the main radiator valves open: if almost all of them close, the boiler cannot get rid of the heat.'),
+        tr('Abbassare la curva climatica aiuta anche qui.', 'Lowering the heating curve also helps.'),
+      ],
+      save: saving(heatYearGas !== null ? heatYearGas * 0.04 : null),
+    });
+  } else if (H && hs !== null) positives.push(tr(`Numero di accensioni in riscaldamento nella norma (${ni(hs)} al giorno).`, `Heating starts within normal range (${ni(hs)} per day).`));
+}
+if (H && H.flowN >= 5) {
+  if (H.flow >= 55) {
+    scores.efficiency -= 15;
+    advice.push({ prio: 'medium', season: true, icon: 'radiator', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile', 'Easy'),
+      title: tr(`Acqua ai termosifoni troppo calda (${nf(H.flow)} °C)`, `Radiator water too hot (${nf(H.flow)} °C)`),
+      why: tr('Una caldaia a condensazione rende di più quando l’acqua che torna dai termosifoni è sotto i 50–55 °C: così recupera il calore del vapore nei fumi.', 'A condensing boiler is most efficient when water returns below 50–55 °C: it then recovers the heat in the flue steam.'),
+      steps: [tr('Abbassa la pendenza della curva di 0,1–0,2 e verifica che la casa resti calda.', 'Lower the curve slope by 0.1–0.2 and check the house stays warm.')],
+      save: saving(heatYearGas !== null ? heatYearGas * 0.05 : null) });
+  } else positives.push(tr(`Mandata media ${nf(H.flow)} °C: la caldaia lavora in condensazione (${ni(H.condPct)}% del tempo).`, `Average flow ${nf(H.flow)} °C: the boiler is condensing (${ni(H.condPct)}% of the time).`));
+}
+if (H && normalSet !== null && reducedSet !== null && normalSet - reducedSet < 2 && heatYearGas) {
+  advice.push({ prio: 'low', season: true, icon: 'moon', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile', 'Easy'),
+    title: tr(`Di notte la temperatura scende solo di ${nf(normalSet - reducedSet, 0)} °C`, `At night the temperature only drops by ${nf(normalSet - reducedSet, 0)} °C`),
+    why: tr(`Normale ${nf(normalSet, 0)} °C, Ridotta ${nf(reducedSet, 0)} °C. Abbassare di un altro grado la temperatura Ridotta (notte e assenze) fa risparmiare senza toccare il comfort di giorno. Con case molto isolate o riscaldamento a pavimento il vantaggio è minore.`,
+      `Normal ${nf(normalSet, 0)} °C, Reduced ${nf(reducedSet, 0)} °C. Lowering the Reduced temperature (night and away) by one more degree saves gas without touching daytime comfort. With very well insulated homes or underfloor heating the gain is smaller.`),
+    steps: [tr(`Imposta la temperatura Ridotta a ${nf(reducedSet - 1, 0)} °C.`, `Set the Reduced temperature to ${nf(reducedSet - 1, 0)} °C.`), tr('Se al mattino la casa è fredda, anticipa di 30 minuti l’inizio della fascia Normale.', 'If the house is cold in the morning, start the Normal slot 30 minutes earlier.')],
+    save: saving(heatYearGas * 0.06 * (normalHoursWeek !== null ? (168 - normalHoursWeek) / 168 : 0.4)) });
+}
+if (api && api.gasH.month === 0 && (api.elH.month ?? 0) > 0.5) {
+  const perMonth = api.elH.month / Math.max(1, new Date(api.ts).getDate()) * 30;
+  const offMonths = warmDaysYear !== null ? Math.max(1, Math.round(warmDaysYear / 30)) : 5;
+  advice.push({ prio: 'low', icon: 'sun', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile', 'Easy'),
+    title: tr('In estate il circuito di riscaldamento resta acceso', 'In summer the heating circuit stays on'),
+    why: tr(`Questo mese la caldaia non ha usato gas per il riscaldamento, ma il riscaldamento ha già consumato ${nf(api.elH.month)} kWh di elettricità (pompa ed elettronica)${summerEco ? '; la caldaia è in “eco estivo”, quindi il circuito resta in attesa' : ''}. ${warmDaysYear !== null ? `Nella tua zona ci sono circa ${offMonths} mesi l’anno senza bisogno di riscaldamento: in quel periodo, con la modalità “solo acqua calda”,` : 'Con la modalità “solo acqua calda” fuori stagione'} la pompa si ferma e la caldaia non parte per il riscaldamento nelle giornate fresche di fine stagione.`,
+      `This month the boiler used no gas for heating, but heating has already used ${nf(api.elH.month)} kWh of electricity (pump and electronics)${summerEco ? '; the boiler is in “summer eco”, so the circuit stays on standby' : ''}. ${warmDaysYear !== null ? `Your area has about ${offMonths} months a year with no heating need: during them, with “hot water only” mode,` : 'With “hot water only” mode outside the heating season'} the pump stops and the boiler does not start heating on cool days at the end of the season.`),
+    steps: [tr('In ViCare imposta la modalità “Solo acqua calda” quando finisce la stagione di riscaldamento e “Riscaldamento + acqua calda” in autunno.', 'In ViCare set “Hot water only” when the heating season ends and “Heating + hot water” in autumn.')],
+    save: { m3: null, eur: perMonth * offMonths * EL_PRICE, el: perMonth * offMonths } });
+}
+if (dhw && dhw.onShare >= 0.1) {
+  if (dhw.neverReached) {
+    scores.dhw = 50;
+    advice.push({ prio: 'medium', icon: 'tap', who: tr('Tu / tecnico', 'You / installer'), diff: tr('Facile', 'Easy'),
+      title: tr(`L’acqua calda non arriva alla temperatura impostata`, `Hot water does not reach the set temperature`),
+      why: tr(`Massimo registrato ${nf(dhw.peak)} °C con obiettivo ${nf(dhw.target, 0)} °C.`, `Highest reading ${nf(dhw.peak)} °C with a ${nf(dhw.target, 0)} °C target.`),
+      steps: [tr('Controlla la programmazione dell’acqua calda e la modalità Eco/Comfort in ViCare.', 'Check the hot water schedule and Eco/Comfort mode in ViCare.'), tr('Se persiste, fai controllare il sensore acqua calda.', 'If it persists, have the hot water sensor checked.')], save: null });
   } else {
-    // no weather data: plain average of the last 30 days
-    const recent = gasModelDays.slice(-30).map(d => gasDailyAll[d]);
-    a = recent.reduce((s, v) => s + v, 0) / recent.length;
+    scores.dhw = 100;
+    positives.push(dhw.instant
+      ? tr(`Acqua calda OK: durante i prelievi arriva a ${nf(dhw.peak)} °C (obiettivo ${nf(dhw.target, 0)} °C).`, `Hot water OK: it reaches ${nf(dhw.peak)} °C while in use (target ${nf(dhw.target, 0)} °C).`)
+      : tr(`Acqua calda all’obiettivo nel ${ni(dhw.reachPct)}% del tempo.`, `Hot water at target ${ni(dhw.reachPct)}% of the time.`));
+    if (dhw.target !== null && dhw.target <= 50) positives.push(tr(`Temperatura dell’acqua calda impostata a ${nf(dhw.target, 0)} °C: scelta efficiente.`, `Hot water set to ${nf(dhw.target, 0)} °C: an efficient choice.`));
   }
-  // Calibration on the boiler's own yearly counters (Viessmann API summary):
-  // heating currentYear ÷ real degree-days since 1 January gives a robust k even when
-  // the CSV history covers only a few mild weeks; DHW currentYear gives the base.
-  let calibrated = false;
-  if (apiSummary && apiSummary.timestamp && Object.keys(temps).length) {
-    const end = localDay(apiSummary.timestamp);
-    let sh = 0, cnt = 0, tot = 0;
-    for (let d = `${end.slice(0, 4)}-01-01`; d <= end; d = addDays(d, 1)) {
-      tot++;
-      if (temps[d] !== undefined) { sh += hdd(temps[d]); cnt++; }
-    }
-    if (apiSummary.gasHeatYear > 0 && cnt >= tot * 0.9 && sh > 50) {
-      b = apiSummary.gasHeatYear / (sh * tot / cnt);
-      calibrated = true;
-    }
-    if (apiSummary.gasDhwYear > 0 && tot > 0) a = apiSummary.gasDhwYear / tot;
-  }
-  // Next 30 days: forecast temps, else same date last year
-  let month30 = 0, usedForecastDays = 0;
-  for (let i = 1; i <= 30; i++) {
-    const d = addDays(today, i);
-    let t = temps[d];
-    if (t !== undefined) usedForecastDays++; else t = temps[addDays(d, -365)];
-    month30 += a + (b !== null && t !== undefined ? b * hdd(t) : 0);
-  }
-  // Annual: real weather of the last 365 days
-  let annual = null, hddYear = 0, tempDays = 0;
-  for (let i = 1; i <= 365; i++) { const t = temps[addDays(today, -i)]; if (t !== undefined) { hddYear += hdd(t); tempDays++; } }
-  if (b !== null && tempDays >= 330) annual = a * 365 + b * hddYear * 365 / tempDays;
-  const periodAvg = gasDays.length ? gasDays.reduce((s, d) => s + (gasDailyAll[d] ?? 0), 0) / gasDays.length : a;
-  gasForecast = {
-    avgPerDay:     (gasModelDays.length ? gasModelDays.slice(-Math.max(1, Math.min(DAYS, gasModelDays.length))).reduce((s, d) => s + gasDailyAll[d], 0) / Math.max(1, Math.min(DAYS, gasModelDays.length)) : periodAvg).toFixed(2),
-    month30:       month30.toFixed(1),
-    annualEst:     annual !== null ? annual.toFixed(0) : null,
-    costMonth:     (month30 * GAS_PRICE_EUR).toFixed(2),
-    costAnnual:    annual !== null ? (annual * GAS_PRICE_EUR).toFixed(0) : null,
-    gasPrice:      GAS_PRICE_EUR.toFixed(2),
-    daysUsed:      gasModelDays.length,
-    firstDay:      gasModelDays[0],
-    base:          a.toFixed(2),
-    perHdd:        b !== null ? b.toFixed(3) : null,
-    r2:            r2 !== null ? r2.toFixed(2) : null,
-    heatingDays,
-    calibrated,
-    weather:       loc ? (Object.keys(temps).length ? 'ok' : 'unavailable') : 'nolocation',
-    forecastDays:  usedForecastDays,
-    hasEnoughForAnnual: annual !== null,
-    trend: 'stable',
-  };
+  if (dhw.target !== null && dhw.target > 55) advice.push({ prio: 'low', icon: 'tap', who: tr('Tu, dall’app ViCare', 'You, in the ViCare app'), diff: tr('Facile', 'Easy'),
+    title: tr(`Acqua calda impostata a ${nf(dhw.target, 0)} °C`, `Hot water set to ${nf(dhw.target, 0)} °C`),
+    why: tr('Per l’uso domestico 45–50 °C bastano; ogni 10 °C in meno riduce le dispersioni del bollitore.', 'For home use 45–50 °C is enough; every 10 °C less cuts cylinder losses.'),
+    steps: [tr('Prova 50 °C.', 'Try 50 °C.')], save: saving(fc ? fc.a * 365 * 0.08 : null) });
 }
+if (faultsP.length) {
+  scores.reliability -= Math.min(60, faultsP.length * 15);
+  advice.push({ prio: 'high', icon: 'warn', who: tr('Tecnico Viessmann', 'Viessmann installer'), diff: tr('Intervento tecnico', 'Service visit'),
+    title: tr(`${faultsP.length} codici di guasto nel periodo`, `${faultsP.length} fault codes in the period`),
+    why: [...new Set(faultsP.map(m => m.code))].map(c => `<b>${esc(c)}</b> ${esc(codeText(c))}`).join(' · '),
+    steps: [tr('Annota i codici e le date (sezione “Messaggi della caldaia”).', 'Note the codes and dates (section “Boiler messages”).'), tr('Se si ripetono, chiama il tecnico e mostragli questo report.', 'If they repeat, call your installer and show them this report.')], save: null });
+} else positives.push(tr('Nessun guasto registrato nel periodo.', 'No faults recorded in the period.'));
+if (BOILER_KW && fc?.need && BOILER_KW > fc.need * 3) advice.push({ prio: 'low', icon: 'flame', who: tr('Tecnico Viessmann', 'Viessmann installer'), diff: tr('Intervento tecnico', 'Service visit'),
+  title: tr(`Caldaia sovradimensionata (${nf(BOILER_KW, 0)} kW contro ${nf(fc.need)} kW necessari)`, `Oversized boiler (${nf(BOILER_KW, 0)} kW vs ${nf(fc.need)} kW needed)`),
+  why: tr('Una caldaia molto più potente del necessario lavora quasi sempre al minimo e si accende e spegne spesso.', 'A boiler much bigger than needed runs at minimum most of the time and cycles often.'),
+  steps: [tr('Fai limitare la potenza massima in riscaldamento.', 'Have the maximum heating output limited.')], save: null });
+if (!PRICE_SET) advice.push({ prio: 'info', icon: 'euro', who: tr('Tu', 'You'), diff: tr('Facile', 'Easy'),
+  title: tr('Inserisci il tuo prezzo del gas', 'Enter your gas price'),
+  why: tr(`I costi sono calcolati con un prezzo indicativo di ${nf(GAS_PRICE, 2)} €/m³. Il prezzo giusto è il totale della bolletta (tasse incluse, esclusa la quota fissa) diviso per i m³ o Smc consumati.`, `Costs use an indicative price of €${nf(GAS_PRICE, 2)}/m³. The right price is the bill total (taxes included, fixed charge excluded) divided by the m³ used.`),
+  steps: [tr('Inseriscilo nel campo “Prezzo gas” della pagina del report e rigenera.', 'Enter it in the “Gas price” field of the report page and generate again.')], save: null });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HOURLY HEATMAP — burner runtime % and avg outside temp per hour-of-day
-// Rows with event_type='snapshot' or no event_type (legacy) only — not events
-// ─────────────────────────────────────────────────────────────────────────────
-const hourlyStats = (() => {
-  const buckets = {};
-  for (let h = 0; h < 24; h++) buckets[h] = { onCount: 0, total: 0, tempSum: 0, tempCount: 0, gasSum: 0 };
+scores.efficiency = clamp(scores.efficiency, 0, 100); scores.boiler = clamp(scores.boiler, 0, 100); scores.reliability = clamp(scores.reliability, 0, 100);
+const scoreList = Object.values(scores).filter(v => v !== null);
+const PRIO = { high: 0, medium: 1, low: 2, info: 3 };
+const overall = clamp(Math.round(mean(scoreList) - 6 * advice.filter(a => a.prio === 'high').length - 3 * advice.filter(a => a.prio === 'medium').length), 0, 100);
+advice.sort((a, b) => PRIO[a.prio] - PRIO[b.prio]);
+const totalSave = advice.reduce((s, a) => s + (a.save?.eur || 0), 0);
 
-  // Group gas per day so we can attribute daily gas to hourly slots
-  const gasPerDayH = {};
-  boilerRows.forEach(r => {
-    if (!r.gas_heating_day_m3 && !r.gas_dhw_day_m3) return;
-    const day = r.timestamp.slice(0, 10);
-    const g = (parseFloat(r.gas_heating_day_m3)||0) + (parseFloat(r.gas_dhw_day_m3)||0);
-    if (!gasPerDayH[day] || g > gasPerDayH[day]) gasPerDayH[day] = g;
-  });
-
-  boilerRows.forEach(r => {
-    const h = new Date(r.timestamp).getHours();
-    buckets[h].total++;
-    if (r.burner_active === 'true') buckets[h].onCount++;
-    const t = parseFloat(r.outside_temp);
-    if (!isNaN(t) && t !== 0) { buckets[h].tempSum += t; buckets[h].tempCount++; }
-  });
-
-  return Array.from({length: 24}, (_, h) => {
-    const b = buckets[h];
-    return {
-      hour: h,
-      label: String(h).padStart(2,'0') + ':00',
-      runtimePct: b.total > 0 ? Math.round((b.onCount / b.total) * 100) : 0,
-      avgOutside:  b.tempCount > 0 ? +(b.tempSum / b.tempCount).toFixed(1) : null,
-    };
-  });
-})();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DAILY EFFICIENCY — heat produced / gas consumed per calendar day (from CSV)
-// Uses heat_heating_day_kwh + gas_heating_day_m3 columns (plugin >= v2.0.50)
-// ─────────────────────────────────────────────────────────────────────────────
-const dailyEfficiency = (() => {
-  const GAS_PCS = 10.55; // kWh per m³ higher heating value
-  const perDay = {};
-  boilerRows.forEach(r => {
-    const day = r.timestamp.slice(0, 10);
-    const heat = parseFloat(r.heat_heating_day_kwh);
-    const gas  = parseFloat(r.gas_heating_day_m3);
-    if (!isNaN(heat) && heat > 0 && !isNaN(gas) && gas > 0.1) {
-      if (!perDay[day]) perDay[day] = { heat: 0, gas: 0 };
-      // Take max within day (daily cumulative values grow during the day)
-      if (heat > perDay[day].heat) perDay[day].heat = heat;
-      if (gas  > perDay[day].gas)  perDay[day].gas  = gas;
-    }
-  });
-  const days = Object.keys(perDay).sort();
-  return {
-    labels: days.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; }),
-    values: days.map(d => {
-      const eff = Math.min(110, Math.round((perDay[d].heat / (perDay[d].gas * GAS_PCS)) * 100));
-      return eff;
-    }),
-    hasData: days.length >= 2,
-  };
-})();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ENERGY FLOW — daily PV / battery / grid / wallbox aggregation (from CSV)
-// ─────────────────────────────────────────────────────────────────────────────
-const energyFlow = (() => {
-  if (!energyRows.length) return null;
-  const perDay = {};
-  energyRows.forEach(r => {
-    const day = r.timestamp.slice(0, 10);
-    if (!perDay[day]) perDay[day] = { pv: 0, battChr: 0, battDis: 0, gridFeed: 0, gridDraw: 0, wallbox: 0, count: 0 };
-    const d = perDay[day];
-    // Average within day (these are instantaneous W readings)
-    d.pv       += parseFloat(r.pv_production_w)   || 0;
-    d.battChr  += parseFloat(r.battery_charging_w) || 0;
-    d.battDis  += parseFloat(r.battery_discharging_w) || 0;
-    d.gridFeed += parseFloat(r.grid_feedin_w)      || 0;
-    d.gridDraw += parseFloat(r.grid_draw_w)         || 0;
-    d.wallbox  += parseFloat(r.wallbox_power_w)    || 0;
-    d.count++;
-  });
-  const days = Object.keys(perDay).sort();
-  const avg = (d, k) => d.count > 0 ? Math.round(perDay[d][k] / perDay[d].count) : 0;
-  return {
-    labels:    days.map(d => { const [y,m,dd]=d.split('-'); return `${dd}/${m}`; }),
-    pv:        days.map(d => avg(d,'pv')),
-    battChr:   days.map(d => avg(d,'battChr')),
-    battDis:   days.map(d => avg(d,'battDis')),
-    gridFeed:  days.map(d => avg(d,'gridFeed')),
-    gridDraw:  days.map(d => avg(d,'gridDraw')),
-    wallbox:   days.map(d => avg(d,'wallbox')),
-    hasData:   days.length >= 2 && (hasPV || hasBattery),
-  };
-})();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// VIESSMANN STATUS / ERROR CODE TRANSLATIONS
-// Source: Viessmann service documentation + vieventlog error_codes.go
-// ─────────────────────────────────────────────────────────────────────────────
-const VIESSMANN_CODES = {
-  // ── Status codes (S.) ──
-  'S.0':   { en: 'Standby',                         de: 'Bereitschaft' },
-  'S.1':   { en: 'DHW heating',                     de: 'Warmwasserbereitung' },
-  'S.2':   { en: 'Central heating',                 de: 'Heizbetrieb' },
-  'S.3':   { en: 'Burner on',                       de: 'Brenner ein' },
-  'S.4':   { en: 'Burner off',                      de: 'Brenner aus' },
-  'S.5':   { en: 'Fan pre-purge',                   de: 'Lüfter Vorspülung' },
-  'S.6':   { en: 'Ignition',                        de: 'Zündung' },
-  'S.7':   { en: 'Flame detected',                  de: 'Flamme erkannt' },
-  'S.8':   { en: 'Burner post-purge',               de: 'Lüfter Nachspülung' },
-  'S.9':   { en: 'Cooling mode',                    de: 'Kühlbetrieb' },
-  'S.10':  { en: 'Frost protection active',         de: 'Frostschutz aktiv' },
-  'S.12':  { en: 'Circulation pump active',         de: 'Umwälzpumpe aktiv' },
-  'S.17':  { en: 'Flue gas test',                   de: 'Abgastest' },
-  'S.19':  { en: 'Chimney sweep mode',              de: 'Schornsteinfegerbetrieb' },
-  'S.20':  { en: 'Boiler protection (overtemp)',    de: 'Kesselschutz (Übertemperatur)' },
-  'S.22':  { en: 'External demand active',          de: 'Externe Anforderung aktiv' },
-  'S.24':  { en: 'Pump overrun',                    de: 'Pumpennachlauf' },
-  'S.31':  { en: 'Summer eco mode',                 de: 'Sommer-Eco-Betrieb' },
-  'S.32':  { en: 'Heating circuit standby',         de: 'Heizkreis Standby' },
-  'S.40':  { en: 'Heat pump heating',               de: 'Wärmepumpe Heizbetrieb' },
-  'S.41':  { en: 'Heat pump DHW',                   de: 'Wärmepumpe Warmwasser' },
-  'S.42':  { en: 'Heat pump defrost',               de: 'Wärmepumpe Abtauung' },
-  'S.43':  { en: 'Heat pump cooling',               de: 'Wärmepumpe Kühlung' },
-  'S.44':  { en: 'Compressor starting',             de: 'Verdichter startet' },
-  'S.45':  { en: 'Compressor running',              de: 'Verdichter läuft' },
-  'S.46':  { en: 'Compressor stopping',             de: 'Verdichter stoppt' },
-  'S.100': { en: 'Heating mode',                    de: 'Heizbetrieb' },
-  'S.109': { en: 'Heating circuit active',          de: 'Heizkreis aktiv' },
-  'S.111': { en: 'Normal heating program',          de: 'Normalbetrieb Heizung' },
-  'S.112': { en: 'Reduced heating program',         de: 'Absenkbetrieb Heizung' },
-  'S.113': { en: 'Comfort heating program',         de: 'Komfortbetrieb Heizung' },
-  'S.114': { en: 'DHW demand',                      de: 'Warmwasseranforderung' },
-  'S.118': { en: 'Primary circuit active',          de: 'Primärkreis aktiv' },
-  'S.119': { en: 'Secondary circuit active',        de: 'Sekundärkreis aktiv' },
-  'S.120': { en: 'Circulation pump running',        de: 'Umwälzpumpe läuft' },
-  'S.123': { en: 'Heat pump standby',               de: 'Wärmepumpe Bereitschaft' },
-  'S.124': { en: 'Heat pump grid lock',             de: 'Wärmepumpe Netzsperrzeit' },
-  'S.125': { en: 'Heat pump demand pending',        de: 'Wärmepumpe Anforderung ausstehend' },
-  'S.126': { en: 'Heat pump frost protection',      de: 'Wärmepumpe Frostschutz' },
-  'S.130': { en: 'Defrost active',                  de: 'Abtauung aktiv' },
-  'S.131': { en: 'Defrost completed',               de: 'Abtauung abgeschlossen' },
-  'S.134': { en: 'Heat pump heating active',        de: 'Wärmepumpe Heizbetrieb aktiv' },
-  'S.140': { en: 'Smart grid active',               de: 'Smart Grid aktiv' },
-  'S.200': { en: 'Legionella protection',           de: 'Legionellenschutz' },
-  'S.201': { en: 'DHW efficient mode',              de: 'Warmwasser Effizienzbetrieb' },
-  'S.202': { en: 'DHW comfort mode',                de: 'Warmwasser Komfortbetrieb' },
-  // ── Info codes (I.) ──
-  'I.0':   { en: 'System OK',                       de: 'System OK' },
-  'I.1':   { en: 'Maintenance due',                 de: 'Wartung fällig' },
-  'I.2':   { en: 'Filter replacement due',          de: 'Filterwechsel fällig' },
-  'I.10':  { en: 'External temperature sensor fault', de: 'Außentemperaturfühler Fehler' },
-  'I.11':  { en: 'Return temperature sensor fault', de: 'Rücklauftemperaturfühler Fehler' },
-  'I.12':  { en: 'DHW sensor fault',                de: 'Warmwasserfühler Fehler' },
-  'I.20':  { en: 'Low water pressure warning',      de: 'Niederdruck Warnung' },
-  'I.100': { en: 'System info',                     de: 'Systeminformation' },
-  'I.113': { en: 'Heating curve optimisation info', de: 'Heizkurvenoptimierung Info' },
-  'I.114': { en: 'Energy balance info',             de: 'Energiebilanz Info' },
-  'I.115': { en: 'Runtime statistics info',         de: 'Laufzeitstatistik Info' },
-  // ── Fault codes (F.) ──
-  'F.0':   { en: 'No fault',                        de: 'Kein Fehler' },
-  'F.1':   { en: 'Burner fault — no ignition',      de: 'Brennerstörung — keine Zündung' },
-  'F.2':   { en: 'Flame signal lost',               de: 'Flammensignal verloren' },
-  'F.3':   { en: 'Ignition fault',                  de: 'Zündfehler' },
-  'F.4':   { en: 'Safety chain open',               de: 'Sicherheitskette offen' },
-  'F.5':   { en: 'Gas valve fault',                 de: 'Gasventil Fehler' },
-  'F.7':   { en: 'Flue gas sensor fault',           de: 'Abgastemperaturfühler Fehler' },
-  'F.9':   { en: 'Supply sensor fault',             de: 'Vorlauftemperaturfühler Fehler' },
-  'F.10':  { en: 'External sensor fault',           de: 'Außenfühler Fehler' },
-  'F.11':  { en: 'Return sensor fault',             de: 'Rücklauftemperaturfühler Fehler' },
-  'F.12':  { en: 'DHW sensor fault',                de: 'Warmwasserfühler Fehler' },
-  'F.20':  { en: 'Safety temperature limiter',      de: 'Sicherheitstemperaturbegrenzer' },
-  'F.22':  { en: 'Low water pressure fault',        de: 'Wassermangel' },
-  'F.23':  { en: 'Pump fault — overtemp',           de: 'Pumpe Fehler — Übertemperatur' },
-  'F.24':  { en: 'Pump circulation fault',          de: 'Pumpe Zirkulationsfehler' },
-  'F.28':  { en: 'Ignition fault (gas)',            de: 'Zündstörung (Gas)' },
-  'F.29':  { en: 'Flame fault after ignition',      de: 'Flammenfehler nach Zündung' },
-  'F.30':  { en: 'STB safety shutdown',             de: 'STB Sicherheitsabschaltung' },
-  'F.31':  { en: 'Boiler overtemperature',          de: 'Kesselübertemperatur' },
-  'F.32':  { en: 'Flue overtemperature',            de: 'Abgasübertemperatur' },
-  'F.33':  { en: 'Draft fault',                     de: 'Zugfehler' },
-  'F.36':  { en: 'Fan fault',                       de: 'Lüfter Fehler' },
-  'F.40':  { en: 'Compressor fault',                de: 'Verdichter Fehler' },
-  'F.41':  { en: 'Refrigerant circuit fault',       de: 'Kältemittelkreis Fehler' },
-  'F.42':  { en: 'Defrost fault',                   de: 'Abtaufehler' },
-  'F.50':  { en: 'Communication fault gateway',     de: 'Kommunikationsfehler Gateway' },
-  'F.51':  { en: 'Communication fault controller', de: 'Kommunikationsfehler Regler' },
-  'F.52':  { en: 'Bus fault',                       de: 'Busfehler' },
-  'F.60':  { en: 'Expansion vessel fault',          de: 'Ausdehnungsgefäß Fehler' },
-  'F.73':  { en: 'Water pressure too high',         de: 'Wasserdruck zu hoch' },
-  'F.74':  { en: 'Water pressure too low',          de: 'Wasserdruck zu niedrig' },
-  'F.75':  { en: 'Pump speed sensor fault',         de: 'Pumpendrehzahlsensor Fehler' },
+// ─── Chart data ─────────────────────────────────────────────────────────────
+const hourly = (arr, key, filt) => { const m = {}; for (const r of arr) { if (filt && !filt(r)) continue; const v = num(r[key]); if (v === null || v <= -50) continue; const h = Math.floor(r.t / 3600000); (m[h] = m[h] || []).push(v); } const pts = Object.entries(m).map(([h, v]) => ({ x: +h * 3600000, y: +mean(v).toFixed(1) })).sort((a, b) => a.x - b.x); const out = []; for (let i = 0; i < pts.length; i++) { if (i && pts[i].x - pts[i - 1].x > 3 * 3600000) out.push({ x: pts[i - 1].x + 3600000, y: null }); out.push(pts[i]); } return out; };
+const thin = (a, max = 2000) => a.length <= max ? a : a.filter((_, i) => i % Math.ceil(a.length / max) === 0);
+const IGN_DAILY = coveredDays > 31;
+const ignHourly = (() => { const m = {}; for (const r of ignitions) { const h = IGN_DAILY ? new Date(localDay(r.t) + 'T12:00:00').getTime() : Math.floor(r.t / 3600000) * 3600000; m[h] = (m[h] || 0) + 1; } return Object.entries(m).map(([x, y]) => ({ x: +x, y })); })();
+const ddPts = Object.keys(gasDay).filter(d => temps[d] !== undefined).map(d => ({ x: +temps[d].toFixed(1), y: +(gasDay[d].h + gasDay[d].w).toFixed(2), d }));
+const ddLine = fc && fc.b !== null ? Array.from({ length: 36 }, (_, i) => { const x = -10 + i; return { x, y: +(fc.a + fc.b * hdd(x)).toFixed(2) }; }) : null;
+const startsOut = burner ? Object.entries(burner.dayMap).filter(([d]) => temps[d] !== undefined).map(([d, v]) => ({ x: +temps[d].toFixed(1), y: v })) : [];
+const chart = {
+  overview: {
+    room: thin(hourly(P.hc0, 'room_temp')), set: thin(hourly(P.hc0, 'target_temp')),
+    flow: thin(hourly(P.hc0, 'flow_temp', r => { if (!gasHeatDays.has(localDay(r.t))) return false; const b = nearestBoiler(r.t); return b && b.burner_active === 'true'; })),
+    sensor: thin(hourly(P.boiler, 'outside_temp')), dhw: thin(hourly(P.dhw.filter(r => r.mode !== 'off'), 'dhw_temp')),
+    real: periodDays.filter(d => temps[d] !== undefined).map(d => ({ x: new Date(d + 'T12:00:00').getTime(), y: temps[d] })),
+    ign: ignHourly,
+  },
+  gas: { labels: periodDays, h: periodDays.map(d => +(gasDay[d]?.h ?? 0).toFixed(2)), w: periodDays.map(d => +(gasDay[d]?.w ?? 0).toFixed(2)), t: periodDays.map(d => temps[d] ?? null) },
+  dd: { pts: ddPts, line: ddLine },
+  dhw: { t: thin(hourly(P.dhw.filter(r => r.mode !== 'off'), 'dhw_temp')), s: thin(hourly(P.dhw, 'dhw_target')) },
+  starts: burner ? { labels: Object.keys(burner.dayMap), v: Object.values(burner.dayMap), t: Object.keys(burner.dayMap).map(d => temps[d] ?? null) } : null,
+  startsOut,
+  mod: modVals.length >= 20 ? modSeries : null,
+  curve: curveLine ? { line: curveLine, pts: heat?.curvePts || [] } : null,
+  energy: P.energy.length >= 2 ? { pv: thin(hourly(P.energy, 'pv_production_w')), batt: thin(hourly(P.energy, 'battery_level')) } : null,
 };
 
-function translateCode(code) {
-  if (!code) return null;
-  const entry = VIESSMANN_CODES[code];
-  if (entry) return entry.en;
-  // Partial match fallback (e.g. S.134 → try S.13 → S.1)
-  const parts = code.split('.');
-  if (parts.length === 2) {
-    const shorter = parts[0] + '.' + parts[1].slice(0, -1);
-    if (VIESSMANN_CODES[shorter]) return VIESSMANN_CODES[shorter].en + ' (variant)';
-  }
-  return null;
-}
-
-// Extract device messages from the latest API data snapshot (if available via CSV extension)
-// For now we show the codes from the last row that has error_code-like fields
-// (future: read from a separate messages JSON file written by the plugin)
-const lastBoiler = boilerRows.length ? boilerRows[boilerRows.length - 1] : null;
-
-const KPI_LABELS = STRINGS[LANG]?.kpiLabels || STRINGS['en'].kpiLabels || {};
-const sc = (l,v,u='',badge='') => {
-  const lbl = KPI_LABELS[l] || l;
-  return `<div class="sc"><div class="sl">${lbl}</div><div class="sv">${v!==null?v+u:'<span class="na">N/A</span>'} ${badge}</div></div>`;
+// ─── HTML building blocks ───────────────────────────────────────────────────
+const ICON = {
+  flame: '<path d="M12 2c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1-3.8 2.3-5 .2 1.7 1 2.8 2.2 3.3C11 8 10.7 5 12 2z"/>',
+  gas: '<path d="M6 3h8v18H6z"/><path d="M14 8h2a2 2 0 0 1 2 2v7a1.5 1.5 0 0 0 3 0V9l-3-3"/><path d="M8 7h4v4H8z"/>',
+  house: '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+  tap: '<path d="M4 9h9a3 3 0 0 1 3 3v1"/><path d="M8 9V6h3v3"/><path d="M6 6h7"/><path d="M16 17c0 1.1-.9 2-2 2s-2-.9-2-2c0-1.5 2-3.5 2-3.5s2 2 2 3.5z"/>',
+  thermo: '<path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/><path d="M12 9v7"/>',
+  sensor: '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
+  radiator: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 6v12M11 6v12M15 6v12M19 18v2M5 18v2"/>',
+  moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  warn: '<path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.5"/>',
+  euro: '<path d="M17 6a7 7 0 1 0 0 12"/><path d="M4 10h9M4 14h9"/>',
+  chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-8"/>',
+  bot: '<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6"/>',
+  check: '<path d="M4 12l5 5L20 6"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5z"/><path d="M8 7h7"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>',
+  msg: '<path d="M4 5h16v11H8l-4 4V5z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
 };
-const badge = (cls,txt) => `<span class="badge badge-${cls}">${txt}</span>`;
-const genAt = new Date().toLocaleString('en-GB');
-const periodStart = cutoff.toLocaleDateString('en-GB');
-const periodEnd = new Date().toLocaleDateString('en-GB');
+const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n] || ICON.info}</svg>`;
+const lvlOf = (s) => s === null ? 'info' : s >= 80 ? 'good' : s >= 55 ? 'warn' : 'bad';
+const lvlText = { good: tr('bene', 'good'), warn: tr('migliorabile', 'improve'), bad: tr('da controllare', 'check'), info: tr('info', 'info') };
+const badge = (lvl, txt) => `<span class="b b-${lvl}">${txt ?? lvlText[lvl]}</span>`;
+const kpi = (label, value, u, help, lvl, sub) => `<div class="kpi"><div class="kl">${label}</div><div class="kv">${value}${u ? `<small>${u}</small>` : ''}${lvl ? ' ' + badge(lvl) : ''}</div>${sub ? `<div class="ks">${sub}</div>` : ''}${help ? `<div class="kh">${help}</div>` : ''}</div>`;
+const naVal = (txt) => `<span class="na">${txt}</span>`;
+const ring = (score, size, label, stroke = 10) => {
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r, v = score === null ? 0 : score;
+  return `<div class="ring r-${lvlOf(score)}" style="width:${size}px"><svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="rt" stroke-width="${stroke}"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="rv" stroke-width="${stroke}" stroke-dasharray="${(c * v / 100).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})"/><text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" class="rn" style="font-size:${Math.round(size / 3.6)}px">${score === null ? '—' : score}</text></svg>${label ? `<div class="rl">${label}</div>` : ''}</div>`;
+};
+const chartBox = (id, title, how, cls = '') => `<figure class="chart ${cls}"><figcaption>${title}${how ? `<span class="how">${icon('info')} ${how}</span>` : ''}</figcaption><div class="cv"><canvas id="${id}"></canvas></div></figure>`;
+const section = (id, ic, title, intro, body) => `<section id="${id}"><div class="sh"><div class="si">${icon(ic)}</div><div><h2>${title}</h2>${intro ? `<p class="intro">${intro}</p>` : ''}</div></div>${body}</section>`;
+const sub = (t) => `<h3>${t}</h3>`;
 
+// Illustrated system schematic (period averages)
+const avgReal = realP.length ? mean(realP) : null, avgSens = sensP.length ? mean(sensP) : null;
+const lastHc = [...P.hc0].reverse().find(r => num(r.room_temp) !== null);
+const schem = (() => {
+  const room = heat ? heat.room : num(lastHc?.room_temp);
+  const set = heat ? heat.set : num(lastHc?.target_temp);
+  const flow = heat?.flow ?? null;
+  const t = (x, y, a, b, cls = '') => `<text x="${x}" y="${y}" class="s-big ${cls}">${a}</text><text x="${x}" y="${y + 20}" class="s-sm">${b}</text>`;
+  const th = clamp(((avgReal ?? avgSens ?? 10) + 10) * 2.2, 5, 85);
+  return `<svg class="schem" viewBox="0 0 960 330" role="img" aria-label="${tr('Schema dell’impianto', 'System diagram')}">
+  <defs><linearGradient id="gHouse" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--s-house1)"/><stop offset="1" stop-color="var(--s-house2)"/></linearGradient>
+  <linearGradient id="gFlame" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#ff6a00"/><stop offset="1" stop-color="#ffd000"/></linearGradient></defs>
+  <g><circle cx="90" cy="70" r="30" fill="#ffc83d" opacity=".9"/><g stroke="#ffc83d" stroke-width="4" stroke-linecap="round" opacity=".7"><path d="M90 26v-12M90 126v-12M46 70h-12M146 70h-12M59 39l-8-8M121 101l8 8M59 101l-8 8M121 39l8-8"/></g>
+  <rect x="60" y="150" width="14" height="90" rx="7" class="s-tube"/><circle cx="67" cy="248" r="16" fill="#3b82f6"/><rect x="63" y="${(240 - th).toFixed(0)}" width="8" height="${th.toFixed(0)}" rx="4" fill="#3b82f6"/>
+  ${avgReal !== null ? t(95, 175, `${nf(avgReal)} °C`, tr('fuori (reale)', 'outside (real)')) : ''}
+  ${avgSens !== null ? t(95, avgReal !== null ? 225 : 175, `${nf(avgSens)} °C`, tr('sonda caldaia', 'boiler sensor'), sensorBias !== null && Math.abs(sensorBias) > 1.5 ? 's-warn' : '') : ''}</g>
+  <path d="M250 150 L470 40 L690 150 V310 H250 Z" fill="url(#gHouse)" class="s-line"/>
+  <path d="M235 158 L470 30 L705 158" fill="none" class="s-roof"/>
+  <g transform="translate(290,215)"><rect width="120" height="70" rx="8" class="s-rad"/>${[20, 40, 60, 80, 100].map(x => `<line x1="${x}" y1="6" x2="${x}" y2="64" class="s-radl"/>`).join('')}</g>
+  ${heat ? `<g class="s-heat">${[320, 350, 380].map((x, i) => `<path d="M${x} 208 q6 -8 0 -14 q-6 -8 0 -14" style="animation-delay:${i * .4}s"/>`).join('')}</g>` : ''}
+  ${t(300, 160, `${nf(room)} °C`, `${tr('in casa', 'indoors')} · ${tr('impostati', 'set')} ${nf(set)} °C`, heat && heat.diff > 0.8 ? 's-warn' : '')}
+  <g transform="translate(520,150)"><rect width="120" height="150" rx="12" class="s-boiler"/><rect x="14" y="16" width="92" height="28" rx="5" class="s-disp"/>
+  <text x="60" y="35" text-anchor="middle" class="s-dtxt">${burner ? ni(burner.perDay) + tr(' acc/g', ' st/d') : '—'}</text>
+  <path d="M60 70c6 14 22 20 22 40a22 22 0 0 1-44 0c0-9 4-15 9-20 1 7 4 11 9 13-3-11-2-22 4-33z" fill="url(#gFlame)" class="s-flame"/></g>
+  <path d="M520 265 H410" class="s-pipe hot"/><path d="M520 285 H410" class="s-pipe cold"/>
+  ${flow !== null ? `<text x="420" y="254" class="s-sm">${tr('mandata', 'flow')} ${nf(flow)} °C</text>` : ''}
+  <path d="M640 190 H760 V250" class="s-pipe hot"/>
+  <g transform="translate(740,250)" class="s-tap"><path d="M0 0h40v14H14v10H0z"/><path d="M8 34c0 5 8 5 8 0 0-4-4-8-4-8s-4 4-4 8z" fill="#60a5fa"/></g>
+  ${dhw ? t(795, 262, `${nf(dhw.instant || dhw.neverReached ? dhw.peak : dhw.avg)} °C`, dhw.instant ? tr('acqua calda (max)', 'hot water (max)') : tr('acqua calda', 'hot water')) : ''}
+  <path d="M640 290 H700 V312 H790" class="s-pipe gas"/>
+  <g transform="translate(790,290)"><rect width="120" height="40" rx="8" class="s-meter"/><text x="60" y="26" text-anchor="middle" class="s-mtxt">${nf(gasP.tot, 1)} m³</text></g>
+  <text x="780" y="160" class="s-big">${eur(gasP.tot * GAS_PRICE)}</text><text x="780" y="180" class="s-sm">${tr(`gas in ${coveredDays} giorni`, `gas in ${coveredDays} days`)}</text>
+  </svg>`;
+})();
+
+// Weekly schedule drawing
+const schedSvg = (() => {
+  if (!sched?.entries) return '';
+  const W = 24 * 30, rowH = 24;
+  let s = `<svg class="sched" viewBox="0 0 ${W + 64} ${7 * rowH + 24}" role="img">`;
+  for (let h = 0; h <= 24; h += 3) s += `<text x="${50 + h * 30}" y="${7 * rowH + 18}" class="sc-h" text-anchor="middle">${String(h).padStart(2, '0')}</text>`;
+  WEEK.forEach((d, i) => {
+    const y = i * rowH;
+    s += `<text x="0" y="${y + 16}" class="sc-d">${WEEK_L[i]}</text><rect x="50" y="${y + 3}" width="${W}" height="${rowH - 6}" rx="5" class="sc-red"/>`;
+    for (const e of sched.entries[d] || []) { const a = hm(e.start), b = hm(e.end) || 24; s += `<rect x="${50 + a * 30}" y="${y + 3}" width="${Math.max(2, (b - a) * 30)}" height="${rowH - 6}" rx="5" class="sc-${e.mode === 'comfort' ? 'com' : e.mode === 'reduced' ? 'red' : 'nor'}"><title>${e.start}–${e.end} ${e.mode}</title></rect>`; }
+  });
+  return s + '</svg>';
+})();
+
+// ─── Sections ───────────────────────────────────────────────────────────────
+const prioLbl = { high: tr('Priorità alta', 'High priority'), medium: tr('Priorità media', 'Medium priority'), low: tr('Priorità bassa', 'Low priority'), info: tr('Informazione', 'Information') };
+const adviceHtml = advice.map((a, i) => `<article class="adv p-${a.prio}">
+  <div class="adv-h"><div class="adv-i">${icon(a.icon)}</div><div><div class="adv-p">${prioLbl[a.prio]} · ${a.diff}</div><h4>${i + 1}. ${a.title}</h4>${a.season && seasonHeat ? `<div class="adv-s">${icon('calendar')} ${tr(`Nel periodo scelto il riscaldamento era spento: dati dell’ultima stagione (${fmtDate(seasonHeat.from)} – ${fmtDate(seasonHeat.to)})`, `Heating was off in the chosen period: data from the last heating season (${fmtDate(seasonHeat.from)} – ${fmtDate(seasonHeat.to)})`)}</div>` : ''}</div></div>
+  <div class="adv-b"><div class="adv-why"><div class="lbl">${tr('Perché', 'Why')}</div><p>${a.why}</p></div>
+  <div class="adv-do"><div class="lbl">${tr('Cosa fare', 'What to do')}</div><ol>${a.steps.map(s => `<li>${s}</li>`).join('')}</ol></div></div>
+  <div class="adv-f"><span>${icon('house')} ${tr('Chi', 'Who')}: <b>${a.who}</b></span>${a.save ? `<span class="save">${icon('euro')} ${tr('Risparmio stimato', 'Estimated saving')}: <b>${a.save.m3 ? `≈ ${ni(a.save.m3)} m³ · ` : a.save.el ? `≈ ${ni(a.save.el)} kWh · ` : ''}${eur(a.save.eur)}${tr('/anno', '/year')}</b></span>` : ''}</div>
+</article>`).join('');
+
+const summaryCards = [
+  { lvl: 'info', ic: 'gas', t: tr('Gas', 'Gas'), v: `${nf(gasP.tot, 1)} m³`, s: tr(`≈ ${eur(gasP.tot * GAS_PRICE)} · ${nf(gasP.tot / coveredDays, 2)} m³/giorno`, `≈ ${eur(gasP.tot * GAS_PRICE)} · ${nf(gasP.tot / coveredDays, 2)} m³/day`) },
+  heat ? { lvl: lvlOf(scores.comfort), ic: 'house', t: tr('Comfort', 'Comfort'), v: `${nf(heat.room)} °C`, s: tr(`impostati ${nf(heat.set)} °C (${sgn(heat.diff)} °C)`, `set ${nf(heat.set)} °C (${sgn(heat.diff)} °C)`) }
+       : { lvl: 'info', ic: 'house', t: tr('Riscaldamento', 'Heating'), v: tr('spento', 'off'), s: tr('nessun gas per riscaldare nel periodo', 'no heating gas in the period') },
+  burner ? { lvl: lvlOf(scores.boiler), ic: 'flame', t: tr('Caldaia', 'Boiler'), v: `${ni(burner.perDay)} ${tr('acc./g', 'starts/d')}`, s: `${ni(burner.hours)} ${tr('ore di fiamma', 'burner hours')}` } : null,
+  dhw ? { lvl: lvlOf(scores.dhw), ic: 'tap', t: tr('Acqua calda', 'Hot water'), v: `${nf(dhw.instant || dhw.neverReached ? dhw.peak : dhw.avg)} °C`, s: tr(`obiettivo ${nf(dhw.target, 0)} °C`, `target ${nf(dhw.target, 0)} °C`) } : null,
+  sensorBias !== null ? { lvl: Math.abs(sensorBias) > 3 ? 'bad' : Math.abs(sensorBias) > 1.5 ? 'warn' : 'good', ic: 'sensor', t: tr('Sonda esterna', 'Outdoor sensor'), v: `${sgn(sensorBias)} °C`, s: tr('rispetto al meteo reale', 'vs real weather') } : null,
+  { lvl: faultsP.length ? 'bad' : 'good', ic: 'warn', t: tr('Guasti', 'Faults'), v: String(faultsP.length), s: faultsP.length ? [...new Set(faultsP.map(m => m.code))].join(', ') : tr('nessuno', 'none') },
+  fc ? { lvl: 'info', ic: 'chart', t: tr('Prossimi 30 giorni', 'Next 30 days'), v: `${ni(fc.m30)} m³`, s: `≈ ${eur(fc.m30 * GAS_PRICE)}` } : null,
+].filter(Boolean);
+
+const monthMax = Math.max(0.1, ...Object.values(monthly).map(v => v.h + v.w));
+const monthRows = Object.entries(monthly).map(([m, v]) => `<tr><td>${new Date(m + '-15').toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' })}${isPartial(m) ? ` <small class="na">(${tr('parziale', 'partial')})</small>` : ''}</td><td>${nf(v.h)}</td><td>${nf(v.w)}</td><td><b>${nf(v.h + v.w)}</b></td><td>${eur((v.h + v.w) * GAS_PRICE)}</td><td class="bar"><span class="bh" style="width:${(100 * v.h / monthMax).toFixed(1)}%"></span><span class="bw" style="width:${(100 * v.w / monthMax).toFixed(1)}%"></span></td></tr>`).join('');
+
+const modeName = { eco: 'Eco', comfort: 'Comfort', off: tr('Spenta', 'Off'), normal: tr('Normale', 'Normal'), reduced: tr('Ridotta', 'Reduced'), other: tr('Altro', 'Other') };
+const pctBars = (obj, total) => `<div class="pbars">${Object.entries(obj).filter(([, n]) => n / total >= 0.005).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="pb"><span class="pbl">${esc(modeName[k] || k)}</span><span class="pbt"><span class="pbf f-${esc(k)}" style="width:${(100 * n / total).toFixed(1)}%"></span></span><span class="pbp">${ni(100 * n / total)}%</span></div>`).join('')}</div>`;
+
+const houseClass = (() => {
+  if (!fc?.Hkw) return null;
+  const w = fc.Hkw * 1000;
+  return w < 100 ? ['good', tr('ottimo isolamento', 'excellent insulation')] : w < 200 ? ['good', tr('buon isolamento', 'good insulation')] : w < 350 ? ['warn', tr('isolamento medio', 'average insulation')] : ['bad', tr('molte dispersioni', 'high heat loss')];
+})();
+
+const S_OVERVIEW = section('overview', 'chart', tr('Andamento del periodo', 'Period overview'),
+  tr('Tutto in un grafico: temperatura della casa, dell’acqua ai termosifoni, esterna (reale e sonda) e accensioni della caldaia. Clicca sulla legenda per mostrare o nascondere una linea; trascina per ingrandire, doppio clic per tornare indietro.', 'Everything in one chart: house, radiator water and outdoor temperature (real and sensor), plus boiler starts. Click the legend to show or hide a line; drag to zoom, double-click to reset.'),
+  `${chartBox('cOverview', tr('Temperature (media oraria) e accensioni', 'Temperatures (hourly average) and starts'), IGN_DAILY ? tr('Le barre arancioni sono le accensioni registrate per giorno (scala a destra).', 'Orange bars are recorded starts per day (right scale).') : tr('Le barre arancioni sono le accensioni per ora (scala a destra).', 'Orange bars are starts per hour (right scale).'), 'tall')}
+   ${schedSvg ? `${sub(tr('Programma settimanale del riscaldamento', 'Weekly heating schedule'))}<p class="note">${tr('Arancione = temperatura Normale, grigio = Ridotta', 'Orange = Normal temperature, grey = Reduced')}${normalSet !== null ? ` (${nf(normalSet, 0)} / ${nf(reducedSet, 0)} °C)` : ''}.</p>${schedSvg}` : ''}`);
+
+const S_GAS = section('gas', 'gas', tr('Gas e costi', 'Gas and costs'),
+  tr('Quanto gas ha usato la caldaia per scaldare la casa e l’acqua. I valori vengono dai contatori della caldaia: confrontati con le bollette sono precisi entro l’1–2%.', 'How much gas the boiler used to heat the house and the water. Values come from the boiler counters: compared with gas bills they are accurate within 1–2%.'),
+  `<div class="kpis">
+  ${kpi(tr('Gas totale', 'Total gas'), nf(gasP.tot), ' m³', tr('Metri cubi di gas bruciati nel periodo.', 'Cubic metres of gas burned in the period.'))}
+  ${kpi(tr('Riscaldamento', 'Heating'), nf(gasP.h), ' m³', tr('Gas usato per scaldare la casa.', 'Gas used to heat the house.'), null, gasP.tot ? `${ni(100 * gasP.h / gasP.tot)}%` : '')}
+  ${kpi(tr('Acqua calda', 'Hot water'), nf(gasP.w), ' m³', tr('Gas usato per doccia e rubinetti.', 'Gas used for showers and taps.'), null, gasP.tot ? `${ni(100 * gasP.w / gasP.tot)}%` : '')}
+  ${kpi(tr('Costo stimato', 'Estimated cost'), ni(gasP.tot * GAS_PRICE), ' €', tr(`Gas × ${nf(GAS_PRICE, 2)} €/m³ (tasse incluse). La quota fissa della bolletta non è compresa.`, `Gas × €${nf(GAS_PRICE, 2)}/m³ (taxes included). Fixed bill charges are not included.`))}
+  ${kpi(tr('Media al giorno', 'Average per day'), nf(gasP.tot / coveredDays, 2), ' m³', tr('Gas totale diviso per i giorni del periodo.', 'Total gas divided by the days in the period.'))}
+  </div>
+  ${chartBox('cGas', tr('Gas al giorno e temperatura esterna reale', 'Gas per day and real outdoor temperature'), tr('Barre rosse = riscaldamento, blu = acqua calda; la linea è la temperatura media esterna: più fa freddo, più salgono le barre rosse.', 'Red bars = heating, blue = hot water; the line is the mean outdoor temperature: the colder it is, the higher the red bars.'))}
+  ${Object.keys(monthly).length ? `${sub(tr('Riepilogo mensile', 'Monthly summary'))}<div class="tw"><table><tr><th>${tr('Mese', 'Month')}</th><th>${tr('Riscald. m³', 'Heating m³')}</th><th>${tr('Acqua calda m³', 'Hot water m³')}</th><th>${tr('Totale m³', 'Total m³')}</th><th>${tr('Costo', 'Cost')}</th><th></th></tr>${monthRows}</table></div>` : ''}
+  ${fc ? `${sub(tr('Previsione dei consumi', 'Consumption forecast'))}
+  <p class="note">${tr('Stima basata sul meteo reale della tua zona (Open-Meteo) e su quanto gas usa la tua casa per ogni grado di freddo', 'Estimate based on the real weather in your area (Open-Meteo) and on how much gas your home uses for each degree of cold')}${fc.calibrated ? tr(', calibrata sui contatori annui della caldaia', ', calibrated on the boiler yearly counters') : ''}.</p>
+  <div class="kpis">
+  ${kpi(tr('Prossimi 30 giorni', 'Next 30 days'), ni(fc.m30), ' m³', forecastDays ? tr(`Usa le previsioni meteo dei prossimi ${forecastDays} giorni, poi le temperature dello stesso periodo dell’anno scorso.`, `Uses the forecast for the next ${forecastDays} days, then last year’s temperatures for the same period.`) : tr('Usa le temperature dello stesso periodo dell’anno scorso (previsioni non raggiungibili).', 'Uses last year’s temperatures for the same period (forecast not reachable).'), null, `≈ ${eur(fc.m30 * GAS_PRICE)}`)}
+  ${kpi(tr('Stima annua', 'Yearly estimate'), fc.yr !== null ? ni(fc.yr) : naVal(tr('servono dati meteo', 'needs weather data')), fc.yr !== null ? ' m³' : '', tr('Consumo in un anno con il meteo degli ultimi 12 mesi.', 'Consumption over a year with the weather of the last 12 months.'), null, fc.yr !== null ? `≈ ${eur(fc.yr * GAS_PRICE)}` : '')}
+  ${kpi(tr('Base acqua calda', 'Hot water base'), nf(fc.a, 2), tr(' m³/giorno', ' m³/day'), tr('Consumo di ogni giorno, anche senza riscaldamento.', 'Daily consumption, also without heating.'))}
+  ${kpi(tr('Gas per grado-giorno', 'Gas per degree-day'), fc.b !== null ? nf(fc.b, 3) : '—', ' m³', tr(`Gas in più per ogni grado sotto i ${HDD_BASE} °C in un giorno.`, `Extra gas for each degree below ${HDD_BASE} °C in a day.`))}
+  </div>
+  ${ddPts.length >= 5 ? chartBox('cDD', tr('Gas al giorno in funzione della temperatura esterna', 'Daily gas versus outdoor temperature'), tr('Ogni punto è un giorno. La linea è il modello usato per la previsione: sopra i 16 °C resta solo l’acqua calda.', 'Each dot is a day. The line is the model used for the forecast: above 16 °C only hot water remains.')) : ''}
+  ${!hasWeather ? `<p class="note warnline">${loc ? tr('Dati meteo non raggiungibili: la previsione non tiene conto del freddo in arrivo.', 'Weather data not reachable: the forecast ignores the coming cold.') : tr('Posizione dell’impianto sconosciuta: aggiungi --lat e --lon per usare il meteo.', 'Installation location unknown: add --lat and --lon to use the weather.')}</p>` : ''}` : ''}`);
+
+const S_HEAT = section('heating', 'radiator', tr('Riscaldamento', 'Heating'),
+  tr('Come ha lavorato il riscaldamento. Sono considerati solo i giorni in cui la caldaia ha davvero bruciato gas per scaldare casa.', 'How heating worked. Only days on which the boiler really burned gas to heat the house are considered.'),
+  `${heat ? `<div class="kpis">
+  ${kpi(tr('Giorni di riscaldamento', 'Heating days'), heat.days, '', tr('Giorni con almeno 0,3 m³ di gas per il riscaldamento.', 'Days with at least 0.3 m³ of heating gas.'))}
+  ${kpi(tr('Temperatura stanze', 'Room temperature'), nf(heat.room), ' °C', tr('Media misurata dal termostato/sensore ambiente.', 'Average measured by the room thermostat/sensor.'), null, heat.roomNormal !== null && heat.roomReduced !== null ? tr(`di giorno ${nf(heat.roomNormal)} · di notte ${nf(heat.roomReduced)} °C`, `day ${nf(heat.roomNormal)} · night ${nf(heat.roomReduced)} °C`) : '')}
+  ${kpi(tr('Temperatura impostata', 'Set temperature'), nf(heat.set), ' °C', tr('Media di quella richiesta dal programma (Normale di giorno, Ridotta di notte).', 'Average requested by the program (Normal by day, Reduced at night).'))}
+  ${kpi(tr('Scarto', 'Difference'), sgn(heat.diff), ' °C', tr('Reale meno impostata. Tra −0,5 e +0,5 °C è perfetto.', 'Real minus set. Between −0.5 and +0.5 °C is perfect.'), Math.abs(heat.diff) <= 0.5 ? 'good' : Math.abs(heat.diff) <= 1 ? 'warn' : 'bad')}
+  ${kpi(tr('Tempo in comfort', 'Time in comfort'), ni(heat.comfortPct), '%', tr('Quota di tempo con la temperatura entro ±1 °C da quella impostata.', 'Share of time within ±1 °C of the set temperature.'), heat.comfortPct >= 70 ? 'good' : heat.comfortPct >= 40 ? 'warn' : 'bad')}
+  ${kpi(tr('Stabilità', 'Stability'), `±${nf(heat.stab)}`, ' °C', tr('Quanto oscilla la temperatura nella giornata. Sotto 0,5 °C è molto stabile.', 'How much the temperature swings during the day. Below 0.5 °C is very stable.'), heat.stab === null ? null : heat.stab < 0.5 ? 'good' : heat.stab < 1 ? 'warn' : 'bad')}
+  ${kpi(tr('Mandata media', 'Average flow'), heat.flowN >= 5 ? nf(heat.flow) : naVal(tr('pochi dati', 'little data')), heat.flowN >= 5 ? ' °C' : '', tr('Temperatura dell’acqua mandata ai termosifoni con bruciatore acceso. Sotto 55 °C la caldaia condensa e rende di più.', 'Temperature of the water sent to the radiators with the burner on. Below 55 °C the boiler condenses and is more efficient.'), heat.flowN >= 5 ? (heat.flow < 55 ? 'good' : 'warn') : null, heat.flowMax !== null ? tr(`massima ${nf(heat.flowMax)} °C`, `max ${nf(heat.flowMax)} °C`) : '')}
+  ${kpi(tr('Condensazione', 'Condensing'), heat.condPct !== null ? ni(heat.condPct) : '—', '%', tr('Quota del tempo di funzionamento con mandata sotto 55 °C.', 'Share of operating time with flow below 55 °C.'), heat.condPct === null ? null : heat.condPct >= 80 ? 'good' : heat.condPct >= 50 ? 'warn' : 'bad')}
+  </div>
+  ${sub(tr('Programmi usati nei giorni di riscaldamento', 'Programs used on heating days'))}${pctBars(heat.prog, heat.progN)}`
+  : `<div class="empty">${icon('sun')}<p>${tr('Nel periodo la caldaia non ha bruciato gas per il riscaldamento (estate o riscaldamento spento). Scegli un periodo che comprenda l’inverno, per esempio 365 giorni, per vedere l’analisi completa. I consigli dell’assistente usano comunque i dati dell’ultima stagione di riscaldamento.', 'The boiler burned no heating gas in this period (summer or heating off). Choose a period that includes winter, e.g. 365 days, to see the full analysis. The assistant advice still uses the last heating season.')}</p></div>`}
+  ${sub(tr('Curva climatica', 'Heating curve'))}
+  ${chart.curve ? `<p class="note">${tr(`La linea arancione è la temperatura di mandata che la caldaia calcola in base alla temperatura esterna (pendenza <b>${nf(curve.slope, 1)}</b>, spostamento <b>${nf(curve.shift, 0)}</b>, ambiente ${nf(normalSet ?? 20, 0)} °C). I punti sono le mandate reali misurate con bruciatore acceso. Più la curva è alta, più la casa scalda e consuma.`, `The orange line is the flow temperature the boiler calculates from the outdoor temperature (slope <b>${nf(curve.slope, 1)}</b>, shift <b>${nf(curve.shift, 0)}</b>, room ${nf(normalSet ?? 20, 0)} °C). Dots are real flow readings with the burner on. The higher the curve, the warmer the house and the more gas it uses.`)}${curveAt(0) !== null ? ' ' + tr(`Con 0 °C fuori la caldaia punta a ${nf(curveAt(0), 0)} °C, con −5 °C a ${nf(curveAt(-5), 0)} °C.`, `At 0 °C outside the boiler aims at ${nf(curveAt(0), 0)} °C, at −5 °C at ${nf(curveAt(-5), 0)} °C.`) : ''}</p>${chartBox('cCurve', tr('Curva calcolata e mandate misurate', 'Calculated curve and measured flow'), '')}` : `<p class="note">${tr('Pendenza e spostamento non disponibili (esegui viessmann-explore-history.js oppure usa --curveSlope/--curveShift).', 'Slope and shift not available (run viessmann-explore-history.js or use --curveSlope/--curveShift).')}</p>`}`);
+
+const S_BURNER = section('boiler', 'flame', tr('Caldaia e bruciatore', 'Boiler and burner'),
+  tr('Quante volte la caldaia si è accesa e per quanto tempo. Poche accensioni lunghe sono l’ideale; molte accensioni brevi (“cicli brevi”) sprecano gas e usurano la caldaia.', 'How often the boiler started and for how long. Few long runs are ideal; many short runs (“short cycling”) waste gas and wear the boiler.'),
+  burner ? `<div class="kpis">
+  ${kpi(tr('Accensioni', 'Starts'), ni(burner.starts), '', tr('Accensioni del bruciatore nel periodo (contatore della caldaia).', 'Burner starts in the period (boiler counter).'))}
+  ${kpi(tr('Accensioni al giorno', 'Starts per day'), nf(burner.perDay), '', tr('Media sull’intero periodo, acqua calda compresa.', 'Average over the whole period, hot water included.'), null, [burner.heatStartsPerDay !== null ? tr(`riscaldamento: ${ni(burner.heatStartsPerDay)}/g`, `heating: ${ni(burner.heatStartsPerDay)}/d`) : '', burner.warmStartsPerDay !== null ? tr(`solo acqua calda: ${ni(burner.warmStartsPerDay)}/g`, `hot water only: ${ni(burner.warmStartsPerDay)}/d`) : ''].filter(Boolean).join(' · '))}
+  ${kpi(tr('Ore di fiamma', 'Burner hours'), ni(burner.hours), tr(' ore', ' h'), tr('Ore con il bruciatore acceso. Il contatore conta solo ore intere.', 'Hours with the burner on. The counter only counts whole hours.'), null, tr(`${nf(burner.runtimePct)}% del tempo`, `${nf(burner.runtimePct)}% of the time`))}
+  ${kpi(tr('Durata media accensione', 'Average run length'), burner.cycleMin !== null ? nf(burner.cycleMin) : naVal(tr('servono ≥ 10 ore di fiamma', 'needs ≥ 10 burner hours')), burner.cycleMin !== null ? ' min' : '', tr('Minuti per accensione. Sotto 5 = cicli brevi; sopra 10 = ottimo. Con una caldaia combinata molte accensioni brevi sono prelievi di acqua calda.', 'Minutes per start. Below 5 = short cycling; above 10 = excellent. With a combi boiler many short runs are hot water draws.'), burner.cycleMin === null ? null : burner.cycleMin < 5 ? 'bad' : burner.cycleMin < 10 ? 'warn' : 'good')}
+  ${kpi(tr('Potenza media erogata', 'Average output'), burner.avgKw !== null ? nf(burner.avgKw) : naVal(tr('pochi dati', 'little data')), burner.avgKw !== null ? ' kW' : '', tr('Energia del gas bruciato divisa per le ore di fiamma.', 'Energy of the gas burned divided by burner hours.'))}
+  ${kpi(tr('Modulazione', 'Modulation'), modVals.length >= 20 ? ni(mean(modVals)) : naVal(tr(`pochi dati (${modVals.length})`, `little data (${modVals.length})`)), modVals.length >= 20 ? '%' : '', tr('Percentuale di potenza usata dal bruciatore. Il cloud Viessmann la aggiorna raramente: valore indicativo.', 'Share of burner power in use. The Viessmann cloud updates it rarely: indicative value.'), null, modVals.length >= 20 ? `min ${ni(Math.min(...modVals))}% · max ${ni(Math.max(...modVals))}%` : '')}
+  ${kpi(tr('Dall’installazione', 'Since installation'), ni(burner.lifeStarts), tr(' accensioni', ' starts'), tr(`${ni(burner.lifeHours)} ore di fiamma in totale (${nf(burner.lifeHours ? burner.lifeStarts / burner.lifeHours : null, 1)} accensioni per ora di fiamma).`, `${ni(burner.lifeHours)} burner hours in total (${nf(burner.lifeHours ? burner.lifeStarts / burner.lifeHours : null, 1)} starts per burner hour).`))}
+  </div>
+  ${chartBox('cStarts', tr('Accensioni al giorno', 'Starts per day'), tr('La linea blu è la temperatura esterna reale: con il freddo le accensioni aumentano.', 'The blue line is the real outdoor temperature: starts rise with the cold.'))}
+  ${startsOut.length >= 10 ? chartBox('cStartsOut', tr('Accensioni al giorno in funzione della temperatura esterna', 'Starts per day versus outdoor temperature'), tr('Ogni punto è un giorno.', 'Each dot is a day.'), 'small') : ''}
+  ${ignitions.length ? `${sub(tr('Quando si accende la caldaia', 'When the boiler starts'))}<p class="note">${tr(`Accensioni registrate (${ni(ignitions.length)}) per giorno della settimana e ora. Più il colore è intenso, più accensioni.`, `Recorded starts (${ni(ignitions.length)}) by weekday and hour. The darker the colour, the more starts.`)}</p>
+  <div class="hmap">${heatmap.map((row, i) => `<div class="hr"><span class="hd">${WEEK_L[i]}</span>${row.map((v, h) => `<span class="hc" style="--a:${v ? (0.12 + 0.88 * v / heatmapMax).toFixed(2) : 0}" title="${WEEK_L[i]} ${String(h).padStart(2, '0')}:00 — ${v}"></span>`).join('')}</div>`).join('')}<div class="hr hx"><span class="hd"></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 ? '' : String(h).padStart(2, '0')}</span>`).join('')}</div></div>` : ''}
+  ${chart.mod ? chartBox('cMod', tr('Modulazione (solo letture nuove)', 'Modulation (new readings only)'), '', 'small') : ''}`
+  : `<div class="empty">${icon('info')}<p>${tr('Dati dei contatori della caldaia non disponibili nel periodo.', 'Boiler counter data not available in the period.')}</p></div>`);
+
+const S_DHW = dhw ? section('dhw', 'tap', tr('Acqua calda sanitaria', 'Domestic hot water'),
+  dhw.instant ? tr('La tua caldaia scalda l’acqua quando apri il rubinetto (caldaia combinata o modalità Eco): per questo a riposo il sensore segna una temperatura bassa, ed è normale. Conta la temperatura massima raggiunta durante i prelievi.', 'Your boiler heats water when you open a tap (combi boiler or Eco mode): that is why the sensor reads a low temperature at rest, and that is normal. What matters is the peak temperature while in use.')
+    : tr('La temperatura dell’acqua calda misurata dalla caldaia rispetto a quella impostata.', 'Hot water temperature measured by the boiler compared with the set temperature.'),
+  `<div class="kpis">
+  ${kpi(tr('Temperatura impostata', 'Set temperature'), nf(dhw.target, 0), ' °C', tr('Temperatura desiderata dell’acqua calda. 45–50 °C bastano per l’uso domestico.', 'Desired hot water temperature. 45–50 °C is enough for home use.'))}
+  ${kpi(tr('Temperatura massima', 'Peak temperature'), nf(dhw.peak), ' °C', tr('La più alta registrata. Deve arrivare vicino all’obiettivo.', 'The highest reading. It should get close to the target.'), dhw.neverReached ? 'warn' : 'good')}
+  ${kpi(tr('Temperatura media', 'Average temperature'), nf(dhw.avg), ' °C', dhw.instant ? tr('Temperatura a riposo del sensore: bassa è normale.', 'Sensor temperature at rest: low is normal.') : tr('Media con acqua calda attiva.', 'Average with hot water on.'))}
+  ${!dhw.instant ? kpi(tr('Obiettivo raggiunto', 'Target reached'), ni(dhw.reachPct), '%', tr('Quota di letture a meno di 5 °C dall’obiettivo.', 'Share of readings within 5 °C of the target.')) : ''}
+  ${kpi(tr('Gas per acqua calda', 'Hot water gas'), nf(dhw.gasPerDay, 2), tr(' m³/giorno', ' m³/day'), tr(`Circa ${eur(dhw.gasPerDay * 30 * GAS_PRICE)} al mese.`, `About ${eur(dhw.gasPerDay * 30 * GAS_PRICE)} per month.`))}
+  </div>${sub(tr('Modalità', 'Modes'))}${pctBars(dhw.modes, dhw.n)}
+  ${chartBox('cDhw', tr('Temperatura acqua calda (media oraria)', 'Hot water temperature (hourly average)'), tr('I picchi sono i momenti in cui si usa l’acqua calda.', 'Peaks are the moments hot water is used.'), 'small')}`) : '';
+
+const S_HOUSE = fc && fc.b !== null ? section('house', 'house', tr('La casa', 'The house'),
+  tr('Quanto calore perde la casa quando fuori fa freddo, calcolato dai consumi reali e dal meteo. Serve a capire se la caldaia è ben dimensionata e quanto renderebbe migliorare l’isolamento.', 'How much heat the house loses when it is cold outside, calculated from real consumption and weather. It shows whether the boiler is well sized and how much better insulation would pay off.'),
+  `<div class="kpis">
+  ${kpi(tr('Dispersione termica', 'Heat loss'), ni(fc.Hkw * 1000), ' W/°C', tr('Potenza persa per ogni grado di differenza tra dentro e fuori. Più è bassa, meglio è isolata la casa.', 'Power lost for each degree between inside and outside. The lower, the better insulated.'), houseClass?.[0], houseClass?.[1])}
+  ${kpi(tr(`Potenza necessaria a ${nf(DESIGN_TEMP, 0)} °C`, `Heat needed at ${nf(DESIGN_TEMP, 0)} °C`), nf(fc.need), ' kW', DESIGN_AUTO ? tr(`Potenza che serve nei giorni più freddi della tua zona (${nf(DESIGN_TEMP, 0)} °C di media, ricavati dal meteo reale degli ultimi 12 mesi).`, `Power needed on the coldest days in your area (${nf(DESIGN_TEMP, 0)} °C mean, from the real weather of the last 12 months).`) : tr('Potenza che serve nella giornata più fredda di progetto.', 'Power needed on the coldest design day.'), BOILER_KW ? (BOILER_KW > fc.need * 3 ? 'warn' : 'good') : null, BOILER_KW ? tr(`caldaia: ${nf(BOILER_KW, 0)} kW`, `boiler: ${nf(BOILER_KW, 0)} kW`) : tr('inserisci i kW della caldaia per il confronto', 'enter the boiler kW to compare'))}
+  ${kpi(tr('Riscaldamento in un anno', 'Heating per year'), fc.yrH !== null ? ni(fc.yrH) : '—', ' m³', tr('Gas per il solo riscaldamento con il meteo degli ultimi 12 mesi.', 'Heating-only gas with the weather of the last 12 months.'), null, fc.yrH !== null ? `≈ ${ni(fc.yrH * KWH_PER_M3)} kWh` : '')}
+  ${fc.r2 !== null ? kpi(tr('Precisione del modello', 'Model accuracy'), ni(fc.r2 * 100), '%', tr('Quanto i consumi giornalieri seguono la temperatura esterna (R²). Sopra 70% il modello è affidabile.', 'How closely daily consumption follows the outdoor temperature (R²). Above 70% the model is reliable.'), fc.r2 >= 0.7 ? 'good' : 'warn') : ''}
+  </div>`) : '';
+
+const S_API = api ? section('api', 'bolt', tr('Contatori ufficiali Viessmann', 'Official Viessmann counters'),
+  tr(`Valori letti direttamente dalla caldaia tramite le API Viessmann (aggiornati il ${new Date(api.ts).toLocaleString(LOCALE)}).`, `Values read directly from the boiler through the Viessmann API (updated ${new Date(api.ts).toLocaleString(LOCALE)}).`),
+  `<div class="tw"><table class="api"><tr><th></th><th>${tr('7 giorni', '7 days')}</th><th>${tr('Questo mese', 'This month')}</th><th>${tr('Mese scorso', 'Last month')}</th><th>${tr('Quest’anno', 'This year')}</th></tr>
+  ${[[tr('Gas riscaldamento (m³)', 'Heating gas (m³)'), api.gasH], [tr('Gas acqua calda (m³)', 'Hot water gas (m³)'), api.gasW], [tr('Calore riscaldamento (kWh)*', 'Heating heat (kWh)*'), api.heatH], [tr('Calore acqua calda (kWh)*', 'Hot water heat (kWh)*'), api.heatW], [tr('Elettricità riscaldamento (kWh)', 'Heating electricity (kWh)'), api.elH], [tr('Elettricità acqua calda (kWh)', 'Hot water electricity (kWh)'), api.elW]].map(([l, b]) => `<tr><td>${l}</td><td>${nf(b.d7)}</td><td>${nf(b.month)}</td><td>${nf(b.lastMonth)}</td><td><b>${nf(b.year)}</b></td></tr>`).join('')}
+  </table></div><p class="note">${tr('* Il calore prodotto è una stima che la caldaia calcola dal gas: non è una misura, quindi non si può usare per calcolare il rendimento. Per questo il report non mostra il “rendimento termico”.', '* Heat produced is an estimate the boiler computes from gas: it is not a measurement, so it cannot be used to compute efficiency. That is why the report does not show “thermal efficiency”.')}</p>`) : '';
+
+const S_ENERGY = energy ? section('energy', 'bolt', tr('Fotovoltaico, batteria e wallbox', 'Solar, battery and wallbox'), '',
+  `<div class="kpis">${kpi(tr('Produzione FV media', 'Average PV output'), ni(energy.pv), ' W', '')}${kpi(tr('Picco FV', 'PV peak'), ni(energy.pvMax), ' W', '')}${energy.batt !== null ? kpi(tr('Batteria media', 'Average battery'), ni(energy.batt), '%', '') : ''}${energy.wall !== null ? kpi(tr('Wallbox media', 'Average wallbox'), ni(energy.wall), ' W', '') : ''}</div>${chart.energy ? chartBox('cEnergy', tr('Fotovoltaico e batteria', 'PV and battery'), '', 'small') : ''}`) : '';
+const S_ROOMS = rooms.length ? section('rooms', 'house', tr('Stanze (termostati smart)', 'Rooms (smart thermostats)'), '', `<div class="kpis">${rooms.map(r => kpi(esc(r.k), nf(r.avg), ' °C', '')).join('')}</div>`) : '';
+
+const msgType = (c) => /^F\./.test(c) ? 'f' : /^I\./.test(c) ? 'i' : 's';
+const S_MSG = section('messages', 'msg', tr('Messaggi della caldaia', 'Boiler messages'),
+  tr('La caldaia comunica cosa sta facendo con dei codici: <b>S.xx</b> = stato normale, <b>I.xx</b> = informazione, <b>F.xx</b> = guasto. I codici S sono normali e non richiedono nulla.', 'The boiler reports what it is doing with codes: <b>S.xx</b> = normal status, <b>I.xx</b> = information, <b>F.xx</b> = fault. S codes are normal and need no action.'),
+  `${Object.keys(codeCount).length ? `<div class="chips">${Object.entries(codeCount).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<span class="chip c-${msgType(c)}"><b>${esc(c)}</b> ${esc(codeText(c))} <em>×${n}</em></span>`).join('')}</div>` : ''}
+  ${messages.length ? `<div class="msgs">${messages.slice(0, 15).map(m => `<div class="msg m-${msgType(m.code)}"><span class="c">${esc(m.code)}</span><span>${esc(codeText(m.code))}</span><span class="t">${new Date(m.t).toLocaleString(LOCALE)}</span></div>`).join('')}</div>` : `<p class="note">${tr('Nessun messaggio registrato.', 'No messages recorded.')}</p>`}`);
+
+const GLOSS = [
+  [tr('m³ e Smc', 'm³ and Smc'), tr('Metri cubi di gas. In bolletta trovi gli Smc (metri cubi “standard”): la differenza è di circa il 2%.', 'Cubic metres of gas. Italian bills use Smc (“standard” cubic metres): about 2% difference.')],
+  [tr('Grado-giorno', 'Degree-day'), tr('Misura del freddo: se un giorno la media è 6 °C, con base 16 °C vale 10 gradi-giorno. Più gradi-giorno = più gas.', 'A measure of cold: a day with a 6 °C mean counts 10 degree-days with a 16 °C base. More degree-days = more gas.')],
+  [tr('Mandata', 'Flow temperature'), tr('Temperatura dell’acqua che la caldaia manda ai termosifoni o al pavimento.', 'Temperature of the water the boiler sends to radiators or underfloor heating.')],
+  [tr('Curva climatica', 'Heating curve'), tr('Regola che decide la mandata in base al freddo esterno. Pendenza = quanto sale quando fa più freddo; spostamento = alza o abbassa tutta la curva.', 'Rule that sets the flow temperature from the outdoor cold. Slope = how fast it rises as it gets colder; shift = moves the whole curve up or down.')],
+  [tr('Sonda esterna', 'Outdoor sensor'), tr('Termometro della caldaia montato fuori casa: se è al sole o al caldo, la caldaia scalda male.', 'The boiler thermometer mounted outside: if it is in the sun or warm, the boiler heats badly.')],
+  [tr('Condensazione', 'Condensing'), tr('Le caldaie moderne recuperano il calore del vapore nei fumi quando l’acqua di ritorno è sotto i 50–55 °C: rendono di più.', 'Modern boilers recover heat from the flue steam when return water is below 50–55 °C: they are more efficient.')],
+  [tr('Modulazione', 'Modulation'), tr('La caldaia può bruciare a potenza ridotta invece di accendersi e spegnersi.', 'The boiler can burn at reduced power instead of switching on and off.')],
+  [tr('Ciclo breve', 'Short cycling'), tr('Accensione di pochi minuti seguita da spegnimento: spreca gas e usura la caldaia.', 'A run of a few minutes followed by a stop: wastes gas and wears the boiler.')],
+  [tr('Programmi', 'Programs'), tr('Normale = temperatura di giorno, Ridotta = notte o assenza, Comfort = temperatura extra (party o riscaldamento prolungato).', 'Normal = daytime temperature, Reduced = night or away, Comfort = extra temperature (party or extended heating).')],
+  [tr('Dispersione termica', 'Heat loss'), tr('Watt che la casa perde per ogni grado di differenza tra dentro e fuori.', 'Watts the house loses for each degree between inside and outside.')],
+  [tr('ACS', 'DHW'), tr('Acqua Calda Sanitaria: l’acqua di doccia e rubinetti.', 'Domestic Hot Water: shower and tap water.')],
+];
+const S_GLOSS = section('glossary', 'book', tr('Glossario', 'Glossary'), tr('Le parole tecniche usate nel report, spiegate in modo semplice.', 'The technical words used in this report, explained simply.'), `<dl class="gl">${GLOSS.map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('')}</dl>`);
+
+const NAV = [['summary', tr('Riepilogo', 'Summary')], ['advice', tr('Consigli', 'Advice')], ['overview', tr('Andamento', 'Overview')], ['gas', tr('Gas', 'Gas')], ['heating', tr('Riscaldamento', 'Heating')], ['boiler', tr('Caldaia', 'Boiler')], dhw ? ['dhw', tr('Acqua calda', 'Hot water')] : null, S_HOUSE ? ['house', tr('Casa', 'House')] : null, api ? ['api', 'API'] : null, ['messages', tr('Messaggi', 'Messages')], ['glossary', tr('Glossario', 'Glossary')]].filter(Boolean);
+
+const scoreLabels = { comfort: tr('Comfort', 'Comfort'), efficiency: tr('Efficienza', 'Efficiency'), boiler: tr('Caldaia', 'Boiler'), dhw: tr('Acqua calda', 'Hot water'), reliability: tr('Affidabilità', 'Reliability') };
+const verdict = overall >= 80 ? tr('L’impianto lavora bene.', 'The system works well.') : overall >= 60 ? tr('L’impianto funziona, ma ci sono margini di miglioramento.', 'The system works, but there is room for improvement.') : tr('Ci sono alcune cose da sistemare.', 'A few things need fixing.');
+const nImportant = advice.filter(a => a.prio === 'high' || a.prio === 'medium').length;
+
+// ─── HTML ───────────────────────────────────────────────────────────────────
 const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Viessmann Report ${today}</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"><\/script>
+<html lang="${LANG}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${tr('Report impianto', 'Heating report')} ${todayIso}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f6fa;color:#2d2d2d}
-header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:26px 32px}
-header h1{font-size:20px;font-weight:700}
-header p{font-size:12px;opacity:.65;margin-top:5px}
-.wrap{max-width:1080px;margin:0 auto;padding:24px 16px}
-.box{background:#fff;border-radius:12px;padding:22px 24px;margin-bottom:22px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
-.box h2{font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:16px;padding-bottom:10px;border-bottom:2px solid #f0f0f0}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:18px}
-.sc{background:#f8f9fc;border-radius:8px;padding:13px 15px}
-.sl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:5px}
-.sv{font-size:19px;font-weight:700;color:#1a1a2e}
-.na{font-size:13px;color:#bbb;font-weight:400}
-.badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;vertical-align:middle}
-.badge-good{background:#e6f4ea;color:#2d7a3a}
-.badge-warn{background:#fff3e0;color:#e65100}
-.badge-neutral{background:#eee;color:#777}
-.ch{position:relative;height:210px;margin-top:6px}
-.ch-tall{position:relative;height:250px;margin-top:6px}
-.ch-overview{position:relative;height:320px;margin-top:6px}
-.note{font-size:11px;color:#aaa;margin-top:8px;font-style:italic}
-.pbars{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
-.pb{flex:1;min-width:90px}
-.pbl{font-size:10px;color:#999;margin-bottom:4px}
-.pbt{background:#f0f0f0;border-radius:3px;height:7px}
-.pbf{height:7px;border-radius:3px}
-.fill-normal{background:#4e9af1}
-.fill-reduced{background:#f1c94e}
-.fill-comfort{background:#f17c4e}
-.pbp{font-size:11px;font-weight:600;margin-top:3px}
-footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
-@media(max-width:500px){.grid{grid-template-columns:1fr 1fr}}
-/* Hourly heatmap */
-.hmap{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-top:8px}
-.hmap-cell{height:38px;border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#fff;cursor:default;transition:transform .1s}
-.hmap-cell:hover{transform:scale(1.15);z-index:2}
-.hmap-lbl{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;margin-top:2px}
-.hmap-lbl span{font-size:8px;color:#bbb;text-align:center}
-/* Daily efficiency gauge row */
-.eff-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.eff-day{background:#f8f9fc;border-radius:8px;padding:8px 10px;text-align:center;min-width:64px;flex:1}
-.eff-day .eff-pct{font-size:16px;font-weight:700}
-.eff-day .eff-lbl{font-size:9px;color:#aaa;margin-top:2px}
-/* Energy flow legend */
-.flow-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:#666}
-.zoom-reset{position:absolute;top:8px;right:8px;font-size:11px;padding:3px 8px;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;color:#555;z-index:10;}
-.zoom-reset:hover{background:#f5f5f5;border-color:#aaa;}
-.chart-wrap{position:relative;}
-.flow-legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
-</style>
-</head>
-<body>
-<header>
-  <h1>${T('reportTitle')}</h1>
-  <p>${T('periodLabel')}: ${periodStart} — ${periodEnd} &nbsp;(${T('lastNDays',{n:DAYS})}) &nbsp;|&nbsp; ${T('generatedLabel')}: ${genAt} &nbsp;|&nbsp; ${T('samplesLabel',{n:filtered.length})}</p>
-</header>
-<div class="wrap">
-
-<div class="box">
-  <h2>${T('sectionOverview')}</h2>
-  <div class="ch-overview"><canvas id="cOverview"></canvas></div>
-  ${scheduleBarHtml}
-
-  <p class="note">${T('leftAxisNote')}</p>
+:root{--bg:#eef1f7;--card:#fff;--ink:#141a2b;--mute:#5b6478;--line:#e3e7ef;--soft:#f6f8fc;--good:#12a150;--warn:#e58a00;--bad:#d92d20;--info:#5b6b85;--acc:#e2001a;--acc2:#ff5a36;--blue:#2f6fed;
+--s-house1:#fff7ef;--s-house2:#ffe9d6;--s-ink:#20283b;--s-mute:#5b6478;--shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px -12px rgba(16,24,40,.15)}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#141b2e;--ink:#e9edf6;--mute:#9aa4ba;--line:#26304a;--soft:#1a2238;--s-house1:#2a2230;--s-house2:#1f1a26;--s-ink:#e9edf6;--s-mute:#9aa4ba;--shadow:0 1px 2px rgba(0,0,0,.3)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:16px/1.55 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+.ic{width:22px;height:22px;flex:none}
+.hero{background:radial-gradient(1200px 400px at 85% -10%,#ff5a36 0,transparent 60%),linear-gradient(135deg,#1b0f2e 0%,#3a0d25 45%,#b3001b 100%);color:#fff;padding:34px 20px 38px}
+.hero .in{max-width:1180px;margin:0 auto;display:flex;gap:28px;align-items:center;flex-wrap:wrap}
+.hero h1{margin:0;font-size:clamp(26px,4vw,38px);letter-spacing:-.02em;line-height:1.15}
+.hero .meta{opacity:.85;font-size:14px;margin-top:8px}.hero .verdict{font-size:18px;margin-top:14px;font-weight:600}
+.hero .ht{flex:1 1 420px}.hero .score{display:flex;align-items:center;gap:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:16px 22px}
+.hero .score .slbl{font-size:13px;opacity:.8;text-transform:uppercase;letter-spacing:.08em}.hero .score b{font-size:15px;display:block;margin-top:4px;max-width:220px}
+.hero .ring .rt{stroke:rgba(255,255,255,.18)}.hero .ring .rn{fill:#fff}
+nav{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line);box-shadow:0 4px 16px -12px rgba(0,0,0,.3)}
+nav .in{max-width:1180px;margin:0 auto;display:flex;gap:6px;overflow-x:auto;padding:10px 16px;scrollbar-width:none}
+nav a{white-space:nowrap;text-decoration:none;color:var(--mute);font-size:14px;font-weight:600;padding:6px 12px;border-radius:99px}nav a:hover{background:var(--soft);color:var(--ink)}
+main{max-width:1180px;margin:0 auto;padding:0 16px 40px;position:relative}
+section,.panel{background:var(--card);border-radius:20px;padding:24px;margin:18px 0;box-shadow:var(--shadow);border:1px solid var(--line);scroll-margin-top:70px}
+.sh{display:flex;gap:14px;align-items:flex-start;margin-bottom:16px}.si{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;flex:none}.si .ic{width:24px;height:24px}
+h2{margin:0;font-size:22px;letter-spacing:-.01em}h3{font-size:17px;margin:26px 0 10px}h4{margin:2px 0 0;font-size:17px;line-height:1.35}
+.intro{color:var(--mute);margin:4px 0 0;max-width:900px}.note{color:var(--mute);font-size:14px;margin:8px 0}.warnline{color:var(--warn)}
+.schem{width:100%;height:auto;display:block;margin-top:6px}
+.s-big{font-size:22px;font-weight:800;fill:var(--s-ink)}.s-sm{font-size:13px;fill:var(--s-mute)}.s-warn{fill:var(--warn)}
+.s-line{stroke:var(--line);stroke-width:2}.s-roof{stroke:var(--acc);stroke-width:10;stroke-linecap:round;stroke-linejoin:round}
+.s-tube{fill:var(--soft);stroke:var(--line);stroke-width:2}.s-rad{fill:#fff;stroke:#c9d2e3;stroke-width:3}.s-radl{stroke:#c9d2e3;stroke-width:3}
+.s-heat path{fill:none;stroke:#ff7a45;stroke-width:3;stroke-linecap:round;opacity:0;animation:rise 2.4s infinite}
+@keyframes rise{0%{opacity:0;transform:translateY(8px)}40%{opacity:.8}100%{opacity:0;transform:translateY(-10px)}}
+.s-boiler{fill:#fff;stroke:#c9d2e3;stroke-width:3}.s-disp{fill:#0f172a}.s-dtxt{fill:#5eead4;font:700 13px ui-monospace,Menlo,monospace}
+.s-flame{transform-box:fill-box;transform-origin:center bottom;animation:flick 1.6s ease-in-out infinite}@keyframes flick{50%{transform:scale(1.06,.93)}}
+.s-pipe{fill:none;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}.s-pipe.hot{stroke:#ef4444}.s-pipe.cold{stroke:#60a5fa}.s-pipe.gas{stroke:#f5b400;stroke-dasharray:10 6}
+.s-tap path:first-child{fill:#94a3b8}.s-meter{fill:#0f172a}.s-mtxt{fill:#fde68a;font:700 16px ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){.s-rad,.s-boiler{fill:#1f2940;stroke:#3a4666}.s-radl{stroke:#3a4666}}
+@media (prefers-reduced-motion:reduce){.s-heat path,.s-flame{animation:none}.s-heat path{opacity:.6}}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:12px;margin-top:18px}
+.card{border-radius:16px;padding:14px 16px 14px 20px;background:var(--soft);border:1px solid var(--line);position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--info)}.card.good::before{background:var(--good)}.card.warn::before{background:var(--warn)}.card.bad::before{background:var(--bad)}
+.card .ct{display:flex;gap:8px;align-items:center;color:var(--mute);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.card .ct .ic{width:18px;height:18px}
+.card .cval{font-size:26px;font-weight:800;margin:6px 0 2px;letter-spacing:-.02em}.card .cs{font-size:13px;color:var(--mute)}
+.rings{display:flex;flex-wrap:wrap;gap:18px;justify-content:space-around;margin-top:20px;padding:16px;border-radius:16px;background:var(--soft)}
+.ring{text-align:center}.ring .rt{fill:none;stroke:var(--line)}.ring .rv{fill:none;stroke-linecap:round}.ring .rn{font-weight:800;fill:var(--ink)}
+.r-good .rv{stroke:var(--good)}.r-warn .rv{stroke:var(--warn)}.r-bad .rv{stroke:var(--bad)}.r-info .rv{stroke:var(--info)}.rl{font-size:13px;font-weight:700;color:var(--mute);margin-top:4px}
+.bot{display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border-radius:16px;background:linear-gradient(135deg,rgba(47,111,237,.10),rgba(226,0,26,.06));border:1px solid rgba(47,111,237,.25);margin-bottom:16px}
+.bot .ic{width:34px;height:34px;color:var(--blue)}.bot p{margin:0}
+.adv{border:1px solid var(--line);border-radius:18px;margin:14px 0;overflow:hidden;background:var(--card)}
+.adv-h{display:flex;gap:14px;align-items:center;padding:16px 18px;background:var(--soft)}
+.adv-i{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;color:#fff;background:var(--info);flex:none}.adv-i .ic{width:26px;height:26px}
+.p-high .adv-i{background:linear-gradient(135deg,#d92d20,#ff6b3d)}.p-medium .adv-i{background:linear-gradient(135deg,#e58a00,#ffc043)}.p-low .adv-i{background:linear-gradient(135deg,#12a150,#4ade80)}.p-info .adv-i{background:linear-gradient(135deg,#2f6fed,#60a5fa)}
+.adv-s{display:inline-flex;gap:6px;align-items:center;margin-top:6px;font-size:13px;color:var(--blue);background:rgba(47,111,237,.08);padding:4px 10px;border-radius:99px}.adv-s .ic{width:15px;height:15px}.adv-p{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+.adv-b{display:grid;grid-template-columns:1.1fr 1fr}.adv-b>div{padding:14px 18px}.adv-do{border-left:1px solid var(--line)}
+.adv-b p{margin:0}.adv-b ol{margin:0;padding-left:20px}.adv-b li{margin:6px 0}.lbl{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:6px}
+.adv-f{display:flex;flex-wrap:wrap;gap:10px 22px;padding:12px 18px;border-top:1px solid var(--line);font-size:14px;color:var(--mute)}.adv-f span{display:flex;gap:6px;align-items:center}.adv-f .ic{width:18px;height:18px}.adv-f .save{color:var(--good)}
+.pos{list-style:none;padding:0;margin:8px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px}.pos li{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:rgba(18,161,80,.08);font-size:15px}.pos .ic{color:var(--good);width:20px;height:20px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.kpi{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--card)}
+.kl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);font-weight:700}.kv{font-size:28px;font-weight:800;margin:4px 0 2px;letter-spacing:-.02em;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px}.kv .b{align-self:center}
+.kv small{font-size:15px;font-weight:600;color:var(--mute);margin-left:3px}.ks{font-size:13px;font-weight:600;color:var(--ink);opacity:.8}.kh{font-size:13.5px;color:var(--mute);margin-top:6px;line-height:1.45}
+.na{color:var(--mute);font-size:15px;font-weight:600}
+.b{white-space:nowrap;display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:99px;vertical-align:middle;color:#fff;letter-spacing:.03em;text-transform:uppercase}
+.b-good{background:var(--good)}.b-warn{background:var(--warn)}.b-bad{background:var(--bad)}.b-info{background:var(--info)}
+.chart{margin:20px 0 6px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--card)}
+.chart figcaption{font-weight:700;font-size:15px;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}.how{font-weight:400;font-size:13.5px;color:var(--mute);display:flex;gap:6px;align-items:flex-start}.how .ic{width:16px;height:16px;margin-top:2px}
+.cv{position:relative;height:300px}.chart.tall .cv{height:400px}.chart.small .cv{height:240px}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:15px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+th{color:var(--mute);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+td.bar{width:28%;min-width:120px}td.bar span{display:inline-block;height:12px;vertical-align:middle}.bh{background:var(--acc);border-radius:6px 0 0 6px}.bw{background:var(--blue);border-radius:0 6px 6px 0}
+.pbars{display:grid;gap:8px;max-width:640px}.pb{display:grid;grid-template-columns:110px 1fr 48px;gap:10px;align-items:center;font-size:14px}
+.pbt{height:12px;border-radius:99px;background:var(--soft);overflow:hidden}.pbf{display:block;height:100%;border-radius:99px;background:var(--info)}
+.f-normal,.f-comfort{background:var(--acc2)}.f-reduced{background:#94a3b8}.f-eco{background:var(--good)}.f-off{background:#cbd5e1}.pbp{text-align:right;font-weight:700}
+.sched{width:100%;max-width:820px;height:auto}.sc-d,.sc-h{font-size:12px;fill:var(--mute)}.sc-red{fill:var(--soft);stroke:var(--line)}.sc-nor{fill:var(--acc2)}.sc-com{fill:var(--acc)}
+.hmap{display:grid;gap:3px;max-width:820px;overflow-x:auto}.hr{display:grid;grid-template-columns:40px repeat(24,minmax(12px,1fr));gap:3px;align-items:center}
+.hc{height:20px;border-radius:4px;background:rgba(229,90,0,var(--a));outline:1px solid var(--line);outline-offset:-1px}.hd{font-size:12px;color:var(--mute)}.hx span{font-size:11px;color:var(--mute)}
+.empty{display:flex;gap:14px;align-items:center;padding:18px;border-radius:14px;background:var(--soft);color:var(--mute)}.empty .ic{width:34px;height:34px;color:var(--warn)}.empty p{margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.chip{font-size:13px;padding:6px 10px;border-radius:99px;background:var(--soft);border:1px solid var(--line)}.chip em{color:var(--mute);font-style:normal}.c-f{border-color:var(--bad);background:rgba(217,45,32,.08)}
+.msgs{display:grid;gap:6px}.msg{display:grid;grid-template-columns:70px 1fr auto;gap:10px;padding:9px 12px;border-radius:10px;background:var(--soft);font-size:14px}.msg .c{font-weight:800}.msg .t{color:var(--mute)}.m-f{background:rgba(217,45,32,.1)}
+.gl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:0}.gl div{padding:12px 14px;border-radius:12px;background:var(--soft)}.gl dt{font-weight:800}.gl dd{margin:4px 0 0;color:var(--mute);font-size:14.5px}
+.clamp{background:rgba(47,111,237,.1);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:14px;margin:0 0 12px}
+footer{text-align:center;color:var(--mute);font-size:13px;padding:10px 16px 30px}
+@media (max-width:760px){.adv-b{grid-template-columns:1fr}.adv-do{border-left:0;border-top:1px solid var(--line)}section,.panel{padding:18px;border-radius:16px}.cv{height:260px}.chart.tall .cv{height:320px}.msg{grid-template-columns:56px 1fr}.msg .t{grid-column:2}}
+@media print{nav{display:none}.hero{-webkit-print-color-adjust:exact;print-color-adjust:exact;padding-bottom:30px}main{margin-top:0}section{break-inside:avoid}}
+</style></head><body>
+<header class="hero"><div class="in">
+ <div class="ht"><h1>${tr('Il tuo impianto di riscaldamento', 'Your heating system')}</h1>
+ <div class="meta">${tr('Periodo', 'Period')}: <b>${fmtDate(localDay(startT))} – ${fmtDate(localDay(NOW))}</b> (${coveredDays} ${tr('giorni', 'days')}) · ${ni(sampleCount)} ${tr('letture', 'readings')} · ${tr('generato il', 'generated')} ${new Date().toLocaleString(LOCALE)}</div>
+ <div class="verdict">${verdict}</div></div>
+ <div class="score">${ring(overall, 110, '', 11)}<div><span class="slbl">${tr('Punteggio impianto', 'System score')}</span><b>${nImportant ? tr(`${nImportant} ${nImportant === 1 ? 'cosa' : 'cose'} da migliorare`, `${nImportant} thing${nImportant === 1 ? '' : 's'} to improve`) : tr('Nessun problema importante', 'No major issues')}${totalSave > 5 ? tr(` · risparmio possibile ≈ ${eur(totalSave)}/anno`, ` · possible saving ≈ ${eur(totalSave)}/year`) : ''}</b></div></div>
+</div></header>
+<nav><div class="in">${NAV.map(([id, l]) => `<a href="#${id}">${l}</a>`).join('')}</div></nav>
+<main>
+<div class="panel" id="summary">
+ ${clamped ? `<p class="clamp">${tr(`Hai chiesto ${DAYS} giorni, ma i dati iniziano il ${fmtDate(localDay(firstDataT))}: il report copre ${coveredDays} giorni.`, `You asked for ${DAYS} days but data starts on ${fmtDate(localDay(firstDataT))}: the report covers ${coveredDays} days.`)}</p>` : ''}
+ <div class="sh"><div class="si">${icon('house')}</div><div><h2>${tr('L’impianto in un colpo d’occhio', 'Your system at a glance')}</h2><p class="intro">${tr('Il disegno mostra i valori medi del periodo. Colori delle schede: verde = tutto bene, arancio = si può migliorare, rosso = da controllare, grigio = informazione. I cerchi sono i punteggi da 0 a 100.', 'The drawing shows the period averages. Card colours: green = all good, orange = can be improved, red = check it, grey = information. The circles are scores from 0 to 100.')}</p></div></div>
+ ${schem}
+ <div class="cards">${summaryCards.map(c => `<div class="card ${c.lvl}"><div class="ct">${icon(c.ic)} ${c.t}</div><div class="cval">${c.v}</div><div class="cs">${c.s}</div></div>`).join('')}</div>
+ <div class="rings">${Object.entries(scores).filter(([, v]) => v !== null).map(([k, v]) => ring(v, 92, scoreLabels[k], 9)).join('')}</div>
 </div>
 
-<div class="box">
-  <h2>${T('sectionBoiler')}</h2>
-  <!-- KPI row 1: real cycle metrics from API counter -->
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('cyclePerformanceTitle')}</div>
-  <div class="grid" style="margin-bottom:6px">
-    ${realCycleCount !== null ? sc(T('cyclesInPeriod'), realCycleCount, '', badge(effCls, effLabel)) : ''}
-    ${sph ? sc('Starts/hour', sph, '/h', badge(effCls, parseFloat(sph)<2?T('badgeNormal'):parseFloat(sph)<4?T('badgeHigh'):T('badgeSevere'))) : ''}
-    ${realAvgDur ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<3?'bad':parseFloat(realAvgDur)<6?'warn':'good', parseFloat(realAvgDur)<3?T('badgeVeryShort'):parseFloat(realAvgDur)<6?T('badgeShort'):T('badgeOK'))) : ''}
-    ${burnerRuntimePct ? sc('Burner runtime', burnerRuntimePct, '%', badge(parseFloat(burnerRuntimePct)<15?'good':parseFloat(burnerRuntimePct)<40?'warn':'bad', parseFloat(burnerRuntimePct)<15?T('badgeLowDemand'):parseFloat(burnerRuntimePct)<40?T('badgeNormal'):T('badgeHigh'))) : ''}
-    ${burnerStarts ? sc(T('lifetimeStarts'), burnerStarts) : ''}
-    ${burnerHours ? sc(T('lifetimeHours'), burnerHours, 'h') : ''}
-  </div>
-  <p class="note" style="margin-bottom:14px">${T('cycleApiNoteShort')}</p>
-
-  <!-- KPI row 2: modulation + gas -->
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('modGasTitle')}</div>
-  <div class="grid" style="margin-bottom:6px">
-    ${sc('Avg modulation (active)', avgMod, '%', badge(parseFloat(avgMod||0)<15?'warn':'good', parseFloat(avgMod||0)<15?T('badgeLowMod'):T('badgeOK')))}
-    ${sc('Max modulation', maxMod, '%')}
-    ${avgHeatDemand ? sc('Avg heat demand', avgHeatDemand, ' kW') : ''}
-    ${hasGasData ? sc(T('gasHeatingToday'), gasHeatingToday, ' m³') : ''}
-    ${hasGasData && gasDhwToday ? sc(T('gasDhwToday'), gasDhwToday, ' m³') : ''}
-    ${hasGasData && gasTotalToday ? sc(T('gasTotalToday'), gasTotalToday, ' m³') : ''}
-  </div>
-
-  ${boilerRows.length < 5 ? `<p class="note">${T('onlySamplesNote', {n: boilerRows.length})}</p>` : ''}
-  ${boilerRows.length >= 2 ? `<div class="ch"><canvas id="cMod"></canvas></div><div class="ch" style="margin-top:14px"><canvas id="cBurner"></canvas></div>
-  <p class="note">${T('burnerBarNote', {n: realCycleCount ?? '?', mult: realCycleCount && cycleCount ? Math.round(realCycleCount/Math.max(cycleCount,1)) : '~100'})}</p>` : ''}
-  ${cycleCount >= 3 ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">${T('burnerBarsTitle')}</div><div class="ch"><canvas id="cCycleHist"></canvas></div><p class="note">${T('histogramNote', {dur: realAvgDur ?? '?', vis: cycleCount, real: realCycleCount ?? '?'})}</p></div>` : ''}
-
-  <!-- Hourly heatmap -->
-  <div style="margin-top:22px">
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">${T('heatmapTitle')}</div>
-    <p class="note" style="margin-bottom:8px">${T('heatmapNote')}</p>
-    <div class="hmap" id="hmapCells"></div>
-    <div class="hmap-lbl">${Array.from({length:24},(_,h)=>`<span>${String(h).padStart(2,'0')}</span>`).join('')}</div>
-    <div style="display:flex;gap:6px;align-items:center;margin-top:6px;font-size:10px;color:#aaa">
-      <span>${T('heatmapLow')}</span>
-      ${[0,20,40,60,80,100].map(v=>`<div style="width:18px;height:12px;border-radius:2px;background:${v===0?'#f0f0f0':`rgba(230,81,0,${(v/100)*0.9+0.1})`}"></div>`).join('')}
-      <span>${T('heatmapHigh')}</span>
-      <span style="margin-left:12px;color:#aaa">${T('heatmapBurnerPct')}</span>
-    </div>
-  </div>
-
-  ${hasGasChart ? `<div style="margin-top:18px"><div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:10px">${T('gasChartTitle')}</div><div class="ch-tall"><canvas id="cGas"></canvas></div><p class="note">${T('gasChartNote')}</p></div>` : ''}
-
-  <!-- Daily efficiency from CSV (v2.0.50+) -->
-  ${dailyEfficiency.hasData ? `
-  <div style="margin-top:22px">
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:4px">${T('effChartTitle')}</div>
-    <p class="note" style="margin-bottom:8px">${T('effChartNote')}</p>
-    <div class="ch"><canvas id="cDailyEff"></canvas></div>
-  </div>` : ''}
-</div>
-
-<div class="box">
-  <h2>${T('sectionHC0')}</h2>
-  <div class="grid">
-    ${sc('Avg room temp', avgRoom, '°C')}
-    ${sc('Avg setpoint', avgTarget, '°C')}
-    ${maxFlow ? sc('Max flow temp', maxFlow, '°C') : ''}
-    ${condensingPct !== null ? sc(T('condensingMode'), condensingPct, LANG==='it'?'% del tempo':'% time', badge(condensingCls, condensingLabel)) : ''}
-    ${avgFlow ? sc('Avg flow temp', avgFlow, '°C', badge(parseFloat(avgFlow||99)<45?'good':parseFloat(avgFlow||99)<55?'warn':'neutral', parseFloat(avgFlow||99)<45?T('badgeExcellent'):parseFloat(avgFlow||99)<55?T('badgeCondensing'):T('badgeHigh'))) : ''}
-    ${scheduleToday ? sc(T('todayScheduleKey'), scheduleToday) : ''}
-    ${condensingScore ? sc(T('csTitle'), condensingScore.pct, '%', badge(condensingScore.pct >= 90 ? 'good' : condensingScore.pct >= 60 ? 'warn' : 'bad', condensingScore.pct + (LANG==='it'?'% del tempo':'% time'))) : ''}
-  </div>
-  ${condensingScore ? `<p class="note" style="font-size:11px">${T('csNote')}</p>` : ''}
-  ${progDist.length ? `<div style="margin-bottom:16px"><div class="sl" style="margin-bottom:8px">${T('programDistKey')}</div>
-  <div class="pbars">${progDist.map(p=>`<div class="pb"><div class="pbl">${p.label}</div><div class="pbt"><div class="pbf fill-${p.cssKey||p.label.toLowerCase()}" style="width:${p.pct}%"></div></div><div class="pbp">${p.pct}%</div></div>`).join('')}</div></div>` : ''}
-  ${hcRows.length >= 2 ? `<div class="ch-tall"><canvas id="cRoom"></canvas></div>` : ''}
-  ${flowVals.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cFlow"></canvas></div><p class="note">${T('flowTempChartNote')}</p>` : ''}
-</div>
-
-<div class="box">
-  <h2>${T('sectionSystemAnalysis')}</h2>
-  <div class="grid">
-    ${heatDemandKW ? sc('Avg heat demand', heatDemandKW, ' kW') : ''}
-    ${heatLossCoeff ? sc('Heat loss coeff.', heatLossCoeff, ' kW/°C') : ''}
-    ${peakLoadKW ? sc('Est. peak load', peakLoadKW, ' kW', '<span style=\"font-size:10px;color:#888\">'+T('atOutdoorTemp',{temp:DESIGN_TEMP})+'</span>') : ''}
-    ${hasBoilerKW ? sc('Boiler nominal', BOILER_KW, ' kW', boilerOversized ? badge('warn',T('badgeOversized')) : badge('good','OK')) : ''}
-    ${houseEff ? sc('House efficiency', houseEff.label, '', badge(houseEff.cls, heatLossCoeff+' kW/°C')) : ''}
-    ${cyclesPerHour ? sc('Starts/hour', cyclesPerHour, '/h', badge(effCls, parseFloat(cyclesPerHour)<3?T('badgeNormal'):parseFloat(cyclesPerHour)<6?T('badgeHigh'):T('badgeSevere'))) : ''}
-    ${realAvgDur   ? sc('Avg cycle duration', realAvgDur, ' min', badge(parseFloat(realAvgDur)<5?'warn':parseFloat(realAvgDur)<10?'warn':'good', parseFloat(realAvgDur)<5?T('badgeShort'):parseFloat(realAvgDur)<10?T('badgeCheck'):T('badgeOK'))) : ''}
-    ${cyclingScore ? sc(T('cyclingScore'), cyclingSeverity, '', badge(cyclingSeverityCls, cyclingScore)) : ''}
-    ${comfortStddev ? sc('Comfort stability', comfortRating, '', badge(comfortCls, '±'+comfortStddev+'°C')) : ''}
-    ${gasEfficiencyPct ? sc('Est. efficiency', gasEfficiencyPct, '%') : ''}
-    ${heatCurveCorr ? sc('Heating curve', heatCurveBehaviour, '', badge(heatCurveCls, 'r='+heatCurveCorr)) : ''}
-  </div>
-  <div style="margin-top:16px">
-    ${insights.map(i => {
-      const icon = i.type==='good' ? '✅' : i.type==='warn' ? '⚠️' : 'ℹ️';
-      const bg   = i.type==='good' ? '#f1f8f1' : i.type==='warn' ? '#fff8e1' : '#e8f4fd';
-      const br   = i.type==='good' ? '#a5d6a7' : i.type==='warn' ? '#ffe082' : '#90caf9';
-      return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;margin-bottom:8px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+i.text+'</span></div>';
-    }).join('')}
-  </div>
-  ${recommendations.length > 0 ? `
-  <div style="margin-top:20px">
-    <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #f0f0f0">${T('recTitle')}</div>
-    ${recommendations.map(r => {
-      const bg = r.type==='warn' ? '#fff8e1' : r.type==='good' ? '#f1f8f1' : '#e8f4fd';
-      const br = r.type==='warn' ? '#f57c00' : r.type==='good' ? '#43a047' : '#1e88e5';
-      return '<div style="background:'+bg+';border-left:4px solid '+br+';border-radius:6px;padding:14px 16px;margin-bottom:12px">'
-        + '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">'+r.title+'</div>'
-        + '<div style="font-size:12px;color:#444;margin-bottom:10px;line-height:1.5">'+r.body+'</div>'
-        + '<div style="font-size:12px;font-weight:600;color:#555;margin-bottom:4px">'+T('recActionsLabel', {})+'</div>'
-        + '<ul style="margin:0 0 10px 0;padding-left:18px;font-size:12px;color:#444;line-height:1.7">'
-        + r.actions.map(a => '<li>'+a+'</li>').join('')
-        + '</ul>'
-        + '<div style="font-size:11px;color:#888;border-top:1px solid rgba(0,0,0,.06);padding-top:6px">'
-        + '<strong>'+T('recImpact')+':</strong> '+r.impact+'</div>'
-        + '</div>';
-    }).join('')}
-  </div>` : ''}
-  ${scatterData.length >= 10 ? `
-  <div style="margin-top:18px">
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">${T('heatDemandSTitle')}</div>
-    <div class="chart-wrap"><div class="ch-tall"><canvas id="cScatter"></canvas></div><button class="zoom-reset" onclick="resetZoom('cScatter')">${T('zoomReset')}</button></div>
-    <p class="note">${T('heatDemandNote1')}${scatterRegression?.balancePoint ? ' '+T('balancePoint',{bp:scatterRegression.balancePoint}) : ''}${heatLossLine ? ' '+T('hlLineLabelShort',{h:heatLossCoeff}) : ''} ${T('scrollZoomNote')}</p>
-  </div>` : ''}
-  ${hasCurve && corrPairs2.length >= 5 ? `
-  <div style="margin-top:18px">
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:6px">${T('flowCurveSTitle')}</div>
-    <div class="chart-wrap"><div class="ch-tall"><canvas id="cFlowCurve"></canvas></div><button class="zoom-reset" onclick="resetZoom('cFlowCurve')">${T('zoomReset')}</button></div>
-    <p class="note">${T('flowCurveNote', {slope: CURVE_SLOPE, shift: CURVE_SHIFT})}</p>
-  </div>` : ''}
-</div>
-
-<div class="box">
-  <h2>${T('ceTitle')}</h2>
-  ${comfortEfficiency.available ? `
-  <div class="grid" style="margin-bottom:16px">
-    ${sc(T('ceStabilityLabel'), '±'+comfortEfficiency.avgStability, '°C')}
-    ${sc(T('ceGasNormLabel'), comfortEfficiency.avgGasNorm, ' m³/°C·h')}
-    ${sc(T('ceTrendStability'), Math.abs(parseFloat(comfortEfficiency.dStability)) < 5 ? T('ceUnchanged') : parseFloat(comfortEfficiency.dStability) > 0 ? T('ceImproved')+' '+Math.abs(comfortEfficiency.dStability)+'%' : T('ceWorsened')+' '+Math.abs(comfortEfficiency.dStability)+'%', '', badge(parseFloat(comfortEfficiency.dStability) > 5 ? 'good' : parseFloat(comfortEfficiency.dStability) < -5 ? 'bad' : 'neutral', ''))}
-    ${sc(T('ceTrendGas'), Math.abs(parseFloat(comfortEfficiency.dGas)) < 5 ? T('ceUnchanged') : parseFloat(comfortEfficiency.dGas) < 0 ? T('ceImproved')+' '+Math.abs(comfortEfficiency.dGas)+'%' : T('ceWorsened')+' '+Math.abs(comfortEfficiency.dGas)+'%', '', badge(parseFloat(comfortEfficiency.dGas) < -5 ? 'good' : parseFloat(comfortEfficiency.dGas) > 5 ? 'warn' : 'neutral', ''))}
-  </div>
-  ${(() => {
-    const ins = comfortEfficiency.insight;
-    if (!ins) return '';
-    const icon = ins.type==='good' ? '✅' : ins.type==='warn' ? '⚠️' : 'ℹ️';
-    const bg   = ins.type==='good' ? '#f1f8f1' : ins.type==='warn' ? '#fff8e1' : '#e8f4fd';
-    const br   = ins.type==='good' ? '#a5d6a7' : ins.type==='warn' ? '#ffe082' : '#90caf9';
-    return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:'+bg+';border-left:3px solid '+br+';border-radius:4px;font-size:13px;line-height:1.5"><span style="font-size:15px;flex-shrink:0">'+icon+'</span><span>'+T(ins.key)+'</span></div>';
-  })()}` : `
-  <div style="padding:18px 16px;background:#f8f9fa;border-radius:8px;border:1px dashed #ddd;text-align:center;color:#888;font-size:13px">
-    <div style="font-size:24px;margin-bottom:8px">📊</div>
-    <div>${comfortEfficiency.noHeating ? T('ceNoHeating') : T('ceNotEnoughData', {need: comfortEfficiency.daysNeed, have: comfortEfficiency.daysHave})}</div>
-  </div>`}
-</div>
-
-<div class="box">
-  <h2>${T('sectionDHW')}</h2>
-  <div class="grid">
-    ${sc('Avg temp', avgDhw, '°C')}
-    ${sc('Avg setpoint', avgDhwTarget, '°C')}
-  </div>
-  ${dhwRows.length >= 2 ? `<div class="ch-tall"><canvas id="cDhw"></canvas></div>` : ''}
-</div>
-
-${apiSummary ? `
-<div class="box">
-  <h2>${T('sectionEnergySummary')}</h2>
-  <p class="note" style="margin-bottom:14px">${T('energySummaryNote', {ts: apiSummary.timestamp ? new Date(apiSummary.timestamp).toLocaleString('en-GB') : 'N/A'})}</p>
-
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('gasSectionHeating')}</div>
-  <div class="grid" style="margin-bottom:16px">
-    ${apiSummary.gasHeat7d   !== null ? sc(T('heatingLastNDays',{n:7}), apiSummary.gasHeat7d,   ' m³') : ''}
-    ${apiSummary.gasHeatMonth !== null ? sc(T('heatingThisMonth'),  apiSummary.gasHeatMonth,' m³') : ''}
-    ${apiSummary.gasHeatYear  !== null ? sc(T('heatingThisYear'),   apiSummary.gasHeatYear, ' m³') : ''}
-    ${apiSummary.gasDhwMonth  !== null ? sc(T('dhwThisMonth'),      apiSummary.gasDhwMonth, ' m³') : ''}
-    ${apiSummary.gasDhwYear   !== null ? sc(T('dhwThisYear'),       apiSummary.gasDhwYear,  ' m³') : ''}
-    ${(apiSummary.gasHeatMonth !== null && apiSummary.gasDhwMonth !== null) ? sc(T('totalThisMonth'), +(apiSummary.gasHeatMonth + apiSummary.gasDhwMonth).toFixed(1), ' m³') : ''}
-    ${(apiSummary.gasHeatYear  !== null && apiSummary.gasDhwYear  !== null) ? sc(T('totalThisYear'),  +(apiSummary.gasHeatYear  + apiSummary.gasDhwYear).toFixed(1),  ' m³') : ''}
-  </div>
-
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('heatSectionTitle')}</div>
-  <div class="grid" style="margin-bottom:16px">
-    ${apiSummary.heatProdHeatMonth !== null ? sc('Heating this month', apiSummary.heatProdHeatMonth, ' kWh') : ''}
-    ${apiSummary.heatProdHeatYear  !== null ? sc('Heating this year',  apiSummary.heatProdHeatYear,  ' kWh') : ''}
-    ${apiSummary.heatProdDhwMonth  !== null ? sc('DHW this month',     apiSummary.heatProdDhwMonth,  ' kWh') : ''}
-    ${apiSummary.heatProdDhwYear   !== null ? sc('DHW this year',      apiSummary.heatProdDhwYear,   ' kWh') : ''}
-    ${apiSummary.pwrConsHeatMonth  !== null ? sc(T('pumpPowerMonth'),   apiSummary.pwrConsHeatMonth,  ' kWh') : ''}
-    ${apiSummary.pwrConsHeatYear   !== null ? sc(T('pumpPowerYear'),    apiSummary.pwrConsHeatYear,   ' kWh') : ''}
-  </div>
-
-  <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:8px">${T('thermalEffTitle')}</div>
-  <div class="grid">
-    ${apiSummary.thermalEffMonth !== undefined ? sc(T('effThisMonth'), apiSummary.thermalEffMonth, '%', badge(apiSummary.thermalEffMonth >= 90 ? 'good' : 'warn', apiSummary.thermalEffMonth >= 90 ? T('badgeCondensing') : T('badgeCheck'))) : ''}
-    ${apiSummary.thermalEffYear  !== undefined ? sc(T('effThisYear'),  apiSummary.thermalEffYear,  '%', badge(apiSummary.thermalEffYear  >= 90 ? 'good' : 'warn', apiSummary.thermalEffYear  >= 90 ? T('badgeCondensing') : T('badgeCheck'))) : ''}
-    ${apiSummary.burnerLifeStarts !== null ? sc('Lifetime starts', apiSummary.burnerLifeStarts) : ''}
-    ${apiSummary.burnerLifeHours  !== null ? sc('Lifetime hours',  apiSummary.burnerLifeHours, 'h') : ''}
-  </div>
-  <p class="note" style="margin-top:10px">${T('thermalEffNote')}</p>
-</div>` : ''}
-
-${gasForecast ? `
-<div class="box">
-  <h2>${T('sectionGasForecast')}</h2>
-  <p class="note" style="margin-bottom:14px">${gasForecast.weather !== 'ok'
-      ? T('fcRecentNote', {n: Math.min(30, gasForecast.daysUsed), base: gasForecast.base, price: gasForecast.gasPrice})
-      : gasForecast.perHdd !== null
-      ? T(gasForecast.calibrated ? 'fcCalNote' : 'fcModelNote', {n: gasForecast.daysUsed, from: gasForecast.firstDay, base: gasForecast.base, k: gasForecast.perHdd, r2: gasForecast.r2 ?? '—', price: gasForecast.gasPrice})
-      : T('fcNoHeatingNote', {n: gasForecast.daysUsed, base: gasForecast.base, price: gasForecast.gasPrice})}</p>
-  <div class="grid">
-    ${sc(T('avgConsPerDay'), gasForecast.avgPerDay, ' m³')}
-    ${sc(T('projNext30'), gasForecast.month30, ' m³', badge('neutral', '≈ €' + gasForecast.costMonth))}
-    ${gasForecast.hasEnoughForAnnual
-      ? sc(T('annualEstLabel'), gasForecast.annualEst, ' m³', badge('neutral', '≈ €' + gasForecast.costAnnual))
-      : sc(T('annualEstLabel'), 'N/A', '', badge('neutral', T(gasForecast.weather !== 'ok' ? 'fcNeedWeather' : 'fcNeedHeating')))}
-  </div>
-  <p class="note" style="margin-top:10px">ℹ️ ${gasForecast.weather === 'ok'
-      ? T('fcWeatherNote', {f: gasForecast.forecastDays})
-      : gasForecast.weather === 'nolocation' ? T('fcNoLocation') : T('fcWeatherDown')}</p>
-</div>` : ''}
-
-${energyRows.length >= 1 ? `
-<div class="box">
-  <h2>${T('sectionEnergySystem')}</h2>
-  <div class="grid">
-    ${hasPV ? sc('PV avg production', avgPV, 'W') : ''}
-    ${hasPV ? sc('PV max production', maxPV, 'W') : ''}
-    ${hasPV ? sc('PV yield (latest day)', lastPvDaily, 'kWh') : ''}
-    ${hasBattery ? sc('Battery level (latest)', lastBattLevel, '%') : ''}
-    ${hasWallbox ? sc('Wallbox avg power', avgWallboxPwr, 'W') : ''}
-  </div>
-  ${energyRows.length < 5 ? `<p class="note">${T('onlySamplesNote', {n: energyRows.length})}</p>` : ''}
-  ${energyFlow?.hasData ? `
-  <div style="margin-top:6px">
-    <div style="font-size:12px;font-weight:700;color:#1a1a2e;margin-bottom:6px">⚡ Daily average power flow (W)</div>
-    <div class="ch-tall"><canvas id="cEnergyFlow"></canvas></div>
-    <div class="flow-legend">
-      <span style="--c:#f9a825">☀️ PV production</span>
-      <span style="--c:#43a047">🔋 Battery charging</span>
-      <span style="--c:#e53935">🔋 Battery discharging</span>
-      <span style="--c:#1e88e5">🔌 Grid draw</span>
-      <span style="--c:#7b1fa2">🚗 Wallbox</span>
-    </div>
-    <p class="note">Daily averages of instantaneous W readings from CSV snapshots (15-min resolution).</p>
-  </div>` : ''}
-  ${hasPV && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cPV"></canvas></div>` : ''}
-  ${hasBattery && energyRows.length >= 2 ? `<div class="ch-tall" style="margin-top:14px"><canvas id="cBatt"></canvas></div>` : ''}
-  ${hasWallbox && energyRows.length >= 2 ? `<div class="ch" style="margin-top:14px"><canvas id="cWallbox"></canvas></div>` : ''}
-</div>` : ''}
-
-<div class="box" id="device-messages">
-  <h2>${T('sectionDeviceMessages')}</h2>
-  <p class="note" style="margin-bottom:12px">${T('deviceMessagesNote')}</p>
-  <div id="msg-list">
-${(() => {
-  // Read messages from viessmann-messages-<installationId>-<deviceId>.json files.
-  // Multiple files exist when an installation has multiple devices (e.g. Vitocal + VitoCharge).
-  // Aggregate all matching files and merge, sorted newest-first.
-  const _fs = require('fs');
-  const _path = require('path');
-  let messages = [];
-  try {
-    const pattern = INSTALLATION_ID
-      ? `viessmann-messages-${INSTALLATION_ID}-`
-      : 'viessmann-messages-';
-    const allFiles = _fs.readdirSync(HB_PATH)
-      .filter(f => f.startsWith(pattern) && f.endsWith('.json'));
-    for (const fname of allFiles) {
-      try {
-        const entries = JSON.parse(_fs.readFileSync(_path.join(HB_PATH, fname), 'utf8'));
-        messages.push(...entries);
-      } catch(_) {}
-    }
-    // Sort merged messages newest-first
-    messages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  } catch(_) {}
-
-  if (!messages.length) {
-    return `<p class="note">${T('deviceMessagesNoFile')} <code>viessmann-messages-${INSTALLATION_ID || 'ID'}-DEVICEID.json</code> ${T('oneFilePerDevice')}</p>`;
-  }
-
-  return messages.slice(0, 20).map(m => {
-    const code = m.errorCode || m.code || '';
-    const desc = translateCode(code);
-    const ts = m.timestamp ? new Date(m.timestamp).toLocaleString('en-GB') : '';
-    const type = code.startsWith('F.') ? 'fault' : code.startsWith('I.') ? 'info' : 'status';
-    const bg   = type === 'fault' ? '#fff3e0' : type === 'info' ? '#e8f4fd' : '#f1f8f1';
-    const br   = type === 'fault' ? '#ffb74d' : type === 'info' ? '#90caf9' : '#a5d6a7';
-    const icon = type === 'fault' ? '⚠️' : type === 'info' ? 'ℹ️' : '✅';
-    return `<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 12px;background:${bg};border-left:3px solid ${br};border-radius:4px;margin-bottom:6px;font-size:13px">
-      <span style="flex-shrink:0">${icon}</span>
-      <div style="flex:1">
-        <strong>${code}</strong>${desc ? ` — ${desc}` : ' — (unknown code)'}
-        ${ts ? `<span style="color:#888;font-size:11px;margin-left:8px">${ts}</span>` : ''}
-        ${m.busAddress ? `<span style="color:#aaa;font-size:11px;margin-left:8px">bus: ${m.busAddress}</span>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-})()}
-  </div>
-</div>
-
-</div>
-<footer>homebridge-viessmann-vicare &nbsp;|&nbsp; ${CSV_FILE}</footer>
-
+<section id="advice"><div class="sh"><div class="si">${icon('bot')}</div><div><h2>${tr('Consigli dell’assistente', 'Assistant advice')}</h2><p class="intro">${tr('Ho analizzato i dati della caldaia, il meteo reale della tua zona e i contatori ufficiali. Ecco cosa ho notato, in ordine di importanza, con cosa fare e quanto puoi risparmiare.', 'I analysed the boiler data, the real weather in your area and the official counters. Here is what I noticed, by importance, with what to do and how much you can save.')}</p></div></div>
+ ${advice.length ? `<div class="bot">${icon('bot')}<p>${tr(`Ho trovato <b>${advice.length}</b> ${advice.length === 1 ? 'suggerimento' : 'suggerimenti'}${totalSave > 5 ? `, per un risparmio stimato di circa <b>${eur(totalSave)} all’anno</b>` : ''}. Le stime usano il tuo consumo reale e il prezzo del gas di ${nf(GAS_PRICE, 2)} €/m³.`, `I found <b>${advice.length}</b> suggestion${advice.length === 1 ? '' : 's'}${totalSave > 5 ? `, for an estimated saving of about <b>${eur(totalSave)} a year</b>` : ''}. Estimates use your real consumption and a gas price of €${nf(GAS_PRICE, 2)}/m³.`)}</p></div>${adviceHtml}` : `<div class="bot">${icon('bot')}<p>${tr('Non ho trovato nulla da correggere nel periodo analizzato. Ottimo!', 'I found nothing to fix in the analysed period. Well done!')}</p></div>`}
+ ${positives.length ? `${sub(tr('Cosa va bene', 'What is going well'))}<ul class="pos">${positives.map(p => `<li>${icon('check')}<span>${p}</span></li>`).join('')}</ul>` : ''}
+</section>
+${S_OVERVIEW}${S_GAS}${S_HEAT}${S_BURNER}${S_DHW}${S_HOUSE}${S_API}${S_ENERGY}${S_ROOMS}${S_MSG}${S_GLOSS}
+</main>
+<footer>${tr('Generato da homebridge-viessmann-vicare', 'Generated by homebridge-viessmann-vicare')} · ${esc(path.basename(CSV_FILE))}${loc ? ` · ${tr('meteo', 'weather')}: Open-Meteo.com` : ''}</footer>
 <script>
-Chart.defaults.font.family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif";
-Chart.defaults.font.size=11;Chart.defaults.color='#888';
-
-// Hide all reset zoom buttons initially
-document.querySelectorAll('.zoom-reset').forEach(b=>b.style.display='none');
-
-// Global reset zoom helper
-function resetZoom(canvasId){
-  const c=document.getElementById(canvasId);
-  if(!c)return;
-  const ch=Chart.getChart(c);
-  if(ch){ch.resetZoom();c.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','none');}
-}
-
-function mk(id,labels,datasets,yLbl){
-  const c=document.getElementById(id); if(!c)return;
-  new Chart(c,{type:'line',data:{labels,datasets},options:{
-    responsive:true,maintainAspectRatio:false,
-    interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',labels:{boxWidth:11,padding:14}}},
-    scales:{
-      x:{ticks:{maxTicksLimit:8,maxRotation:30},grid:{color:'#f5f5f5'}},
-      y:{title:{display:!!yLbl,text:yLbl},grid:{color:'#f5f5f5'}}
-    }
-  }});
-}
-
-// i18n strings injected at build time for browser use
-const _tooltip={
-  outdoor:${JSON.stringify(T('tooltipOutdoor',{x:'__X__',y:'__Y__'}))},
-  flowActual:${JSON.stringify(T('tooltipFlowActual',{x:'__X__',y:'__Y__'}))},
-  flowCurve:${JSON.stringify(T('tooltipFlowCurve',{x:'__X__',y:'__Y__'}))},
-};
-function _tt(tpl,x,y){return tpl.replace('__X__',x).replace('__Y__',y);}
-
-// Overview chart — dual Y axis
+const D=${JSON.stringify(chart)};
+const L=${JSON.stringify({
+  room: tr('Stanza', 'Room'), set: tr('Impostata', 'Set'), flow: tr('Mandata (bruciatore acceso)', 'Flow (burner on)'), sensor: tr('Sonda esterna caldaia', 'Boiler outdoor sensor'), real: tr('Esterna reale', 'Real outdoor'), dhw: tr('Acqua calda', 'Hot water'), ign: IGN_DAILY ? tr('Accensioni/giorno', 'Starts/day') : tr('Accensioni/ora', 'Starts/hour'),
+  heat: tr('Riscaldamento', 'Heating'), dhwGas: tr('Acqua calda', 'Hot water'), tmean: tr('Temp. esterna media', 'Mean outdoor temp.'), day: tr('Giorni', 'Days'), model: tr('Modello', 'Model'),
+  starts: tr('Accensioni', 'Starts'), calc: tr('Curva calcolata', 'Calculated curve'), meas: tr('Mandata misurata', 'Measured flow'), target: tr('Obiettivo', 'Target'), mod: tr('Modulazione', 'Modulation'),
+  pv: tr('Fotovoltaico (W)', 'PV (W)'), batt: tr('Batteria (%)', 'Battery (%)'), outX: tr('Temperatura esterna (°C)', 'Outdoor temperature (°C)') })};
 (function(){
-  const c=document.getElementById('cOverview'); if(!c)return;
-  new Chart(c,{type:'line',data:{
-    labels:${JSON.stringify(ovLabels)},
-    datasets:[
-      {label:"${T('chartRoomTemp')}", yAxisID:'yTemp', data:${JSON.stringify(ovRoom)},    borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.06)',fill:true, tension:0.3,pointRadius:1,borderWidth:2},
-      {label:"${T('chartHC0Setpoint')}",   yAxisID:'yTemp', data:${JSON.stringify(ovSetpoint)},borderColor:'#f1c94e',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[5,4]},
-      ...(${JSON.stringify(ovFlow)}.some(v=>v!==null) ? [{label:"${T('chartFlowTemp')}", yAxisID:'yTemp', data:${JSON.stringify(ovFlow)}, borderColor:'#ef5350',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[2,2]}] : []),
-      {label:"${T('chartDHWTemp')}",      yAxisID:'yTemp', data:${JSON.stringify(ovDhw)},     borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.04)',fill:false,tension:0.3,pointRadius:1,borderWidth:1.5},
-      {label:"${T('chartOutdoorTemp')}",  yAxisID:'yTemp', data:${JSON.stringify(ovOutside)}, borderColor:'#90a4ae',backgroundColor:'transparent',             fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[3,3]},
-      {label:"${T('chartModulation')}",     yAxisID:'yRight',data:${JSON.stringify(ovMod)},     borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.04)',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5},
-      {label:"${T('chartBurnerBar')}",  yAxisID:'yRight',data:${JSON.stringify(ovBurner)},  borderColor:'#37474f',backgroundColor:'rgba(55,71,79,.07)', fill:true, tension:0,  pointRadius:0,borderWidth:1,stepped:true},
-      ...(${JSON.stringify(ovOutsideHum)}.some(v=>v!==null) ? [{label:"${T('chartOutdoorHum')}", yAxisID:'yRight',data:${JSON.stringify(ovOutsideHum)},borderColor:'#7986cb',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,2]}] : [])
-    ]
-  },options:{
-    responsive:true,maintainAspectRatio:false,
-    interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12,usePointStyle:true}}},
-    scales:{
-      x:{ticks:{maxTicksLimit:10,maxRotation:30},grid:{color:'#f5f5f5'}},
-      yTemp:{type:'linear',position:'left', title:{display:true,text:'°C'},grid:{color:'#f5f5f5'},ticks:{color:'#4e9af1'}},
-      yRight:{type:'linear',position:'right',title:{display:true,text:'% / ON–OFF'},grid:{drawOnChartArea:false},min:0,max:110,ticks:{color:'#e65100'}}
-    }
-    }});
-
+if(!window.Chart){document.querySelectorAll('.chart').forEach(e=>e.style.display='none');return;}
+const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+Chart.defaults.color=dark?'#9aa4ba':'#5b6478';Chart.defaults.borderColor=dark?'#26304a':'#e3e7ef';Chart.defaults.font.family='Inter,-apple-system,Segoe UI,Roboto,sans-serif';Chart.defaults.font.size=12.5;
+Chart.defaults.plugins.legend.labels.usePointStyle=true;Chart.defaults.plugins.legend.position='bottom';Chart.defaults.maintainAspectRatio=false;
+const zoom=window.ChartZoom?{zoom:{drag:{enabled:true,backgroundColor:'rgba(47,111,237,.15)'},mode:'x'},pan:{enabled:true,mode:'x',modifierKey:'shift'}}:undefined;
+const time={type:'time',time:{tooltipFormat:'dd/MM/yyyy HH:mm',displayFormats:{hour:'HH:mm',day:'dd/MM',week:'dd/MM',month:'MMM yy'}},ticks:{maxRotation:0,autoSkipPadding:18}};
+const grad=(ctx,c)=>{const g=ctx.createLinearGradient(0,0,0,ctx.canvas.height);g.addColorStop(0,c+'55');g.addColorStop(1,c+'00');return g;};
+const mk=(id,cfg)=>{const el=document.getElementById(id);if(!el)return;const c=new Chart(el,cfg);el.addEventListener('dblclick',()=>c.resetZoom&&c.resetZoom());return c;};
+const line=(label,data,color,extra)=>Object.assign({type:'line',label,data,borderColor:color,backgroundColor:color,pointRadius:0,borderWidth:2,tension:.25},extra||{});
+mk('cOverview',{data:{datasets:[
+  line(L.room,D.overview.room,'#12a150',{borderWidth:2.5}),line(L.set,D.overview.set,'#e5a000',{borderDash:[6,4],stepped:true,borderWidth:1.5,tension:0}),
+  line(L.flow,D.overview.flow,'#ef4444',{borderWidth:1.2}),line(L.dhw,D.overview.dhw,'#a855f7',{borderWidth:1,hidden:true}),
+  line(L.sensor,D.overview.sensor,'#94a3b8',{borderWidth:1}),line(L.real,D.overview.real,'#2f6fed',{pointRadius:3,borderWidth:2.5}),
+  {type:'bar',label:L.ign,data:D.overview.ign,backgroundColor:'rgba(255,122,69,.45)',yAxisID:'y2',barThickness:3}]},
+  options:{interaction:{mode:'nearest',axis:'x',intersect:false},scales:{x:time,y:{title:{display:true,text:'°C'}},y2:{position:'right',beginAtZero:true,grid:{display:false},title:{display:true,text:L.ign}}},plugins:{zoom}}});
+mk('cGas',{data:{labels:D.gas.labels,datasets:[
+  {type:'bar',label:L.heat,data:D.gas.h,backgroundColor:'#e2001a',stack:'g',borderRadius:3},{type:'bar',label:L.dhwGas,data:D.gas.w,backgroundColor:'#2f6fed',stack:'g',borderRadius:3},
+  line(L.tmean,D.gas.t,'#0ea5e9',{yAxisID:'y2',pointRadius:1.5,borderWidth:1.5,spanGaps:true})]},
+  options:{scales:{x:{stacked:true,ticks:{maxTicksLimit:12,maxRotation:0}},y:{stacked:true,beginAtZero:true,title:{display:true,text:'m³'}},y2:{position:'right',grid:{display:false},title:{display:true,text:'°C'}}}}});
+if(D.dd.pts.length)mk('cDD',{data:{datasets:[{type:'scatter',label:L.day,data:D.dd.pts,backgroundColor:'rgba(226,0,26,.5)',pointRadius:3.5},D.dd.line?line(L.model,D.dd.line,'#2f6fed',{borderWidth:2.5,tension:0}):null].filter(Boolean)},
+  options:{scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{beginAtZero:true,title:{display:true,text:'m³'}}},plugins:{tooltip:{callbacks:{label:c=>(c.raw.d?c.raw.d+': ':'')+c.raw.y+' m³ @ '+c.raw.x+' °C'}}}}});
+if(D.curve)mk('cCurve',{data:{datasets:[line(L.calc,D.curve.line,'#ff7a45',{borderWidth:3,tension:.3}),{type:'scatter',label:L.meas,data:D.curve.pts,backgroundColor:'rgba(47,111,237,.45)',pointRadius:3}]},
+  options:{scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{title:{display:true,text:'°C'}}}}});
+if(D.starts)mk('cStarts',{data:{labels:D.starts.labels,datasets:[{type:'bar',label:L.starts,data:D.starts.v,backgroundColor:'#ff7a45',borderRadius:3},line(L.tmean,D.starts.t,'#2f6fed',{yAxisID:'y2',pointRadius:1.5,borderWidth:1.5,spanGaps:true})]},
+  options:{scales:{x:{ticks:{maxTicksLimit:12,maxRotation:0}},y:{beginAtZero:true},y2:{position:'right',grid:{display:false},title:{display:true,text:'°C'}}}}});
+if(D.startsOut.length)mk('cStartsOut',{type:'scatter',data:{datasets:[{label:L.starts,data:D.startsOut,backgroundColor:'rgba(255,122,69,.6)',pointRadius:3.5}]},options:{plugins:{legend:{display:false}},scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{beginAtZero:true,title:{display:true,text:L.starts}}}}});
+if(D.mod)mk('cMod',{type:'scatter',data:{datasets:[{label:L.mod,data:D.mod,backgroundColor:'rgba(168,85,247,.6)',pointRadius:2.5}]},options:{plugins:{legend:{display:false},zoom},scales:{x:time,y:{beginAtZero:true,max:100,title:{display:true,text:'%'}}}}});
+mk('cDhw',{data:{datasets:[line(L.dhw,D.dhw.t,'#ef4444',{borderWidth:1.5,fill:true,backgroundColor:c=>grad(c.chart.ctx,'#ef4444')}),line(L.target,D.dhw.s,'#e5a000',{borderDash:[6,4],stepped:true,tension:0,borderWidth:1.5})]},options:{scales:{x:time,y:{title:{display:true,text:'°C'}}},plugins:{zoom}}});
+if(D.energy)mk('cEnergy',{data:{datasets:[line(L.pv,D.energy.pv,'#f5b400',{fill:true,backgroundColor:c=>grad(c.chart.ctx,'#f5b400')}),line(L.batt,D.energy.batt,'#12a150',{yAxisID:'y2'})]},options:{scales:{x:time,y:{beginAtZero:true},y2:{position:'right',min:0,max:100,grid:{display:false}}},plugins:{zoom}}});
 })();
-${boilerRows.length>=2?`
-mk('cMod',${JSON.stringify(modChart.labels)},[{label:"${T('chartModulation')}",data:${JSON.stringify(modChart.values)},borderColor:'#e65100',backgroundColor:'rgba(230,81,0,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'%');
-mk('cBurner',${JSON.stringify(burnerChart.labels)},[{label:"${T('chartBurnerOnOff')}",data:${JSON.stringify(burnerChart.values)},borderColor:'#1a1a2e',backgroundColor:'rgba(26,26,46,.06)',fill:true,tension:0,pointRadius:0,borderWidth:1.5,stepped:true}],'');`:''}
-${hcRows.length>=2?`
-mk('cRoom',${JSON.stringify(roomChart.labels)},[
-  {label:"${T('chartRoomTemp')}",data:${JSON.stringify(roomChart.values)},borderColor:'#4e9af1',backgroundColor:'rgba(78,154,241,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:"${T('chartSetpoint')}",data:${JSON.stringify(targetChart.values)},borderColor:'#f1c94e',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
-],'°C');`:''}
-${flowVals.length>=2?`
-mk('cFlow',${JSON.stringify(flowChart.labels)},[{label:"${T('chartFlowTemp')}",data:${JSON.stringify(flowChart.values)},borderColor:'#ef5350',backgroundColor:'rgba(239,83,80,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'°C');
-`:''}
-${cycleCount>=3?`
-(function(){const c=document.getElementById('cCycleHist');if(!c)return;new Chart(c,{type:'bar',data:{labels:${JSON.stringify(histBuckets.map(b=>b.label))},datasets:[{label:"${T('chartCycles')}",data:${JSON.stringify(histData)},backgroundColor:${JSON.stringify(histData.map((_,i)=>i===0?'rgba(239,83,80,.7)':'rgba(78,154,241,.6)'))},borderColor:${JSON.stringify(histData.map((_,i)=>i===0?'#ef5350':'#4e9af1'))},borderWidth:1.5,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#f5f5f5'}},y:{title:{display:true,text:"${T('axisCycles')}"},ticks:{stepSize:1}}}}});})();
-`:''}
-${hasGasChart?`
-(function(){
-  const c=document.getElementById('cGas'); if(!c)return;
-  new Chart(c,{
-    type:'bar',
-    data:{
-      labels:${JSON.stringify(gasBarLabels)},
-      datasets:[
-        {type:'bar', label:"${T('chartHeatingM3')}", data:${JSON.stringify(gasBarHeating)}, backgroundColor:'rgba(26,86,180,.75)', borderColor:'#1a56b4', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'bar', label:"${T('chartDHWM3')}",     data:${JSON.stringify(gasBarDhw)},     backgroundColor:'rgba(0,137,123,.65)', borderColor:'#00897b', borderWidth:1, borderRadius:3, stack:'gas'},
-        {type:'line',label:"${T('chartTotalM3')}",   data:${JSON.stringify(gasLineTotal)},  borderColor:'#e53935', backgroundColor:'transparent', borderWidth:2, pointRadius:4, pointBackgroundColor:'#e53935', tension:0.3, yAxisID:'y'}
-      ]
-    },
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
-      plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
-      scales:{
-        x:{grid:{color:'#f5f5f5'},stacked:true},
-        y:{title:{display:true,text:'m\u00b3'},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
-      }
-    }
-  });
-})();
-`:''}
-${dhwRows.length>=2?`
-mk('cDhw',${JSON.stringify(dhwChart.labels)},[
-  {label:"${T('chartDHWTemp')}",data:${JSON.stringify(dhwChart.values)},borderColor:'#00897b',backgroundColor:'rgba(0,137,123,.07)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},
-  {label:"${T('chartDHWSetpoint')}",data:${JSON.stringify(dhwTgtChart.values)},borderColor:'#80cbc4',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:2,borderDash:[5,4]}
-],'°C');`:''}
-${hasPV&&energyRows.length>=2?`
-mk('cPV',${JSON.stringify(pvChart.labels)},[{label:"${T('chartPVProd')}",data:${JSON.stringify(pvChart.values)},borderColor:'#f9a825',backgroundColor:'rgba(249,168,37,.1)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${hasBattery&&energyRows.length>=2?`
-mk('cBatt',${JSON.stringify(battChart.labels)},[{label:"${T('chartBattLevel')}",data:${JSON.stringify(battChart.values)},borderColor:'#43a047',backgroundColor:'rgba(67,160,71,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2},{label:"${T('chartBattChargeW')}",data:${JSON.stringify(battChrChart.values)},borderColor:'#1e88e5',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]},{label:"${T('chartBattDischarge')}",data:${JSON.stringify(battDisChart.values)},borderColor:'#e53935',backgroundColor:'transparent',fill:false,tension:0.3,pointRadius:0,borderWidth:1.5,borderDash:[4,3]}],'');`:''}\n${hasWallbox&&energyRows.length>=2?`
-mk('cWallbox',${JSON.stringify(wallboxChart.labels)},[{label:"${T('chartWallboxW')}",data:${JSON.stringify(wallboxChart.values)},borderColor:'#7b1fa2',backgroundColor:'rgba(123,31,162,.08)',fill:true,tension:0.3,pointRadius:2,borderWidth:2}],'W');`:''}\n${scatterData.length>=10?`
-(function(){
-  const c=document.getElementById('cScatter'); if(!c)return;
-  const pts=${JSON.stringify(scatterData.length > 300 ? scatterData.filter((_,i)=>i%Math.ceil(scatterData.length/300)===0) : scatterData)};
-  const reg=${JSON.stringify(scatterRegression)};
-  const datasets=[{
-    label:"${T('chartHeatDemand')}",
-    data:pts,
-    backgroundColor:'rgba(78,154,241,0.35)',
-    pointRadius:3,
-    pointHoverRadius:5,
-    type:'scatter'
-  }];
-  if(reg){
-    datasets.push({
-      label:"${T('chartTrend')}",
-      data:reg.line,
-      type:'line',
-      borderColor:'#ef5350',
-      backgroundColor:'transparent',
-      borderWidth:2,
-      pointRadius:0,
-      tension:0
-    });
-  }
-  const hlLine=${JSON.stringify(heatLossLine)};
-  if(hlLine){
-    datasets.push({
-      label:${JSON.stringify(heatLossLine ? T('chartHeatLossLine',{h:heatLossCoeff}) : '')},
-      data:hlLine,
-      type:'line',
-      borderColor:'rgba(67,160,71,0.85)',
-      backgroundColor:'transparent',
-      borderWidth:2,
-      borderDash:[5,3],
-      pointRadius:0,
-      tension:0
-    });
-  }
-  new Chart(c,{
-    type:'scatter',
-    data:{datasets},
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      plugins:{
-        legend:{display:true,position:'top'},
-        tooltip:{callbacks:{label:p=>_tt(_tooltip.outdoor,p.parsed.x,p.parsed.y)}}
-      },
-      scales:{
-        x:{title:{display:true,text:"${T('axisOutdoorTemp')}"},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:"${T('axisHeatDemand')}"},beginAtZero:true,grid:{color:'#f5f5f5'}}
-      },
-      plugins:{
-        zoom:{
-          zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'xy',
-               onZoomComplete:({chart})=>{chart.canvas.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','block')}},
-          pan:{enabled:true,mode:'xy'},
-          limits:{x:{min:'original',max:'original'},y:{min:'original',max:'original'}}
-        }
-      }
-    }
-  });
-  c.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
-})();
-`:``}
-${hasCurve && corrPairs2.length >= 5 ? `
-// ── Flow temp vs outdoor + heating curve ───────────────────────────────
-(function(){
-  const c=document.getElementById('cFlowCurve'); if(!c)return;
-  // Real data points: x=outdoor, y=flow_temp (burner-active samples)
-  const pts=${JSON.stringify(
-    (() => {
-      const raw = corrPairs2.length > 400
-        ? corrPairs2.filter((_,i) => i % Math.ceil(corrPairs2.length/400) === 0)
-        : corrPairs2;
-      return raw.map(p => ({ x: p[0], y: p[1] }));
-    })()
-  )};
-  const curve=${JSON.stringify(heatingCurveLine)};
-  new Chart(c,{
-    type:'scatter',
-    data:{datasets:[
-      {
-        label:"${T('chartActualFlow')}",
-        data:pts,
-        backgroundColor:'rgba(78,154,241,0.4)',
-        pointRadius:3,
-        pointHoverRadius:5,
-        type:'scatter'
-      },
-      {
-        label:"${T('chartHeatingCurve',{slope:CURVE_SLOPE,shift:CURVE_SHIFT})}",
-        data:curve,
-        type:'line',
-        borderColor:'#f57c00',
-        backgroundColor:'transparent',
-        borderWidth:2.5,
-        borderDash:[7,4],
-        pointRadius:0,
-        tension:0
-      },
-      {
-        label:"${T('chartCondensingLimit')}",
-        data:[{x:-30,y:55},{x:30,y:55}],
-        type:'line',
-        borderColor:'rgba(67,160,71,0.7)',
-        backgroundColor:'rgba(67,160,71,0.07)',
-        borderWidth:1.5,
-        borderDash:[4,3],
-        pointRadius:0,
-        tension:0,
-        fill:'+1'
-      }
-    ]},
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
-      plugins:{
-        legend:{display:true,position:'top',labels:{boxWidth:11,padding:12}},
-        tooltip:{callbacks:{label:p=>p.dataset.type==='scatter'
-          ? _tt(_tooltip.flowActual,p.parsed.x,p.parsed.y)
-          : _tt(_tooltip.flowCurve,p.parsed.x,p.parsed.y)}}
-      },
-      scales:{
-        x:{title:{display:true,text:"${T('axisOutdoorTemp')}"},grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:"${T('axisFlowTemp')}"},grid:{color:'#f5f5f5'},suggestedMin:20,suggestedMax:80}
-      },
-      plugins:{
-        zoom:{
-          zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'xy',
-               onZoomComplete:({chart})=>{chart.canvas.closest('.chart-wrap')?.querySelector('.zoom-reset')?.style.setProperty('display','block')}},
-          pan:{enabled:true,mode:'xy'},
-          limits:{x:{min:'original',max:'original'},y:{min:'original',max:'original'}}
-        }
-      }
-    }
-  });
-  c.addEventListener('dblclick',()=>Chart.getChart(c)?.resetZoom());
-})();
-` : ''}
-
-// ── Hourly heatmap ──────────────────────────────────────────────────────
-(function(){
-  const data=${JSON.stringify(hourlyStats)};
-  const container=document.getElementById('hmapCells');
-  if(!container)return;
-  data.forEach(h=>{
-    const pct=h.runtimePct;
-    const alpha=pct===0?0:Math.max(0.08,pct/100*0.85+0.08);
-    const bg=pct===0?'#f0f0f0':'rgba(230,81,0,'+alpha.toFixed(2)+')';
-    const fg=pct>50?'#fff':'#444';
-    const cell=document.createElement('div');
-    cell.className='hmap-cell';
-    cell.style.background=bg;
-    cell.style.color=fg;
-    const outsideTxt=h.avgOutside!==null?'  |  outdoor '+h.avgOutside+'\u00b0C':'';
-    cell.title=h.label+': burner ON '+pct+'%'+outsideTxt;
-    cell.innerHTML=pct>0?'<span>'+pct+'%</span>':'<span style="opacity:.3">\u2014</span>';
-    container.appendChild(cell);
-  });
-})();
-
-${dailyEfficiency.hasData?`
-// ── Daily thermal efficiency chart ─────────────────────────────────────
-(function(){
-  const c=document.getElementById('cDailyEff');if(!c)return;
-  const vals=${JSON.stringify(dailyEfficiency.values)};
-  new Chart(c,{
-    type:'line',
-    data:{
-      labels:${JSON.stringify(dailyEfficiency.labels)},
-      datasets:[{
-        label:"${T('chartThermalEff')}",
-        data:vals,
-        borderColor:'#43a047',
-        backgroundColor:'rgba(67,160,71,.09)',
-        fill:true,tension:0.3,pointRadius:5,borderWidth:2,
-        pointBackgroundColor:vals.map(v=>v>=95?'#2d7a3a':v>=85?'#f57c00':'#e53935'),
-        pointBorderColor:'#fff',pointBorderWidth:1.5
-      }]
-    },
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{
-        legend:{display:false},
-        tooltip:{callbacks:{label:ctx=>ctx.parsed.y+'% \u2014 '+(ctx.parsed.y>=95?'Condensing \u2713':ctx.parsed.y>=85?'OK':'Check')}}
-      },
-      scales:{
-        x:{grid:{color:'#f5f5f5'}},
-        y:{title:{display:true,text:'%'},suggestedMin:70,suggestedMax:105,grid:{color:'#f5f5f5'},ticks:{callback:v=>v+'%'}}
-      }
-    }
-  });
-})();
-`:''}
-
-${energyFlow&&energyFlow.hasData?`
-// ── Energy flow chart ───────────────────────────────────────────────────
-(function(){
-  const c=document.getElementById('cEnergyFlow');if(!c)return;
-  const ef=${JSON.stringify(energyFlow)};
-  const ds=[
-    {label:"${T('chartPV')}",             data:ef.pv,      backgroundColor:'rgba(249,168,37,.75)',borderColor:'#f9a825',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:"${T('chartBattCharge')}", data:ef.battChr, backgroundColor:'rgba(67,160,71,.65)', borderColor:'#43a047',borderWidth:1,borderRadius:2,stack:'s'},
-    {label:"${T('chartGridDraw')}",       data:ef.gridDraw,backgroundColor:'rgba(30,136,229,.65)',borderColor:'#1e88e5',borderWidth:1,borderRadius:2,stack:'s'},
-  ];
-  if(ef.wallbox.some(v=>v>0))ds.push({label:"${T('chartWallbox')}",data:ef.wallbox,backgroundColor:'rgba(123,31,162,.55)',borderColor:'#7b1fa2',borderWidth:1,borderRadius:2,stack:'s'});
-  new Chart(c,{
-    type:'bar',
-    data:{labels:ef.labels,datasets:ds},
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
-      plugins:{legend:{position:'top',labels:{boxWidth:11,padding:12}}},
-      scales:{
-        x:{grid:{color:'#f5f5f5'},stacked:true},
-        y:{title:{display:true,text:"${T('axisAvgW')}"},grid:{color:'#f5f5f5'},stacked:true,beginAtZero:true}
-      }
-    }
-  });
-})();
-`:''}
-
-<\/script>
-</body></html>`;
+</script></body></html>`;
 
 fs.writeFileSync(OUT_FILE, html, 'utf8');
 console.log(`Report generated: ${OUT_FILE}`);
-console.log(`Open in browser: file://${OUT_FILE}`);
+console.log(`Open in browser: file://${path.resolve(OUT_FILE)}`);
+if (process.env.REPORT_DEBUG) console.error(JSON.stringify({ coveredDays, gasP, fc, sensorBias, heat: heat && { ...heat, curvePts: heat.curvePts.length }, burner: burner && { ...burner, dayMap: Object.keys(burner.dayMap).length }, scores, overall, advice: advice.map(a => [a.prio, a.title, a.save]), positives }, null, 1));

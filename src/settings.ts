@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.79';
+export const PLUGIN_VERSION = '2.0.80';
 
 /**
  * Default configuration values
@@ -56,7 +56,27 @@ export const DEFAULT_CONFIG = {
     // TRV / Smart Climate discovery (verbose — use only for diagnostics)
     enableRoomSensorDiscovery: false,
     // ViCare Smart Climate: one HomeKit accessory per room (rooms.N.sensors.temperature)
-    enableRoomSensors: false,
+    enableRoomSensors: true,
+    // Pre-2.0.80 "creative" boiler sensors (occupancy = gas, air quality = starts/h, humidity =
+    // temperature progress, leak = pressure, light bulb = modulation). They pollute Apple Home
+    // summaries, so they are off by default.
+    enableLegacyDiagnosticSensors: false,
+    // Contact sensor that opens on boiler fault codes or abnormal water pressure
+    enableBoilerAlarm: true,
+    // Hot water temperature shown in Apple Home: 'sensor' (live) or 'peak' (highest of the last hours)
+    dhwTemperatureDisplay: 'sensor',
+    dhwPeakHours: 6,
+    // Hot water temperature also as a temperature sensor (usable as an automation trigger)
+    exposeDhwTemperatureSensor: true,
+    // Length of the Holiday and Holiday at home switches — days
+    holidayDays: 7,
+    holidayAtHomeDays: 7,
+    // Reduced / Normal / Comfort temperatures as thermostats in Apple Home (their dial changes the level)
+    exposeProgramTemperatures: true,
+    // Optional push message when the boiler alarm opens/clears ({text} placeholder → GET)
+    alarmNotifyUrl: '',
+    // Hot water mode used when the active mode is switched off / hot water is switched on
+    dhwDefaultMode: 'eco',
   },
   advanced: {
     maxConsecutiveErrors: 5,

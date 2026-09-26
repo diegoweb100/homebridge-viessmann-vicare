@@ -452,8 +452,104 @@
           "enableRoomSensors": {
             "title": "Room sensors (ViCare Smart Climate)",
             "type": "boolean",
+            "default": true,
+            "description": "One HomeKit accessory per ViCare Smart Climate room (temperature, humidity when connected, window open/closed). On by default: accessories are created only for rooms your installation really has."
+          },
+          "enableBoilerAlarm": {
+            "title": "Boiler alarm sensor",
+            "type": "boolean",
+            "default": true,
+            "description": "Contact sensor that opens when the boiler reports a fault code (F.xx) or the water pressure is outside 0.8–3.0 bar. Apple Home can send a notification and run automations."
+          },
+          "dhwTemperatureDisplay": {
+            "title": "Hot water temperature shown in Apple Home",
+            "type": "string",
+            "default": "sensor",
+            "oneOf": [
+              {
+                "title": "Live sensor value",
+                "enum": [
+                  "sensor"
+                ]
+              },
+              {
+                "title": "Highest value of the last hours (combi / instantaneous boilers)",
+                "enum": [
+                  "peak"
+                ]
+              }
+            ],
+            "description": "Combi boilers measure the outlet water, which is lukewarm at rest and reaches the set temperature only while a tap is open. 'Peak' shows the highest temperature of the last hours instead."
+          },
+          "dhwPeakHours": {
+            "title": "Peak window (hours)",
+            "type": "integer",
+            "default": 6,
+            "minimum": 1,
+            "maximum": 48,
+            "condition": {
+              "functionBody": "return model.features && model.features.dhwTemperatureDisplay === 'peak';"
+            }
+          },
+          "enableLegacyDiagnosticSensors": {
+            "title": "Legacy diagnostic sensors (not recommended)",
+            "type": "boolean",
             "default": false,
-            "description": "Create one HomeKit accessory per ViCare room (temperature, humidity when a sensor is connected, window open/closed) for installations with a ViCare RoomControl and smart radiator valves. Room names can be set in Custom Names → Room names."
+            "description": "Re-creates the pre-2.0.80 boiler sensors that reuse other HomeKit types: gas usage as occupancy, starts per hour as air quality, temperature progress as humidity, water pressure as a leak sensor, modulation as a light bulb. Apple Home mixes them into the whole-home summaries (e.g. 'Air quality: poor', 'Humidity 100%'), and the leak sensor can raise critical alerts."
+          },
+          "exposeDhwTemperatureSensor": {
+            "title": "Hot water temperature sensor",
+            "type": "boolean",
+            "default": true,
+            "description": "Also exposes the hot water temperature as a temperature sensor, so Apple Home automations can use it as a trigger (e.g. notify when it rises above 40 °C)."
+          },
+          "alarmNotifyUrl": {
+            "title": "Alarm notification URL (optional)",
+            "type": "string",
+            "default": "",
+            "description": "Called when the boiler alarm opens or clears. With {text} in the URL it is an HTTP GET with the message in place of {text} (Telegram: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text={text} — ntfy: https://ntfy.sh/<topic>?message={text}); without {text} it is a JSON POST. Apple Home notifications for the Alarm sensor work without this."
+          },
+          "holidayDays": {
+            "title": "Holiday switch length (days)",
+            "type": "integer",
+            "default": 7,
+            "minimum": 1,
+            "maximum": 60,
+            "description": "The Holiday switch (all circuits at the reduced temperature, hot water off, frost protection) starts today and lasts this many days (earlier versions started tomorrow)."
+          },
+          "holidayAtHomeDays": {
+            "title": "Holiday at home switch length (days)",
+            "type": "integer",
+            "default": 7,
+            "minimum": 1,
+            "maximum": 60,
+            "description": "The Holiday at home switch (ViCare 'Ferie a casa': normal temperature all day, no reduced periods) starts today and lasts this many days, or until another plan is switched on."
+          },
+          "dhwDefaultMode": {
+            "title": "Default hot water mode",
+            "type": "string",
+            "default": "eco",
+            "oneOf": [
+              {
+                "title": "Eco",
+                "enum": [
+                  "eco"
+                ]
+              },
+              {
+                "title": "Comfort",
+                "enum": [
+                  "comfort"
+                ]
+              }
+            ],
+            "description": "Comfort / Eco / Off are mutually exclusive. Switching the active mode off (or hot water on) selects this mode; switching the default mode itself off turns hot water off."
+          },
+          "exposeProgramTemperatures": {
+            "title": "Reduced / Normal / Comfort temperatures in Apple Home",
+            "type": "boolean",
+            "default": true,
+            "description": "Each temperature level of the heating circuit appears as a thermostat: turning its dial changes that level on the boiler (the same as ViCare → heating circuit → Reduced / Normal / Comfort)."
           }
         }
       },
@@ -755,7 +851,17 @@
         "features.enableQuickSelections",
         "features.enableBurnerStatus",
         "features.enableRoomSensors",
-        "features.enableRoomSensorDiscovery"
+        "features.enableRoomSensorDiscovery",
+        "features.enableBoilerAlarm",
+        "features.dhwTemperatureDisplay",
+        "features.dhwPeakHours",
+        "features.alarmNotifyUrl",
+        "features.exposeDhwTemperatureSensor",
+        "features.dhwDefaultMode",
+        "features.holidayDays",
+        "features.holidayAtHomeDays",
+        "features.exposeProgramTemperatures",
+        "features.enableLegacyDiagnosticSensors"
       ]
     },
     {

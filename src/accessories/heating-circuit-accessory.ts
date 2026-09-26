@@ -1,7 +1,9 @@
+import { PLUGIN_NAME } from '../settings';
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { ViessmannHistoryLogger } from './history-logger';
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
+type HeatingPlan = 'off' | 'normal' | 'comfort' | 'extended' | 'holiday' | 'holidayAtHome';
 type ProgramType = 'reduced' | 'normal' | 'comfort';
 
 export class ViessmannHeatingCircuitAccessory {
@@ -14,7 +16,6 @@ export class ViessmannHeatingCircuitAccessory {
   private extendedHeatingService?: Service;
   
   // Temperature Program Services (NEW)
-  private ridottaService?: Service;
   private normaleService?: Service;
   private comfortService?: Service;
   
@@ -228,7 +229,11 @@ export class ViessmannHeatingCircuitAccessory {
         
         // Get current status for this quick selection
         if (selectionFeature.properties?.active?.value !== undefined) {
-          const isActive = selectionFeature.properties.active.value;
+          const endStr = String(selectionFeature.properties?.end?.value || '');
+          const nowD = new Date();
+          const todayStr = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-${String(nowD.getDate()).padStart(2, '0')}`;
+          const isActive = selectionFeature.properties.active.value === true
+            || (/^\d{4}-\d{2}-\d{2}/.test(endStr) && endStr.slice(0, 10) >= todayStr);   // scheduled counts as ON
           switch (selectionType) {
             case 'holiday':
               this.states.HolidayActive = isActive;
@@ -277,7 +282,7 @@ export class ViessmannHeatingCircuitAccessory {
       const hasDeactivate = comfortProgram.commands?.deactivate;
       const hasSetTemperature = comfortProgram.commands?.setTemperature;
       
-      // Check for alternative methods
+      // Extended heating: forcedLastFromSchedule (Vitodens) or comfort activate/deactivate
       const forcedProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.forcedLastFromSchedule`);
       const hasForcedActivate = forcedProgram?.commands?.activate;
       const hasForcedDeactivate = forcedProgram?.commands?.deactivate;
@@ -287,6 +292,9 @@ export class ViessmannHeatingCircuitAccessory {
                           hasSetTemperature || 
                           (hasForcedActivate && hasForcedDeactivate);
       
+      // Real, separately controllable functions (only these are published to HomeKit)
+      this.hasComfortActivate = !!(hasActivate && hasDeactivate);
+      this.hasForcedActivate = !!(hasForcedActivate && hasForcedDeactivate);
       if (hasAnyMethod) {
         this.availableQuickSelections.push('extendedHeating');
         // Initial state: OR of all three signals (same logic as update cycle).
@@ -295,6 +303,8 @@ export class ViessmannHeatingCircuitAccessory {
         const activeProg      = features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`);
         const activeIsComfort = activeProg?.properties?.value?.value === this.comfortFeatureSuffix;
         this.states.ExtendedHeatingActive = comfortActive || forcedActive || activeIsComfort;
+        this.comfortOn = !!(comfortActive || activeIsComfort);
+        this.forcedOn = !!forcedActive;
         this.platform.log.debug(
           `HC${this.circuitNumber} ExtendedHeating initial:` +
           ` comfort=${comfortActive} forced=${forcedActive} active=${activeProg?.properties?.value?.value}` +
@@ -316,6 +326,15 @@ export class ViessmannHeatingCircuitAccessory {
       } else {
         this.platform.log.debug(`Extended Heating not available for circuit ${this.circuitNumber} - insufficient control methods`);
       }
+    }
+
+    // Dial at startup: the temperature of the program really in force (not the last one read)
+    {
+      const ap = String(features.find(f => f.feature === `${circuitPrefix}.operating.programs.active`)?.properties?.value?.value || '').toLowerCase();
+      const hol = features.find(f => f.feature === 'heating.operating.programs.holiday')?.properties?.active?.value;
+      const key: ProgramType = hol || ap.startsWith('reduced') ? 'reduced' : ap.startsWith('comfort') ? 'comfort' : 'normal';
+      const t = this.programTemperatures[key];
+      if (typeof t === 'number' && t > 0) { this.currentProgram = key; this.states.HeatingThresholdTemperature = t; }
     }
 
     // Log capabilities summary
@@ -367,15 +386,15 @@ export class ViessmannHeatingCircuitAccessory {
   private setupHeaterCoolerService() {
     // Active characteristic (On/Off)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.Active)
-      .onGet(() => this.currentMode === 'heating' ? 
-        this.platform.Characteristic.Active.ACTIVE : 
+      .onGet(() => (this.plan() !== 'off' && this.plan() !== 'holiday') ?
+        this.platform.Characteristic.Active.ACTIVE :
         this.platform.Characteristic.Active.INACTIVE)
       .onSet(this.setActive.bind(this));
 
     // Current Heater Cooler State (read-only)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
       .onGet(() => {
-        if (this.currentMode === 'standby' || this.currentMode === 'off') {
+        if (this.plan() === 'off' || this.plan() === 'holiday') {
           return this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE;
         }
         // For heating circuits, we're always in heating mode when active
@@ -424,7 +443,126 @@ export class ViessmannHeatingCircuitAccessory {
       .onSet(() => {}); // Read-only
   }
 
-private setupTemperatureProgramServices() {
+// ─── Temperature levels (Reduced / Normal / Comfort) ─────────────────────────
+  // The boiler's time schedule uses three temperature levels. They cannot be "switched on",
+  // only changed (setTemperature), so each one is a thermostat in Home: its dial changes the
+  // level. Usable in automations ("cold outside → Normal to 20°").
+  private levelServices: Partial<Record<ProgramType, Service>> = {};
+
+  /** Each level is its own accessory (own tile and name in Home), not a service of the circuit. */
+  private levelUuid(prog: ProgramType): string {
+    return this.platform.api.hap.uuid.generate(`${this.installation.id}-${this.gateway.serial}-${this.device.id}-hc${this.circuitNumber}-level-${prog}`);
+  }
+
+  private removeLevelAccessory(prog: ProgramType) {
+    const acc = this.platform.accessories.find(a => a.UUID === this.levelUuid(prog));
+    if (acc) {
+      this.platform.api.unregisterPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [acc]);
+      this.platform.accessories.splice(this.platform.accessories.indexOf(acc), 1);
+    }
+  }
+
+  private addLevelThermostat(prog: ProgramType, name: string) {
+    const C = this.platform.Characteristic;
+    const S = this.platform.Service;
+    const uuid = this.levelUuid(prog);
+    let acc = this.platform.accessories.find(a => a.UUID === uuid);
+    const isNew = !acc;
+    if (!acc) {
+      acc = new this.platform.api.platformAccessory(name, uuid);
+      this.platform.accessories.push(acc);
+    }
+    acc.getService(S.AccessoryInformation)!
+      .setCharacteristic(C.Manufacturer, 'Viessmann')
+      .setCharacteristic(C.Model, `Heating circuit ${this.circuitNumber} – ${prog} temperature`)
+      .setCharacteristic(C.SerialNumber, `${this.gateway.serial}-hc${this.circuitNumber}-${prog}`);
+    const svc = acc.getService(S.Thermostat) || acc.addService(S.Thermostat, name);
+    svc.setCharacteristic(C.Name, name);
+    const lim = this.temperatureConstraints;
+    const temp = () => {
+      const t = Number(this.programTemperatures[prog]);
+      return Math.min(Math.max(Number.isFinite(t) && t > 0 ? t : 20, lim.min), lim.max);
+    };
+    // On = the level the boiler uses right now (time schedule); the others are Off. Switching a tile
+    // to Heat shows its dial so its temperature can be changed; it returns to the real state
+    // two minutes later (a level cannot be forced on — ViCare has no such command).
+    const isOn = () => this.levelInForce() === prog || (this.levelEditUntil[prog] ?? 0) > Date.now();
+    svc.getCharacteristic(C.CurrentHeatingCoolingState)
+      .onGet(() => this.levelInForce() === prog ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
+    const tgt = svc.getCharacteristic(C.TargetHeatingCoolingState);
+    tgt.setProps({ validValues: [C.TargetHeatingCoolingState.OFF, C.TargetHeatingCoolingState.HEAT] });
+    tgt.onGet(() => isOn() ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF)
+      .onSet((v: CharacteristicValue) => {
+        if (v === C.TargetHeatingCoolingState.HEAT && this.levelInForce() !== prog) {
+          this.levelEditUntil[prog] = Date.now() + 120000;
+          setTimeout(() => this.refreshLevelThermostats(), 121000);
+        } else if (v === C.TargetHeatingCoolingState.OFF) {
+          this.levelEditUntil[prog] = 0;
+          setTimeout(() => this.refreshLevelThermostats(), 300);   // the level in force cannot be switched off
+        }
+      });
+    svc.getCharacteristic(C.CurrentTemperature)
+      .setProps({ minValue: 0, maxValue: 100, minStep: 0.5 })
+      .onGet(temp);
+    svc.getCharacteristic(C.TargetTemperature)
+      .setProps({ minValue: lim.min, maxValue: lim.max, minStep: 1 })
+      .onGet(temp)
+      .onSet(async (v: CharacteristicValue) => this.setLevelTemperature(prog, Number(v)));
+    svc.getCharacteristic(C.TemperatureDisplayUnits)
+      .onGet(() => C.TemperatureDisplayUnits.CELSIUS)
+      .onSet(() => {});
+    this.levelServices[prog] = svc;
+    if (isNew) this.platform.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [acc]);
+    else this.platform.api.updatePlatformAccessories([acc]);
+  }
+
+  /** Level in force now: follows the time schedule (programs.active) and the special programs. */
+  private levelInForce(): ProgramType | null {
+    const p = this.plan();
+    if (p === 'off') return null;
+    if (p === 'holiday') return 'reduced';          // Holiday: reduced temperature
+    if (p === 'holidayAtHome') return 'normal';     // Holiday at home: normal all day
+    if (p === 'extended' || p === 'comfort') return 'comfort';
+    return (['reduced', 'normal', 'comfort'] as string[]).includes(this.currentProgram) ? this.currentProgram as ProgramType : null;
+  }
+
+  private levelEditUntil: Partial<Record<ProgramType, number>> = {};
+
+  private async setLevelTemperature(prog: ProgramType, value: number) {
+    const t = Math.round(Math.min(Math.max(value, this.temperatureConstraints.min), this.temperatureConstraints.max));
+    const feature = `heating.circuits.${this.circuitNumber}.operating.programs.${prog === 'comfort' ? this.comfortFeatureSuffix : prog}`;
+    this.platform.log.info(`🌡️ HC${this.circuitNumber} ${prog} temperature ${this.programTemperatures[prog]}°C → ${t}°C`);
+    try {
+      await this.cmd(feature, 'setTemperature', { targetTemperature: t });
+    } catch (e: any) {
+      this.platform.log.error(`❌ HC${this.circuitNumber} ${prog} temperature not changed: ${e?.message || e}`);
+      setTimeout(() => this.refreshLevelThermostats(), 1500);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    this.programTemperatures[prog] = t;
+    if (this.currentProgram === prog) {
+      this.states.HeatingThresholdTemperature = t;
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, this.getThresholdForDisplay());
+    }
+    this.refreshLevelThermostats();
+  }
+
+  private refreshLevelThermostats() {
+    const C = this.platform.Characteristic;
+    for (const [prog, svc] of Object.entries(this.levelServices) as [ProgramType, Service][]) {
+      const t = Number(this.programTemperatures[prog]);
+      if (!Number.isFinite(t) || t <= 0) continue;
+      const v = Math.min(Math.max(t, this.temperatureConstraints.min), this.temperatureConstraints.max);
+      svc.updateCharacteristic(C.CurrentTemperature, v);
+      svc.updateCharacteristic(C.TargetTemperature, v);
+      const inForce = this.levelInForce() === prog;
+      const on = inForce || (this.levelEditUntil[prog] ?? 0) > Date.now();
+      svc.updateCharacteristic(C.CurrentHeatingCoolingState, inForce ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
+      svc.updateCharacteristic(C.TargetHeatingCoolingState, on ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF);
+    }
+  }
+
+  private setupTemperatureProgramServices() {
     const config = this.platform.config as ViessmannPlatformConfig;
     const customNames = config.customNames || {};
     
@@ -452,33 +590,15 @@ private setupTemperatureProgramServices() {
     // Helper function to sanitize service names for HomeKit
     const sanitizeName = (name: string): string => {
       return name
-        .replace(/[^\w\s']/g, ' ') // Replace special chars with spaces
+        .replace(/[^\p{L}\p{N}\s']/gu, ' ') // keep letters of any language (è, ü …), digits, spaces, apostrophes
         .replace(/\s+/g, ' ')      // Collapse multiple spaces
         .trim();                   // Remove leading/trailing spaces
     };
 
-    // Create services for each available temperature program - KEEPING installation name
-    if (this.availablePrograms.includes('reduced')) {
-      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${reducedName} ${this.programTemperatures.reduced}C`);
-      this.platform.log.info(`🏷️ Creating Reduced service: "${serviceName}"`);
-      
-      this.ridottaService = this.accessory.addService(
-        this.platform.Service.Switch, 
-        serviceName, 
-        `hc${this.circuitNumber}-reduced-${subtypeVersion}` // 🔧 DYNAMIC SUBTYPE
-      );
-
-      // 🔧 CRITICAL: Set both Name characteristic AND displayName
-      this.ridottaService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
-      this.ridottaService.displayName = serviceName;
-      
-      this.ridottaService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentProgram === 'reduced')
-        .onSet(this.setReducedProgram.bind(this));
-    }
-
+    // No "Reduced" switch: the reduced temperature cannot be selected on the boiler (the time
+    // schedule decides it, ViCare has no "activate reduced"). Its temperature is still readable.
     if (this.availablePrograms.includes('normal')) {
-      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${normalName} ${this.programTemperatures.normal}C`);
+      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${normalName}`);
       this.platform.log.info(`🏷️ Creating Normal service: "${serviceName}"`);
       
       this.normaleService = this.accessory.addService(
@@ -492,12 +612,16 @@ private setupTemperatureProgramServices() {
       this.normaleService.displayName = serviceName;
       
       this.normaleService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentProgram === 'normal')
-        .onSet(this.setNormalProgram.bind(this));
+        .onGet(() => this.plan() === 'normal')
+        .onSet((v: CharacteristicValue) => this.onPlanSwitch('normal', v));
     }
 
-    if (this.availablePrograms.includes('comfort')) {
-      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${comfortName} ${this.programTemperatures.comfort}C`);
+    // No separate heating "Comfort" switch: ViCare offers only Heating/Off plus the quick selections
+    // (Extended heating, Holiday, Holiday at home). comfort.activate, where it is the only way to
+    // extend heating, is driven by the Extended heating switch. Opt-in: features.exposeComfortProgram.
+    if (this.availablePrograms.includes('comfort') && this.hasComfortActivate && this.hasForcedActivate
+        && (this.platform.config as any).features?.exposeComfortProgram === true) {
+      const serviceName = sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} ${comfortName}`);
       this.platform.log.info(`🏷️ Creating Comfort service: "${serviceName}"`);
       
       this.comfortService = this.accessory.addService(
@@ -511,8 +635,17 @@ private setupTemperatureProgramServices() {
       this.comfortService.displayName = serviceName;
       
       this.comfortService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.currentProgram === 'comfort')
-        .onSet(this.setComfortProgram.bind(this));
+        .onGet(() => this.plan() === 'comfort')
+        .onSet((v: CharacteristicValue) => this.onPlanSwitch('comfort', v));
+    }
+
+    if ((this.platform.config as any).features?.exposeProgramTemperatures !== false) {
+      for (const [prog, label] of [['reduced', reducedName], ['normal', normalName], ['comfort', comfortName]] as [ProgramType, string][]) {
+        if (!this.availablePrograms.includes(prog)) continue;
+        this.addLevelThermostat(prog, sanitizeName(`${installationName} ${heatingCircuitName} ${this.circuitNumber} Temp ${label}`));
+      }
+    } else {
+      for (const prog of ['reduced', 'normal', 'comfort'] as ProgramType[]) this.removeLevelAccessory(prog);
     }
 
     this.platform.log.info(`✅ HC${this.circuitNumber} temperature program services setup completed for programs: [${this.availablePrograms.join(', ')}] with subtype version: ${subtypeVersion}`);
@@ -543,7 +676,7 @@ private setupTemperatureProgramServices() {
 
     // Create services for each available quick selection - KEEPING installation name
     if (this.availableQuickSelections.includes('holiday')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${holidayName}`;
+      const serviceName = `${installationName} ${customNames.heatingCircuit || 'Heating Circuit'} ${this.circuitNumber} ${holidayName}`;
       this.platform.log.info(`🏷️ Creating Holiday service: "${serviceName}"`);
       
       this.holidayService = this.accessory.addService(
@@ -557,12 +690,12 @@ private setupTemperatureProgramServices() {
       this.holidayService.displayName = serviceName;
       
       this.holidayService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.states.HolidayActive)
-        .onSet(this.setHolidayMode.bind(this));
+        .onGet(() => this.plan() === 'holiday')
+        .onSet((v: CharacteristicValue) => this.onPlanSwitch('holiday', v));
     }
 
     if (this.availableQuickSelections.includes('holidayAtHome')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${holidayAtHomeName}`;
+      const serviceName = `${installationName} ${customNames.heatingCircuit || 'Heating Circuit'} ${this.circuitNumber} ${holidayAtHomeName}`;
       this.platform.log.info(`🏷️ Creating Holiday At Home service: "${serviceName}"`);
       
       this.holidayAtHomeService = this.accessory.addService(
@@ -576,12 +709,12 @@ private setupTemperatureProgramServices() {
       this.holidayAtHomeService.displayName = serviceName;
       
       this.holidayAtHomeService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.states.HolidayAtHomeActive)
-        .onSet(this.setHolidayAtHomeMode.bind(this));
+        .onGet(() => this.plan() === 'holidayAtHome')
+        .onSet((v: CharacteristicValue) => this.onPlanSwitch('holidayAtHome', v));
     }
 
     if (this.availableQuickSelections.includes('extendedHeating')) {
-      const serviceName = `${installationName} Heating Circuit ${this.circuitNumber} ${extendedHeatingName}`;
+      const serviceName = `${installationName} ${customNames.heatingCircuit || 'Heating Circuit'} ${this.circuitNumber} ${extendedHeatingName}`;
       this.platform.log.info(`🏷️ Creating Extended Heating service: "${serviceName}"`);
       
       this.extendedHeatingService = this.accessory.addService(
@@ -595,8 +728,8 @@ private setupTemperatureProgramServices() {
       this.extendedHeatingService.displayName = serviceName;
       
       this.extendedHeatingService.getCharacteristic(this.platform.Characteristic.On)
-        .onGet(() => this.states.ExtendedHeatingActive)
-        .onSet(this.setExtendedHeatingMode.bind(this));
+        .onGet(() => this.plan() === this.extendedPlan())
+        .onSet((v: CharacteristicValue) => this.onPlanSwitch(this.extendedPlan(), v));
     }
 
     // 🛠️ Push initial state to HomeKit — onGet alone is not enough because HAP uses
@@ -623,7 +756,7 @@ private setupTemperatureProgramServices() {
     for (const subtype of tempProgramSubtypes) {
       const service = this.accessory.services.find(service => 
         service.UUID === this.platform.Service.Switch.UUID && 
-        service.subtype === subtype
+        !!service.subtype && (service.subtype === subtype || /^-(stable|\d{8})$/.test(service.subtype.slice(subtype.length)) && service.subtype.startsWith(subtype))
       );
       
       if (service) {
@@ -637,7 +770,6 @@ private setupTemperatureProgramServices() {
     }
 
     // Clear references
-    this.ridottaService = undefined;
     this.normaleService = undefined;
     this.comfortService = undefined;
   }
@@ -649,7 +781,7 @@ private setupTemperatureProgramServices() {
     for (const subtype of quickSelectionSubtypes) {
       const service = this.accessory.services.find(service => 
         service.UUID === this.platform.Service.Switch.UUID && 
-        service.subtype === subtype
+        !!service.subtype && (service.subtype === subtype || /^-(stable|\d{8})$/.test(service.subtype.slice(subtype.length)) && service.subtype.startsWith(subtype))
       );
       
       if (service) {
@@ -668,544 +800,213 @@ private setupTemperatureProgramServices() {
     this.extendedHeatingService = undefined;
   }
 
-  // Temperature Program Handlers
-  private async setReducedProgram(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on && this.currentProgram !== 'reduced') {
-      await this.changeTemperatureProgram('reduced');
-    } else if (!on && this.currentProgram === 'reduced') {
-      // Can't turn off without selecting another - revert
-      setTimeout(() => {
-        this.ridottaService?.updateCharacteristic(this.platform.Characteristic.On, true);
-      }, 100);
-      this.platform.log.warn('Cannot turn off Reduced program. Please select Normal or Comfort instead.');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    }
-  }
 
-  private async setNormalProgram(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on && this.currentProgram !== 'normal') {
-      await this.changeTemperatureProgram('normal');
-    } else if (!on && this.currentProgram === 'normal') {
-      // Can't turn off without selecting another - revert
-      setTimeout(() => {
-        this.normaleService?.updateCharacteristic(this.platform.Characteristic.On, true);
-      }, 100);
-      this.platform.log.warn('Cannot turn off Normal program. Please select Reduced or Comfort instead.');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    }
-  }
 
-  private async setComfortProgram(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on && this.currentProgram !== 'comfort') {
-      await this.changeTemperatureProgram('comfort');
-    } else if (!on && this.currentProgram === 'comfort') {
-      // Can't turn off without selecting another - revert
-      setTimeout(() => {
-        this.comfortService?.updateCharacteristic(this.platform.Characteristic.On, true);
-      }, 100);
-      this.platform.log.warn('Cannot turn off Comfort program. Please select Reduced or Normal instead.');
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-    }
-  }
 
-  private async changeTemperatureProgram(newProgram: 'reduced' | 'normal' | 'comfort') {
-    try {
-      // Map canonical program names to actual API feature suffixes for this device.
-      // Vitocal gen3 uses 'comfortHeating' instead of 'comfort'.
-      const programMap: Record<string, string> = {
-        'reduced': 'reduced',
-        'normal': 'normal',
-        'comfort': this.comfortFeatureSuffix,
-      };
-      
-      const targetTemperature = this.programTemperatures[newProgram];
-      
-      // Set the temperature for the selected program
-      const success = await this.platform.viessmannAPI.executeCommand(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id,
-        `heating.circuits.${this.circuitNumber}.operating.programs.${programMap[newProgram]}`,
-        'setTemperature',
-        { targetTemperature }
-      );
 
-      if (success) {
-        this.currentProgram = newProgram;
-        this.states.HeatingThresholdTemperature = targetTemperature;
-        
-        // 🛡️ Guard: block regular update cycle from overwriting program/temp until API confirms
-        const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
-        this.pendingProgramUntil = Date.now() + guardMs;
-        this.pendingTempUntil    = Date.now() + guardMs;
-        this.pendingExpectedProgram = newProgram;
-        this.pendingPreviousProgram = this.currentProgram;
-        this.pendingExpectedTemp = targetTemperature;
-        this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
-
-        // Update HeaterCooler temperature display
-        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, targetTemperature);
-        
-        this.platform.log.info(`Heating circuit ${this.circuitNumber} program changed to: ${newProgram.toUpperCase()} (${targetTemperature}°C)`);
-        
-        // Update all temperature program switches
-        this.updateTemperatureProgramSwitches();
-
-        // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
-        this.scheduleCommandConfirmation(undefined, targetTemperature);
-      } else {
-        this.platform.log.error(`Failed to set heating circuit ${this.circuitNumber} to ${newProgram} program`);
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      }
-    } catch (error) {
-      this.platform.log.error(`Error changing temperature program for circuit ${this.circuitNumber}:`, error);
-      // Restore previous state
-      this.updateTemperatureProgramSwitches();
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-  }
 
   private updateTemperatureProgramSwitches() {
+    this.refreshPlanSwitches();
+  }
+
+
+  async setActive(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
+    const on = value === this.platform.Characteristic.Active.ACTIVE;
+    if (on && this.plan() === 'off') await this.applyPlan(this.defaultPlan());
+    else if (!on && this.plan() !== 'off') await this.applyPlan('off');
+  }
+
+  // ─── Heating "plans" ────────────────────────────────────────────────────────
+  // The boiler's own mutually exclusive choices (ViCare itself asks to replace one with the
+  // other), verified with the ViCare app on an E3 Vitodens. Only those the boiler really has
+  // are published to HomeKit:
+  //   off            → operating mode "standby"
+  //   normal         → mode "heating", no special program: the time schedule (Normal/Reduced)
+  //   extended       → "Extended heating": forcedLastFromSchedule (keeps the comfort slot going)
+  //   comfort        → comfort.activate, when the boiler has it (if there is no
+  //                    forcedLastFromSchedule, the Extended heating switch drives this one)
+  //   holiday        → "Holiday": every circuit at the REDUCED temperature, hot water OFF,
+  //                    frost protection, 00:00 of the first day to 23:59 of the last
+  //   holidayAtHome  → "Holiday at home": the NORMAL temperature is kept all day (no reduced
+  //                    periods); hot water as usual
+  // Switching one on switches all the others off; switching the active one off returns to
+  // Normal. ViCare reports a scheduled holiday as active=false until it starts: scheduled = ON.
+  private planLock: Promise<void> = Promise.resolve();
+  private pendingPlan?: HeatingPlan;
+  private pendingPlanUntil = 0;
+  private hasComfortActivate = false;
+  private hasForcedActivate = false;
+  private comfortOn = false;
+  private forcedOn = false;
+
+  /** The Extended heating switch: forcedLastFromSchedule when it exists, else comfort. */
+  private extendedPlan(): HeatingPlan {
+    return this.hasForcedActivate ? 'extended' : 'comfort';
+  }
+
+  private defaultPlan(): HeatingPlan {
+    return 'normal';
+  }
+
+  /** Current plan as seen by HomeKit (the expected one while a command is being confirmed). */
+  private plan(): HeatingPlan {
+    const real = this.statesPlan();
+    if (this.pendingPlan && Date.now() < this.pendingPlanUntil) {
+      if (real === this.pendingPlan) this.pendingPlan = undefined;   // API confirmed
+      else return this.pendingPlan;
+    }
+    return real;
+  }
+
+  private statesPlan(): HeatingPlan {
+    // Special programs win over the operating mode: ViCare runs them even with the circuit in
+    // standby (verified: programs.active = holidayAtHome with modes.active = standby).
+    if (this.states.HolidayActive) return 'holiday';
+    if (this.states.HolidayAtHomeActive) return 'holidayAtHome';
+    if (this.forcedOn) return 'extended';
+    if (this.comfortOn) return 'comfort';
+    if (this.currentMode === 'standby') return 'off';
+    return 'normal';
+  }
+
+  private async onPlanSwitch(target: HeatingPlan, value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
+    const on = value as boolean;
+    const cur = this.plan();
+    if (on && cur !== target) await this.applyPlan(target);
+    else if (!on && cur === target) await this.applyPlan(target === this.defaultPlan() ? 'off' : this.defaultPlan());
+    else setTimeout(() => this.refreshPlanSwitches(), 200);   // nothing to do: re-sync the switch
+  }
+
+  private applyPlan(target: HeatingPlan): Promise<void> {
+    const run = this.planLock.then(() => this.doApplyPlan(target));
+    this.planLock = run.catch(() => undefined);
+    return run;
+  }
+
+  private async cmd(feature: string, command: string, params: any = {}): Promise<void> {
+    const ok = await this.platform.viessmannAPI.executeCommand(this.installation.id, this.gateway.serial, this.device.id, feature, command, params);
+    if (!ok) throw new Error(`${feature}.${command} refused by the Viessmann API`);
+  }
+
+  private async doApplyPlan(target: HeatingPlan) {
+    const from = this.plan();
+    if (from === target) { this.refreshPlanSwitches(); return; }
+    const hc = `heating.circuits.${this.circuitNumber}`;
+    const day = (offset: number) => { const d = new Date(); d.setDate(d.getDate() + offset); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    const f = (this.platform.config as any).features || {};
+    const days = (v: any, def: number) => Math.max(1, Math.round(Number(v)) || def);
+    this.platform.log.info(`🎛️ HC${this.circuitNumber} plan ${from.toUpperCase()} → ${target.toUpperCase()}`);
+    try {
+      // 1. switch off every special program that is not the target
+      if (this.states.HolidayActive && target !== 'holiday') { await this.cmd('heating.operating.programs.holiday', 'unschedule'); this.states.HolidayActive = false; }
+      if (this.states.HolidayAtHomeActive && target !== 'holidayAtHome') { await this.cmd('heating.operating.programs.holidayAtHome', 'unschedule'); this.states.HolidayAtHomeActive = false; }
+      if ((this.forcedOn || this.comfortOn || this.states.ExtendedHeatingActive) && target !== 'extended' && target !== 'comfort') {
+        await this.stopComfort(); this.forcedOn = false; this.comfortOn = false; this.states.ExtendedHeatingActive = false;
+      } else if (this.forcedOn && target === 'comfort') { await this.cmd(`${hc}.operating.programs.forcedLastFromSchedule`, 'deactivate'); this.forcedOn = false; }
+      else if (this.comfortOn && target === 'extended') { await this.cmd(`${hc}.operating.programs.${this.comfortFeatureSuffix}`, 'deactivate'); this.comfortOn = false; }
+      this.states.ExtendedHeatingActive = this.forcedOn || this.comfortOn;
+      // 2. operating mode
+      if (target === 'off' && this.currentMode !== 'standby') await this.setMode('standby');
+      if (['normal', 'comfort', 'extended'].includes(target) && this.currentMode !== 'heating' && this.availableModes.includes('heating')) await this.setMode('heating');
+      // 3. the target itself
+      if (target === 'holidayAtHome') {
+        await this.cmd('heating.operating.programs.holidayAtHome', 'schedule', { start: day(0), end: day(days(f.holidayAtHomeDays ?? f.awayDays /* pre-release name */, 7)) });
+        this.states.HolidayAtHomeActive = true;
+      } else if (target === 'holiday') {
+        await this.cmd('heating.operating.programs.holiday', 'schedule', { start: day(0), end: day(days(f.holidayDays, 7)) });
+        this.states.HolidayActive = true;
+      } else if (target === 'extended') {
+        await this.activateWhenExecutable(`${hc}.operating.programs.forcedLastFromSchedule`, 'Extended heating');
+        this.forcedOn = true;
+      } else if (target === 'comfort') {
+        await this.activateWhenExecutable(`${hc}.operating.programs.${this.comfortFeatureSuffix}`, 'Comfort');
+        this.comfortOn = true;
+      }
+      this.states.ExtendedHeatingActive = this.forcedOn || this.comfortOn;
+      this.pendingPlan = target;
+      this.pendingPlanUntil = Date.now() + (this.platform.config.postCommandRetry?.guardDuration ?? 120000);
+      this.platform.log.info(`✅ HC${this.circuitNumber} plan now ${target.toUpperCase()}`);
+    } catch (e: any) {
+      this.pendingPlan = undefined;
+      this.states.ExtendedHeatingActive = this.forcedOn || this.comfortOn;
+      this.platform.log.error(`❌ HC${this.circuitNumber} plan ${target.toUpperCase()} failed: ${e?.message || e} — now ${this.statesPlan().toUpperCase()}`);
+      setTimeout(() => this.refreshPlanSwitches(), 1500);   // HomeKit keeps the tapped value right after an error
+      this.refreshPlanSwitches();
+      this.scheduleCommandConfirmation();
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
+    this.refreshPlanSwitches();
+    this.scheduleCommandConfirmation();
+  }
+
+  /** "activate" becomes executable a few seconds after the circuit is switched to heating. */
+  private async activateWhenExecutable(feature: string, label: string) {
+    for (let i = 0; i < 4; i++) {
+      this.platform.viessmannAPI.clearCache(`/features/installations/${this.installation.id}`);
+      const feats = await this.platform.viessmannAPI.getDeviceFeatures(this.installation.id, this.gateway.serial, this.device.id);
+      const ft = feats.find(x => x.feature === feature);
+      if (ft?.commands?.activate?.isExecutable) { await this.cmd(feature, 'activate'); return; }
+      await new Promise(r => setTimeout(r, 5000));
+    }
+    throw new Error(`the boiler does not accept ${label} right now (activate not executable, e.g. in summer / standby)`);
+  }
+
+  private async stopComfort() {
+    const hc = `heating.circuits.${this.circuitNumber}`;
+    this.platform.viessmannAPI.clearCache(`/features/installations/${this.installation.id}`);
+    const feats = await this.platform.viessmannAPI.getDeviceFeatures(this.installation.id, this.gateway.serial, this.device.id);
+    const forced = feats.find(x => x.feature === `${hc}.operating.programs.forcedLastFromSchedule`);
+    if (forced?.properties?.active?.value && forced?.commands?.deactivate?.isExecutable) await this.cmd(`${hc}.operating.programs.forcedLastFromSchedule`, 'deactivate');
+    const comfort = feats.find(x => x.feature === `${hc}.operating.programs.${this.comfortFeatureSuffix}`);
+    if (comfort?.properties?.active?.value && comfort?.commands?.deactivate?.isExecutable) await this.cmd(`${hc}.operating.programs.${this.comfortFeatureSuffix}`, 'deactivate');
+  }
+
+  private getThresholdForDisplay(): number {
+    return Math.min(Math.max(this.states.HeatingThresholdTemperature, this.temperatureConstraints.min), this.temperatureConstraints.max);
+  }
+
+  /** Puts every plan switch (and the Active characteristic) in line with plan(). */
+  private refreshPlanSwitches() {
+    const p = this.plan();
+    const C = this.platform.Characteristic;
     this._updatingCharacteristics = true;
     try {
-      const isReduced = this.currentProgram === 'reduced';
-      const isNormal = this.currentProgram === 'normal';
-      const isComfort = this.currentProgram === 'comfort';
-      
-      if (this.ridottaService) {
-        this.ridottaService.updateCharacteristic(this.platform.Characteristic.On, isReduced);
+      this.normaleService?.updateCharacteristic(C.On, p === 'normal');
+      this.comfortService?.updateCharacteristic(C.On, p === 'comfort');
+      this.extendedHeatingService?.updateCharacteristic(C.On, p === this.extendedPlan());
+      this.holidayService?.updateCharacteristic(C.On, p === 'holiday');
+      this.holidayAtHomeService?.updateCharacteristic(C.On, p === 'holidayAtHome');
+      // The dial shows the temperature in force: Holiday → reduced, Holiday at home → normal,
+      // Comfort → comfort. Otherwise it keeps what the schedule reports.
+      const t = p === 'holiday' ? this.programTemperatures.reduced
+        : p === 'holidayAtHome' ? this.programTemperatures.normal
+        : p === 'comfort' ? this.programTemperatures.comfort : undefined;
+      if (t) {
+        this.states.HeatingThresholdTemperature = t;
+        this.heaterCoolerService.updateCharacteristic(C.HeatingThresholdTemperature, this.getThresholdForDisplay());
       }
-      
-      if (this.normaleService) {
-        this.normaleService.updateCharacteristic(this.platform.Characteristic.On, isNormal);
-      }
-      
-      if (this.comfortService) {
-        this.comfortService.updateCharacteristic(this.platform.Characteristic.On, isComfort);
-      }
-      
-      this.platform.log.debug(`Circuit ${this.circuitNumber} temperature program: ${this.currentProgram.toUpperCase()} (${this.states.HeatingThresholdTemperature}°C)`);
+      const active = p !== 'off' && p !== 'holiday';
+      this.heaterCoolerService.updateCharacteristic(C.Active, active ? C.Active.ACTIVE : C.Active.INACTIVE);
+      this.heaterCoolerService.updateCharacteristic(C.CurrentHeaterCoolerState, active ? C.CurrentHeaterCoolerState.HEATING : C.CurrentHeaterCoolerState.INACTIVE);
+      this.refreshLevelThermostats();
     } finally {
       setImmediate(() => { this._updatingCharacteristics = false; });
     }
   }
 
-  async setActive(value: CharacteristicValue) {
-    const active = value as number;
-    
-    if (active === this.platform.Characteristic.Active.ACTIVE) {
-      // User wants to activate heating circuit
-      if (this.currentMode === 'standby' && this.availableModes.includes('heating')) {
-        await this.setMode('heating');
-      }
-    } else {
-      // User wants to deactivate heating circuit
-      if (this.currentMode === 'heating' && this.availableModes.includes('standby')) {
-        await this.setMode('standby');
-      }
-    }
-  }
-
   async setTargetHeaterCoolerState(value: CharacteristicValue) {
-    // For heating circuits, we only support HEAT mode
-    // This is mostly read-only but we can handle it gracefully
-    const targetState = value as number;
-    
-    if (targetState === this.platform.Characteristic.TargetHeaterCoolerState.HEAT) {
-      // User wants heating mode - ensure circuit is active
-      if (this.currentMode !== 'heating' && this.availableModes.includes('heating')) {
-        await this.setMode('heating');
-      }
+    // Heating circuits only support HEAT: selecting it while off switches the default plan on
+    if (value === this.platform.Characteristic.TargetHeaterCoolerState.HEAT && this.plan() === 'off') {
+      await this.applyPlan(this.defaultPlan());
     }
   }
 
-  private async setHolidayMode(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    try {
-      if (on) {
-        // ACTIVATING Holiday Mode - deactivate conflicting programs first
-        await this.deactivateConflictingQuickSelections(['extendedHeating', 'holidayAtHome']);
-        
-        // Schedule holiday mode - need start and end dates
-        // For now, set a 7-day holiday starting tomorrow
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() + 1);
-        const endDate = new Date(startDate);
-        endDate.setDate(endDate.getDate() + 7);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.operating.programs.holiday',
-          'schedule',
-          {
-            start: startDate.toISOString().split('T')[0],
-            end: endDate.toISOString().split('T')[0]
-          }
-        );
-        
-        if (success) {
-          this.states.HolidayActive = true;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} holiday mode activated (7 days)`);
-          // Update other switches to reflect mutual exclusion
-          this.updateMutuallyExclusiveSwitches();
-        } else {
-          throw new Error('Failed to activate holiday mode');
-        }
-      } else {
-        // Unschedule holiday mode
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.operating.programs.holiday',
-          'unschedule',
-          {}
-        );
-        
-        if (success) {
-          this.states.HolidayActive = false;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} holiday mode deactivated`);
-        } else {
-          throw new Error('Failed to deactivate holiday mode');
-        }
-      }
-    } catch (error) {
-      this.platform.log.error(`Error setting holiday mode for circuit ${this.circuitNumber}:`, error);
-      // Restore previous state
-      setTimeout(() => {
-        this.holidayService?.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayActive);
-      }, 100);
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-  }
 
-  private async setHolidayAtHomeMode(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    try {
-      if (on) {
-        // ACTIVATING Holiday At Home Mode - deactivate conflicting programs first
-        await this.deactivateConflictingQuickSelections(['extendedHeating', 'holiday']);
-        
-        // Schedule holiday at home mode - typically for today
-        const today = new Date();
-        const todayString = today.toISOString().split('T')[0];
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.operating.programs.holidayAtHome',
-          'schedule',
-          {
-            start: todayString,
-            end: todayString
-          }
-        );
-        
-        if (success) {
-          this.states.HolidayAtHomeActive = true;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} holiday at home mode activated`);
-          // Update other switches to reflect mutual exclusion
-          this.updateMutuallyExclusiveSwitches();
-        } else {
-          throw new Error('Failed to activate holiday at home mode');
-        }
-      } else {
-        // Unschedule holiday at home mode
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          'heating.operating.programs.holidayAtHome',
-          'unschedule',
-          {}
-        );
-        
-        if (success) {
-          this.states.HolidayAtHomeActive = false;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} holiday at home mode deactivated`);
-        } else {
-          throw new Error('Failed to deactivate holiday at home mode');
-        }
-      }
-    } catch (error) {
-      this.platform.log.error(`Error setting holiday at home mode for circuit ${this.circuitNumber}:`, error);
-      // Restore previous state
-      setTimeout(() => {
-        this.holidayAtHomeService?.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayAtHomeActive);
-      }, 100);
-      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-    }
-  }
 
-  private async setExtendedHeatingMode(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    try {
-      // First, get the latest features to check current executability
-      const features = await this.platform.viessmannAPI.getDeviceFeatures(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id
-      );
-      
-      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`);
-      if (!comfortProgram) {
-        this.platform.log.warn(`Comfort program not found for circuit ${this.circuitNumber}`);
-        this.restoreExtendedHeatingState();
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
 
-      if (on) {
-        // ACTIVATING Extended Heating - deactivate conflicting programs first
-        await this.deactivateConflictingPrograms(features);
-        
-        const commandName = 'activate';
-        const command = comfortProgram.commands?.[commandName];
-        
-        if (!command) {
-          this.platform.log.warn(`Extended heating ${commandName} command not available for circuit ${this.circuitNumber}`);
-          this.restoreExtendedHeatingState();
-          throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-        }
 
-        if (!command.isExecutable) {
-          // Try alternative approach: use forced programs or temperature-based activation
-          const success = await this.tryAlternativeExtendedHeating(true, comfortProgram, features);
-          
-          if (success) {
-            this.states.ExtendedHeatingActive = true;
-            this.platform.log.info(`Heating circuit ${this.circuitNumber} extended heating activated using alternative method`);
-            // Update other switches to reflect mutual exclusion
-            this.updateMutuallyExclusiveSwitches();
-            return;
-          }
-          
-          // If alternative methods fail, provide helpful error message
-          let suggestion = this.getExtendedHeatingSuggestion(features);
-          
-          this.platform.log.warn(`Extended heating ${commandName} command is not executable for circuit ${this.circuitNumber}. Current circuit mode: ${this.currentMode}.${suggestion}`);
-          
-          this.restoreExtendedHeatingState();
-          throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-        }
-        
-        // Execute the primary command with proper parameters
-        const success = await this.executeComfortCommand(commandName, comfortProgram, true);
-        
-        if (success) {
-          this.states.ExtendedHeatingActive = true;
-          this.platform.log.info(`Heating circuit ${this.circuitNumber} extended heating (comfort) activated`);
-          // Update other switches to reflect mutual exclusion
-          this.updateMutuallyExclusiveSwitches();
-        } else {
-          throw new Error(`Failed to ${commandName} extended heating mode`);
-        }
-      } else {
-        // DEACTIVATING Extended Heating
-        // Strategy: try all deactivation methods in order of likelihood to work.
-        // On Vitodens: forcedLastFromSchedule is the real mechanism → try it first.
-        // On other devices: comfort.deactivate may work directly.
-        const circuitPfx = `heating.circuits.${this.circuitNumber}`;
-        const forcedProgramNow = features.find(f => f.feature === `${circuitPfx}.operating.programs.forcedLastFromSchedule`);
-        let deactivated = false;
-
-        // Method 1: forcedLastFromSchedule.deactivate (Vitodens and others using this mechanism)
-        if (!deactivated && forcedProgramNow?.commands?.deactivate?.isExecutable) {
-          const success = await this.platform.viessmannAPI.executeCommand(
-            this.installation.id,
-            this.gateway.serial,
-            this.device.id,
-            `${circuitPfx}.operating.programs.forcedLastFromSchedule`,
-            'deactivate',
-            {},
-          );
-          if (success) {
-            deactivated = true;
-            this.platform.log.info(`HC${this.circuitNumber} extended heating deactivated via forcedLastFromSchedule`);
-          }
-        }
-
-        // Method 2: comfort.deactivate (devices where comfort is the primary mechanism)
-        if (!deactivated && comfortProgram.commands?.deactivate?.isExecutable) {
-          const success = await this.executeComfortCommand('deactivate', comfortProgram, false);
-          if (success) {
-            deactivated = true;
-            this.platform.log.info(`HC${this.circuitNumber} extended heating deactivated via comfort.deactivate`);
-          }
-        }
-
-        // Method 3: comfort.setTemperature back to normal level
-        if (!deactivated && comfortProgram.commands?.setTemperature?.isExecutable) {
-          const normalProgram = features.find(f => f.feature === `${circuitPfx}.operating.programs.normal`);
-          const normalTemp = normalProgram?.properties?.temperature?.value
-                          ?? this.programTemperatures.normal
-                          ?? 20;
-          const success = await this.platform.viessmannAPI.executeCommand(
-            this.installation.id,
-            this.gateway.serial,
-            this.device.id,
-            `${circuitPfx}.operating.programs.${this.comfortFeatureSuffix}`,
-            'setTemperature',
-            { targetTemperature: normalTemp },
-          );
-          if (success) {
-            deactivated = true;
-            this.platform.log.info(`HC${this.circuitNumber} extended heating cancelled via setTemperature → ${normalTemp}°C`);
-          }
-        }
-
-        if (deactivated) {
-          this.states.ExtendedHeatingActive = false;
-        } else {
-          throw new Error('Failed to deactivate extended heating — no executable command found');
-        }
-      }
-    } catch (error) {
-      this.platform.log.error(`Error setting extended heating mode for circuit ${this.circuitNumber}:`, error);
-      this.restoreExtendedHeatingState();
-      
-      if (error instanceof this.platform.api.hap.HapStatusError) {
-        throw error;
-      } else {
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-      }
-    }
-  }
-
-  private async tryAlternativeExtendedHeating(activate: boolean, comfortProgram: any, features: any[]): Promise<boolean> {
-    const circuitPrefix = `heating.circuits.${this.circuitNumber}`;
-    
-    if (activate) {
-      // Method 1: Try using forcedLastFromSchedule program
-      const forcedProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.forcedLastFromSchedule`);
-      if (forcedProgram?.commands?.activate?.isExecutable) {
-        this.platform.log.info(`Trying alternative: forcedLastFromSchedule activation for circuit ${this.circuitNumber}`);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.forcedLastFromSchedule`,
-          'activate',
-          {}
-        );
-        
-        if (success) {
-          this.platform.log.info(`Alternative method successful: forcedLastFromSchedule activated for circuit ${this.circuitNumber}`);
-          return true;
-        }
-      }
-
-      // Method 2: Try setting comfort temperature directly (temperature boost)
-      if (comfortProgram.commands?.setTemperature?.isExecutable) {
-        const currentTemp = comfortProgram.properties?.temperature?.value || this.states.HeatingThresholdTemperature;
-        const boostTemp = Math.min(currentTemp + 2, this.temperatureConstraints.max); // Boost by 2°C
-        
-        this.platform.log.info(`Trying alternative: comfort temperature boost to ${boostTemp}°C for circuit ${this.circuitNumber}`);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`,
-          'setTemperature',
-          { targetTemperature: boostTemp }
-        );
-        
-        if (success) {
-          this.platform.log.info(`Alternative method successful: comfort temperature set to ${boostTemp}°C for circuit ${this.circuitNumber}`);
-          return true;
-        }
-      }
-
-      // Method 3: Try normal program temperature boost
-      const normalProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.normal`);
-      if (normalProgram?.commands?.setTemperature?.isExecutable) {
-        const currentTemp = normalProgram.properties?.temperature?.value || this.states.HeatingThresholdTemperature;
-        const boostTemp = Math.min(currentTemp + 3, this.temperatureConstraints.max); // Boost by 3°C
-        
-        this.platform.log.info(`Trying alternative: normal program temperature boost to ${boostTemp}°C for circuit ${this.circuitNumber}`);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.normal`,
-          'setTemperature',
-          { targetTemperature: boostTemp }
-        );
-        
-        if (success) {
-          this.platform.log.info(`Alternative method successful: normal program temperature boosted to ${boostTemp}°C for circuit ${this.circuitNumber}`);
-          return true;
-        }
-      }
-
-    } else {
-      // Deactivation alternatives
-      
-      // Method 1: Try deactivating forcedLastFromSchedule
-      const forcedProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.forcedLastFromSchedule`);
-      if (forcedProgram?.commands?.deactivate?.isExecutable) {
-        this.platform.log.info(`Trying alternative: forcedLastFromSchedule deactivation for circuit ${this.circuitNumber}`);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.forcedLastFromSchedule`,
-          'deactivate',
-          {}
-        );
-        
-        if (success) {
-          this.platform.log.info(`Alternative method successful: forcedLastFromSchedule deactivated for circuit ${this.circuitNumber}`);
-          return true;
-        }
-      }
-
-      // Method 2: Reset to normal temperature
-      if (comfortProgram.commands?.setTemperature?.isExecutable) {
-        const normalProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.normal`);
-        const normalTemp = normalProgram?.properties?.temperature?.value || (this.states.HeatingThresholdTemperature - 1);
-        
-        this.platform.log.info(`Trying alternative: reset comfort temperature to normal ${normalTemp}°C for circuit ${this.circuitNumber}`);
-        
-        const success = await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.${this.comfortFeatureSuffix}`,
-          'setTemperature',
-          { targetTemperature: normalTemp }
-        );
-        
-        if (success) {
-          this.platform.log.info(`Alternative method successful: comfort temperature reset to ${normalTemp}°C for circuit ${this.circuitNumber}`);
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
 
   private async executeComfortCommand(commandName: string, comfortProgram: any, activate: boolean): Promise<boolean> {
     let commandParams = {};
@@ -1270,141 +1071,17 @@ private setupTemperatureProgramServices() {
     return suggestions.length > 0 ? ` Possible reasons: ${suggestions.join('; ')}.` : '';
   }
 
-  private restoreExtendedHeatingState() {
-    setTimeout(() => {
-      this.extendedHeatingService?.updateCharacteristic(this.platform.Characteristic.On, this.states.ExtendedHeatingActive);
-    }, 100);
-  }
 
-  /**
-   * Deactivate conflicting quick selection programs before activating a new one
-   */
-  private async deactivateConflictingQuickSelections(conflictingMethods: string[]) {
-    for (const method of conflictingMethods) {
-      try {
-        switch (method) {
-          case 'extendedHeating':
-            if (this.states.ExtendedHeatingActive) {
-              this.platform.log.info(`Deactivating Extended Heating to avoid conflicts for circuit ${this.circuitNumber}`);
-              // Directly call the deactivation logic without going through the switch
-              await this.deactivateExtendedHeatingDirect();
-            }
-            break;
-            
-          case 'holiday':
-            if (this.states.HolidayActive) {
-              this.platform.log.info(`Deactivating Holiday Mode to avoid conflicts for circuit ${this.circuitNumber}`);
-              await this.platform.viessmannAPI.executeCommand(
-                this.installation.id,
-                this.gateway.serial,
-                this.device.id,
-                'heating.operating.programs.holiday',
-                'unschedule',
-                {}
-              );
-              this.states.HolidayActive = false;
-            }
-            break;
-            
-          case 'holidayAtHome':
-            if (this.states.HolidayAtHomeActive) {
-              this.platform.log.info(`Deactivating Holiday At Home Mode to avoid conflicts for circuit ${this.circuitNumber}`);
-              await this.platform.viessmannAPI.executeCommand(
-                this.installation.id,
-                this.gateway.serial,
-                this.device.id,
-                'heating.operating.programs.holidayAtHome',
-                'unschedule',
-                {}
-              );
-              this.states.HolidayAtHomeActive = false;
-            }
-            break;
-        }
-      } catch (error) {
-        this.platform.log.warn(`Failed to deactivate conflicting method ${method} for circuit ${this.circuitNumber}:`, error);
-        // Continue with activation even if deactivation fails
-      }
-    }
-  }
 
-  /**
-   * Deactivate conflicting programs at the circuit level (for Extended Heating activation)
-   */
-  private async deactivateConflictingPrograms(features: any[]) {
-    const circuitPrefix = `heating.circuits.${this.circuitNumber}`;
-    
-    // Deactivate forced programs that might conflict
-    const forcedProgram = features.find(f => f.feature === `${circuitPrefix}.operating.programs.forcedLastFromSchedule`);
-    if (forcedProgram?.properties?.active?.value === true && forcedProgram.commands?.deactivate?.isExecutable) {
-      try {
-        this.platform.log.info(`Deactivating forcedLastFromSchedule to avoid conflicts for circuit ${this.circuitNumber}`);
-        await this.platform.viessmannAPI.executeCommand(
-          this.installation.id,
-          this.gateway.serial,
-          this.device.id,
-          `${circuitPrefix}.operating.programs.forcedLastFromSchedule`,
-          'deactivate',
-          {}
-        );
-      } catch (error) {
-        this.platform.log.warn(`Failed to deactivate forcedLastFromSchedule for circuit ${this.circuitNumber}:`, error);
-      }
-    }
-    
-    // Deactivate system-level holiday programs
-    await this.deactivateConflictingQuickSelections(['holiday', 'holidayAtHome']);
-  }
 
-  /**
-   * Direct deactivation of Extended Heating without going through the switch handler
-   */
-  private async deactivateExtendedHeatingDirect() {
-    try {
-      const features = await this.platform.viessmannAPI.getDeviceFeatures(
-        this.installation.id,
-        this.gateway.serial,
-        this.device.id
-      );
-      
-      const comfortProgram = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.operating.programs.${this.comfortFeatureSuffix}`);
-      if (comfortProgram?.commands?.deactivate?.isExecutable) {
-        await this.executeComfortCommand('deactivate', comfortProgram, false);
-      } else {
-        // Try alternative deactivation
-        await this.tryAlternativeExtendedHeating(false, comfortProgram, features);
-      }
-      
-      this.states.ExtendedHeatingActive = false;
-    } catch (error) {
-      this.platform.log.warn(`Failed to directly deactivate Extended Heating for circuit ${this.circuitNumber}:`, error);
-    }
-  }
 
   /**
    * Update all switch characteristics to reflect mutual exclusion
    */
   private updateMutuallyExclusiveSwitches() {
-    this._updatingCharacteristics = true;
-    try {
-      if (this.extendedHeatingService) {
-        this.extendedHeatingService.updateCharacteristic(this.platform.Characteristic.On, this.states.ExtendedHeatingActive);
-      }
-      if (this.holidayService) {
-        this.holidayService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayActive);
-      }
-      if (this.holidayAtHomeService) {
-        this.holidayAtHomeService.updateCharacteristic(this.platform.Characteristic.On, this.states.HolidayAtHomeActive);
-      }
-      const activePrograms = [];
-      if (this.states.ExtendedHeatingActive) activePrograms.push('Extended Heating');
-      if (this.states.HolidayActive) activePrograms.push('Holiday');
-      if (this.states.HolidayAtHomeActive) activePrograms.push('Holiday At Home');
-      this.platform.log.debug(`Circuit ${this.circuitNumber} active programs: ${activePrograms.length > 0 ? activePrograms.join(', ') : 'None'}`);
-    } finally {
-      setImmediate(() => { this._updatingCharacteristics = false; });
-    }
+    this.refreshPlanSwitches();
   }
+
 
   private async setMode(mode: string) {
     try {
@@ -1453,6 +1130,7 @@ private setupTemperatureProgramServices() {
   }
 
   private updateAllCharacteristics() {
+    if (Date.now() >= this.pendingPlanUntil || !this.pendingPlan) { this.refreshPlanSwitches(); return; }
     // Update HeaterCooler characteristics
     const isActive = this.currentMode === 'heating';
     this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
@@ -1513,8 +1191,8 @@ private setupTemperatureProgramServices() {
           this.pendingExpectedTemp = temperature;
           this.pendingPreviousTemp = this.states.HeatingThresholdTemperature;
           
-          // Update service names to reflect new temperatures
-          this.updateServiceNames();
+          // Keep the Reduced / Normal / Comfort tiles in line with the main dial
+          this.refreshLevelThermostats();
 
           // 🆕 NEW: Schedule full state refresh from API to confirm command was accepted
           this.scheduleCommandConfirmation(undefined, temperature);
@@ -1531,31 +1209,8 @@ private setupTemperatureProgramServices() {
   }
 
   private updateServiceNames() {
-    const installationName = this.installation.description;
-    
-    // Helper function to sanitize service names for HomeKit
-    const sanitizeName = (name: string): string => {
-      return name
-        .replace(/[^\w\s']/g, ' ') // Replace special chars with spaces
-        .replace(/\s+/g, ' ')      // Collapse multiple spaces
-        .trim();                   // Remove leading/trailing spaces
-    };
-    
-    // Update service names to show current temperatures
-    if (this.ridottaService) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Reduced ${this.programTemperatures.reduced}C`);
-      this.ridottaService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
-    }
-    
-    if (this.normaleService) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Normal ${this.programTemperatures.normal}C`);
-      this.normaleService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
-    }
-    
-    if (this.comfortService) {
-      const serviceName = sanitizeName(`${installationName} HC${this.circuitNumber} Comfort ${this.programTemperatures.comfort}C`);
-      this.comfortService.setCharacteristic(this.platform.Characteristic.Name, serviceName);
-    }
+    // Since 2.0.80 service names no longer contain the program temperature: renaming services
+    // at runtime overrode the names users set in Apple Home and the values went stale anyway.
   }
 
   async getCurrentRelativeHumidity(): Promise<CharacteristicValue> {
@@ -1794,6 +1449,8 @@ private setupTemperatureProgramServices() {
       if (l.startsWith('comfort')) return 'comfort';
       if (l.startsWith('normal'))  return 'normal';
       if (l.startsWith('reduced')) return 'reduced';
+      if (l === 'holidayathome') return 'normal';     // Holiday at home keeps the normal temperature all day
+      if (l.startsWith('holiday')) return 'reduced';   // Holiday runs the reduced temperature
       return null;
     }
     const normalised = normaliseProgramName(activeProgram);
@@ -1825,6 +1482,7 @@ private setupTemperatureProgramServices() {
     }
 
     // Update service names if temperatures changed
+    this.refreshLevelThermostats();   // temperatures and the level in force (time schedule)
     if (anyTemperatureChanged) {
       this.updateServiceNames();
     }
@@ -1848,9 +1506,20 @@ private setupTemperatureProgramServices() {
     }
 
     // Update quick selection programs with mutual exclusion logic
+    // A holiday / holiday-at-home program counts as ON when it is running (active) OR scheduled
+    // with dates that include today or the future: ViCare reports active=false for a scheduled
+    // program until it actually runs (e.g. while the circuit is in standby).
+    const scheduledOn = (f: any): boolean | undefined => {
+      if (f?.properties?.active?.value === undefined) return undefined;
+      if (f.properties.active.value === true) return true;
+      const end = String(f.properties?.end?.value || '');
+      const d = new Date();
+      const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return /^\d{4}-\d{2}-\d{2}/.test(end) && end.slice(0, 10) >= today;
+    };
     const holidayFeature = features.find(f => f.feature === 'heating.operating.programs.holiday');
-    if (holidayFeature?.properties?.active?.value !== undefined) {
-      const newState = holidayFeature.properties.active.value;
+    if (scheduledOn(holidayFeature) !== undefined) {
+      const newState = scheduledOn(holidayFeature) as boolean;
       if (newState !== this.states.HolidayActive) {
         this.states.HolidayActive = newState;
         anyProgramStateChanged = true;
@@ -1865,8 +1534,8 @@ private setupTemperatureProgramServices() {
     }
 
     const holidayAtHomeFeature = features.find(f => f.feature === 'heating.operating.programs.holidayAtHome');
-    if (holidayAtHomeFeature?.properties?.active?.value !== undefined) {
-      const newState = holidayAtHomeFeature.properties.active.value;
+    if (scheduledOn(holidayAtHomeFeature) !== undefined) {
+      const newState = scheduledOn(holidayAtHomeFeature) as boolean;
       if (newState !== this.states.HolidayAtHomeActive) {
         this.states.HolidayAtHomeActive = newState;
         anyProgramStateChanged = true;
@@ -1898,6 +1567,8 @@ private setupTemperatureProgramServices() {
     const forcedActive    = forcedProgram?.properties?.active?.value   ?? false;
     const activeIsComfort = activeProg?.properties?.value?.value === this.comfortFeatureSuffix;
     const extendedActive  = comfortActive || forcedActive || activeIsComfort;
+    this.comfortOn = !!(comfortActive || activeIsComfort);
+    this.forcedOn = !!forcedActive;
     if (extendedActive !== this.states.ExtendedHeatingActive) {
       this.states.ExtendedHeatingActive = extendedActive;
       anyProgramStateChanged = true;

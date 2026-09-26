@@ -1,5 +1,9 @@
 import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
 import { ViessmannHistoryLogger } from './history-logger';
+
+// Boiler alarm: safe range for the heating-system water pressure (bar)
+const ALARM_PRESSURE_MIN = 0.8;
+const ALARM_PRESSURE_MAX = 3.0;
 import { ViessmannPlatform, ViessmannInstallation, ViessmannGateway, ViessmannDevice, ViessmannPlatformConfig } from '../platform';
 
 export class ViessmannBoilerAccessory {
@@ -16,6 +20,8 @@ export class ViessmannBoilerAccessory {
   private burnerActivityService?: Service;
   private temperatureRangeService?: Service;
   private waterPressureService?: Service;
+  private alarmService?: Service;
+  private activeFaults: string[] = [];
   
   private supportsTemperatureControl = false;
   private historyLogger?: ViessmannHistoryLogger;
@@ -123,6 +129,7 @@ export class ViessmannBoilerAccessory {
       this.analyzeCapabilities(features);
       this.setupCharacteristics();
       await this.updateFromFeatures(features);
+      this.updateAlarm(features);
       
     } catch (error) {
       this.platform.log.error('Error initializing boiler capabilities:', error);
@@ -391,6 +398,13 @@ export class ViessmannBoilerAccessory {
       }
     }
 
+    // A read-only "light bulb" shows up among the home's lights and in Siri/scene lights:
+    // only created when the user explicitly keeps the legacy diagnostic services.
+    if (!this.legacyDiagnostics()) {
+      this.modulationService = undefined;
+      return;
+    }
+
     // Use timestamp-based version for automatic recreation
     const subtypeVersion = config.forceServiceRecreation ? 
       Date.now().toString().slice(-8) : // Last 8 digits of timestamp
@@ -477,8 +491,14 @@ export class ViessmannBoilerAccessory {
       this.platform.log.info(`✅ Outside temperature sensor created: ${outsideTempServiceName}`);
     }
 
+    // Services 2–7 reuse HomeKit sensor types with a different meaning (occupancy = gas used today,
+    // air quality = starts per hour, humidity = temperature progress, leak = pressure …). Apple Home
+    // mixes them into the whole-home summaries ("Air quality: poor", "Humidity 100%") and a leak
+    // sensor raises critical alerts, so they are opt-in since 2.0.80 (features.enableLegacyDiagnosticSensors).
+    const legacy = this.legacyDiagnostics();
+
     // 2. Gas Consumption (using Occupancy Sensor)
-    if (this.hasGasConsumption()) {
+    if (legacy && this.hasGasConsumption()) {
       const gasConsumptionServiceName = `${installationName} ${boilerName} Gas Usage`;
       
       this.gasConsumptionService = this.accessory.addService(
@@ -503,7 +523,7 @@ export class ViessmannBoilerAccessory {
     }
 
     // 3. Power Consumption (using Motion Sensor)
-    if (this.hasPowerConsumption()) {
+    if (legacy && this.hasPowerConsumption()) {
       const powerConsumptionServiceName = `${installationName} ${boilerName} Power Activity`;
       
       this.powerConsumptionService = this.accessory.addService(
@@ -526,7 +546,7 @@ export class ViessmannBoilerAccessory {
     }
 
     // 4. Burner Efficiency (using Air Quality Sensor)
-    if (this.states.BurnerHours > 0 || this.states.BurnerStarts > 0) {
+    if (legacy && (this.states.BurnerHours > 0 || this.states.BurnerStarts > 0)) {
       const efficiencyServiceName = `${installationName} ${boilerName} Performance`;
       
       this.burnerStatisticsService = this.accessory.addService(
@@ -580,6 +600,7 @@ export class ViessmannBoilerAccessory {
     }
 
     // 5. Burner Activity (using Contact Sensor)
+    if (legacy) {
     const burnerActivityServiceName = `${installationName} ${boilerName} Burner Activity`;
     
     this.burnerActivityService = this.accessory.addService(
@@ -600,9 +621,10 @@ export class ViessmannBoilerAccessory {
       });
 
     this.platform.log.info(`✅ Burner activity sensor created: ${burnerActivityServiceName}`);
+    }
 
     // 6. System Temperature Range (using Humidity Sensor)
-    if (this.states.CurrentTemperature > 0 && this.states.HeatingThresholdTemperature > 0) {
+    if (legacy && this.states.CurrentTemperature > 0 && this.states.HeatingThresholdTemperature > 0) {
       const tempRangeServiceName = `${installationName} ${boilerName} Temp Range`;
       
       this.temperatureRangeService = this.accessory.addService(
@@ -639,7 +661,7 @@ export class ViessmannBoilerAccessory {
     }
 
     // 7. Water Pressure (using Leak Sensor)
-    if (this.hasWaterPressure()) {
+    if (legacy && this.hasWaterPressure()) {
       const waterPressureServiceName = `${installationName} ${boilerName} Water Pressure`;
       
       this.waterPressureService = this.accessory.addService(
@@ -665,6 +687,82 @@ export class ViessmannBoilerAccessory {
 
       this.platform.log.info(`✅ Water pressure sensor created: ${waterPressureServiceName}`);
     }
+
+    // 8. Boiler alarm (faults / pressure) — a real alert, replaces the leak-sensor trick
+    this.setupAlarmService(installationName, boilerName, subtypeVersion);
+  }
+
+  /** true when the user keeps the pre-2.0.80 "creative" diagnostic services. */
+  private legacyDiagnostics(): boolean {
+    return (this.platform.config as any).features?.enableLegacyDiagnosticSensors === true;
+  }
+
+  /**
+   * Boiler alarm: a contact sensor that OPENS when the boiler reports a fault code (F.xx)
+   * or the water pressure is outside the safe range. Apple Home can notify on it and
+   * it can trigger automations. Enabled by default (features.enableBoilerAlarm).
+   */
+  private setupAlarmService(installationName: string, boilerName: string, subtypeVersion: string) {
+    if ((this.platform.config as any).features?.enableBoilerAlarm === false) return;
+    const label = (this.platform.config as any).customNames?.boilerAlarm || 'Alarm';
+    const name = `${installationName} ${boilerName} ${label}`;
+    this.alarmService = this.accessory.addService(this.platform.Service.ContactSensor, name, `boiler-alarm-${subtypeVersion}`);
+    this.alarmService.setCharacteristic(this.platform.Characteristic.Name, name);
+    this.alarmService.displayName = name;
+    this.alarmService.getCharacteristic(this.platform.Characteristic.ContactSensorState)
+      .onGet(() => this.alarmState());
+    this.platform.log.info(`✅ Boiler alarm sensor created: ${name} (opens on F.xx faults or water pressure outside ${ALARM_PRESSURE_MIN}–${ALARM_PRESSURE_MAX} bar)`);
+  }
+
+  private alarmState(): number {
+    const C = this.platform.Characteristic.ContactSensorState;
+    const p = this.states.WaterPressure;
+    const pressureBad = p > 0 && (p < ALARM_PRESSURE_MIN || p > ALARM_PRESSURE_MAX);
+    return (this.activeFaults.length > 0 || pressureBad) ? C.CONTACT_NOT_DETECTED : C.CONTACT_DETECTED;
+  }
+
+  /** Reads the active fault codes (F.xx …) from device.messages.errors.raw and updates the alarm sensor. */
+  private updateAlarm(features: any[]) {
+    const f = features.find((x: any) => x.feature === 'device.messages.errors.raw');
+    const entries = f?.properties?.entries?.value;
+    if (Array.isArray(entries)) {
+      const codes = entries.map((e: any) => String(e?.errorCode || e?.code || '')).filter((c: string) => c.length > 0);
+      const key = codes.join(',');
+      if (key !== this.activeFaults.join(',')) {
+        if (codes.length) this.platform.log.warn(`⚠️ Boiler fault code(s) active: ${key}`);
+        else if (this.activeFaults.length) this.platform.log.info('✅ Boiler fault codes cleared');
+        this.activeFaults = codes;
+      }
+    }
+    const state = this.alarmState();
+    this.alarmService?.updateCharacteristic(this.platform.Characteristic.ContactSensorState, state);
+    const open = state === this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
+    if (this.alarmWasOpen !== undefined && open !== this.alarmWasOpen) this.notifyAlarm(open);
+    this.alarmWasOpen = open;
+  }
+
+  /**
+   * Optional push message when the alarm opens or clears (features.alarmNotifyUrl).
+   * URL with "{text}" → HTTP GET with the message URL-encoded in its place
+   *   (e.g. Telegram: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text={text},
+   *    ntfy: https://ntfy.sh/<topic>?message={text}).
+   * URL without "{text}" → HTTP POST with a JSON body {title, text, faults, pressure, open}.
+   */
+  private alarmWasOpen?: boolean;
+  private notifyAlarm(open: boolean) {
+    const url: string | undefined = (this.platform.config as any).features?.alarmNotifyUrl;
+    if (!url || typeof fetch !== 'function') return;
+    const who = this.installation.description || 'Viessmann';
+    const p = this.states.WaterPressure;
+    const why = [this.activeFaults.length ? `fault ${this.activeFaults.join(', ')}` : '',
+      p > 0 && (p < ALARM_PRESSURE_MIN || p > ALARM_PRESSURE_MAX) ? `water pressure ${p} bar` : ''].filter(Boolean).join(', ');
+    const text = open ? `⚠️ ${who}: boiler alarm — ${why || 'check the boiler'}` : `✅ ${who}: boiler alarm cleared`;
+    const req = url.includes('{text}')
+      ? fetch(url.replace('{text}', encodeURIComponent(text)))
+      : fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Viessmann', text, faults: this.activeFaults, pressure: p, open }) });
+    req.then(r => this.platform.log.info(`📣 Alarm notification sent (HTTP ${r.status})`))
+      .catch(e => this.platform.log.warn(`Alarm notification failed: ${e?.message || e}`));
   }
 
   private removeExistingDiagnosticServices() {
@@ -676,6 +774,7 @@ export class ViessmannBoilerAccessory {
       { service: this.burnerActivityService, subtype: 'boiler-burner-activity' },
       { service: this.temperatureRangeService, subtype: 'boiler-temp-range' },
       { service: this.waterPressureService, subtype: 'boiler-water-pressure' },
+      { service: this.alarmService, subtype: 'boiler-alarm' },
     ];
 
     for (const { subtype } of servicesToRemove) {
@@ -701,6 +800,7 @@ export class ViessmannBoilerAccessory {
     this.burnerActivityService = undefined;
     this.temperatureRangeService = undefined;
     this.waterPressureService = undefined;
+    this.alarmService = undefined;
   }
 
   // Helper methods to check if diagnostic features are available
@@ -801,6 +901,7 @@ export class ViessmannBoilerAccessory {
             this.pendingExpectedTemp = undefined;
             this.pendingPreviousTemp = undefined;
             await this.updateFromFeatures(features);
+            this.updateAlarm(features);
             return;
           } else if (apiTemp !== undefined && apiTemp !== this.pendingPreviousTemp) {
             this.platform.log.info(`🔀 Boiler external temp change detected: API=${apiTemp}°C (expected ${expectedTemp}°C) — applying external change`);
@@ -808,6 +909,7 @@ export class ViessmannBoilerAccessory {
             this.pendingExpectedTemp = undefined;
             this.pendingPreviousTemp = undefined;
             await this.updateFromFeatures(features);
+            this.updateAlarm(features);
             return;
           } else {
             const guardMs = this.platform.config.postCommandRetry?.guardDuration ?? 120000;
@@ -827,6 +929,7 @@ export class ViessmannBoilerAccessory {
     const t0 = Date.now();
     try {
       await this.updateFromFeatures(features);
+      this.updateAlarm(features);
       this.platform.log.debug(`🔥 Caldaia handleUpdate OK in ${Date.now() - t0}ms`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

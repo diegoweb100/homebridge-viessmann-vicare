@@ -176,7 +176,20 @@ private setupCharacteristics() {
 
     // Create mode switches
     this.setupModeServices();
+
+    // Hot water temperature as a plain temperature sensor: Apple Home automations can only be
+    // triggered by sensors (e.g. "when hot water rises above 40 °C → notify 'shower ready'").
+    if ((this.platform.config as any).features?.exposeDhwTemperatureSensor !== false) {
+      const cn = (this.platform.config as any).customNames || {};
+      const name = `${cn.installationPrefix || this.installation.description} ${cn.dhw || 'DHW'} ${cn.dhwTemperature || 'Temperature'}`;
+      this.dhwTempSensor = this.accessory.addService(this.platform.Service.TemperatureSensor, name, 'dhw-temperature-sensor');
+      this.dhwTempSensor.setCharacteristic(this.platform.Characteristic.Name, name);
+      this.dhwTempSensor.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+        .setProps({ minValue: 0, maxValue: 100, minStep: 0.1 })
+        .onGet(() => this.states.CurrentTemperature);
+    }
   }
+  private dhwTempSensor?: Service;
 
   private removeConflictingServices() {
     // Remove existing thermostat, temperature sensor, and lightbulb services
@@ -391,16 +404,7 @@ private setupCharacteristics() {
       svc.displayName = name;
       svc.getCharacteristic(this.platform.Characteristic.On)
         .onGet(() => this.currentMode === mode)
-        .onSet(async (value: CharacteristicValue) => {
-          if (this._updatingCharacteristics) return;
-          if (value && this.currentMode !== mode) {
-            await this.setMode(mode);
-          } else if (!value && this.currentMode === mode && this.availableModes.includes('off')) {
-            await this.setMode('off');
-          } else if (!value) {
-            setImmediate(() => this.updateAllCharacteristics());
-          }
-        });
+        .onSet(async (value: CharacteristicValue) => this.onModeSwitch(mode, value as boolean));
       this.extraModeServices.set(mode, svc);
     }
 
@@ -467,9 +471,7 @@ async setActive(value: CharacteristicValue) {
     
     if (active === this.platform.Characteristic.Active.ACTIVE) {
       // User wants to activate DHW - set to default mode (eco or comfort)
-      const defaultMode = this.availableModes.includes('eco') ? 'eco' : 
-                         this.availableModes.includes('comfort') ? 'comfort' : 
-                         this.availableModes[0];
+      const defaultMode = this.dhwDefault();
       
       if (this.currentMode === 'off' && defaultMode) {
         await this.setMode(defaultMode);
@@ -483,72 +485,41 @@ async setActive(value: CharacteristicValue) {
   }
 
   async setComfortMode(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn ON comfort mode
-      if (this.currentMode !== 'comfort') {
-        await this.setMode('comfort');
-      }
-    } else {
-      // User wants to turn OFF comfort mode
-      if (this.currentMode === 'comfort') {
-        // Can't turn off comfort without selecting another mode
-        // Force it back to ON and show a warning
-        setTimeout(() => {
-          this.comfortService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn('Cannot turn off Comfort mode. Please select Eco or Off mode instead.');
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
-    }
+    await this.onModeSwitch('comfort', value as boolean);
   }
+
 
   async setEcoMode(value: CharacteristicValue) {
-    if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn ON eco mode
-      if (this.currentMode !== 'eco') {
-        await this.setMode('eco');
-      }
-    } else {
-      // User wants to turn OFF eco mode
-      if (this.currentMode === 'eco') {
-        // Can't turn off eco without selecting another mode
-        // Force it back to ON and show a warning
-        setTimeout(() => {
-          this.ecoService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn('Cannot turn off Eco mode. Please select Comfort or Off mode instead.');
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
-    }
+    await this.onModeSwitch('eco', value as boolean);
   }
 
+
   async setOffMode(value: CharacteristicValue) {
+    await this.onModeSwitch('off', value as boolean);
+  }
+
+
+  /**
+   * Hot water modes (Comfort / Eco / Off / extra modes) are mutually exclusive: switching one
+   * on switches the others off. Switching the active one off falls back to the default mode
+   * (features.dhwDefaultMode, default "eco"); switching the default itself off turns hot water off.
+   * No HomeKit error is raised, so scenes and automations never show "not responding".
+   */
+  private dhwDefault(): string {
+    const d = (this.platform.config as any).features?.dhwDefaultMode;
+    if (d && this.availableModes.includes(d)) return d;
+    return this.availableModes.includes('eco') ? 'eco' : (this.availableModes.find(m => m !== 'off') || this.availableModes[0]);
+  }
+
+  private async onModeSwitch(mode: string, on: boolean) {
     if (this._updatingCharacteristics) return;
-    const on = value as boolean;
-    
-    if (on) {
-      // User wants to turn ON off mode (i.e., turn off the DHW)
-      if (this.currentMode !== 'off') {
-        await this.setMode('off');
-      }
-    } else {
-      // User wants to turn OFF off mode (i.e., turn on the DHW)
-      if (this.currentMode === 'off') {
-        // Can't turn off "off mode" without selecting another mode
-        // Force it back to ON and show a warning
-        setTimeout(() => {
-          this.offService?.updateCharacteristic(this.platform.Characteristic.On, true);
-        }, 100);
-        this.platform.log.warn('Cannot deactivate Off mode. Please select Comfort or Eco mode instead.');
-        throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-      }
+    if (on && this.currentMode !== mode) {
+      await this.setMode(mode);
+    } else if (!on && this.currentMode === mode) {
+      const next = mode === this.dhwDefault() ? 'off' : this.dhwDefault();
+      if (this.availableModes.includes(next)) await this.setMode(next);
     }
+    setTimeout(() => this.updateAllCharacteristics(), 200);
   }
 
   private async setMode(mode: string) {
@@ -667,7 +638,23 @@ async setActive(value: CharacteristicValue) {
   }
 
   async getCurrentTemperature(): Promise<CharacteristicValue> {
-    return this.states.CurrentTemperature;
+    return this.displayTemperature();
+  }
+
+  /**
+   * Temperature shown in Apple Home. "sensor" (default) = live sensor value.
+   * "peak" = highest reading of the last hours: on combi / instantaneous boilers the
+   * outlet sensor is lukewarm at rest (e.g. 23 °C) and only reaches the set temperature
+   * while a tap is open, which looks like "cold water" in the Home app.
+   * features.dhwTemperatureDisplay = "sensor" | "peak"; features.dhwPeakHours (default 6).
+   */
+  private tempLog: Array<{ t: number; v: number }> = [];
+  private displayTemperature(): number {
+    const f = (this.platform.config as any).features || {};
+    if (f.dhwTemperatureDisplay !== 'peak' || !this.tempLog.length) return this.states.CurrentTemperature;
+    const since = Date.now() - (Number(f.dhwPeakHours) > 0 ? Number(f.dhwPeakHours) : 6) * 3600000;
+    this.tempLog = this.tempLog.filter(x => x.t >= since);
+    return Math.max(this.states.CurrentTemperature, ...this.tempLog.map(x => x.v));
   }
 
   async getHeatingThresholdTemperature(): Promise<CharacteristicValue> {
@@ -860,7 +847,9 @@ async setActive(value: CharacteristicValue) {
         this.states.CurrentTemperature = newTemp;
         changed = true;
       }
-      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
+      if (typeof newTemp === 'number') this.tempLog.push({ t: Date.now(), v: newTemp });
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.displayTemperature());
+      this.dhwTempSensor?.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
     } else {
       this.platform.log.debug(`🌡️ ACS current temp: no sensor feature found (checked dhwCylinder/hotWaterStorage/outlet)`);
     }
@@ -1004,7 +993,7 @@ async setActive(value: CharacteristicValue) {
         // Only update if we don't have a recent DHW temperature reading
         if (this.states.CurrentTemperature === 40) { // Default value, likely not real
           this.states.CurrentTemperature = Math.max(20, burnerStatus.boilerTemp - 10); // Rough estimate
-          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.states.CurrentTemperature);
+          this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, this.displayTemperature());
           this.platform.log.debug(`🔥 DHW immediate update: Estimated temp from boiler = ${this.states.CurrentTemperature}°C`);
         }
       }

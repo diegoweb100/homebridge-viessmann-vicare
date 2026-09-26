@@ -185,6 +185,55 @@ All Viessmann heating systems compatible with ViCare API:
 - **Ventilation systems** (Vitovent)
 - **Multi-zone systems** (multiple heating circuits)
 
+## 🏡 How the boiler appears in Apple Home (v2.0.80+)
+
+| Service | Type in Home | What it shows |
+|---|---|---|
+| Boiler | Heater | Boiler water temperature; "heating" while the burner is on |
+| Burner | Switch (read-only) | Burner on/off |
+| Outside | Temperature sensor | Boiler outdoor sensor |
+| **Alarm** | Contact sensor | **Opens** on a boiler fault code (F.xx) or water pressure outside 0.8–3.0 bar. Turn on notifications for it in Home to get an alert. |
+
+### 🤖 Apple Home automations (examples)
+
+| What you want | Automation in the Home app |
+|---|---|
+| Heating off when everybody leaves | *When the last person leaves home* → heating circuit tile **Off** (standby, frost protection stays on) |
+| Back to normal when someone arrives | *When the first person arrives home* → switch **Normal** ON |
+| Turn the heating off | Heating circuit tile → Off (standby); on again = heating |
+| Cold evening | switch **Extended heating** ON (keeps the comfort period going), OFF to return to the schedule |
+| Trip | switch **Holiday** ON before leaving, **Normal** ON (or Holiday OFF) when back |
+| Alert on boiler faults | Accessory **Alarm** → Settings → Notifications ON (Home sends a push notification to every home member) |
+| Message to Telegram / ntfy / others | `features.alarmNotifyUrl`, e.g. `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text={text}` |
+| "Shower ready" | *When DHW Temperature rises above 40 °C* → notification or scene |
+| Frost / cold day | *When Outside drops below 3 °C* → scene |
+
+**Heating plans (since 2.0.80)**: the boiler's programs are mutually exclusive, exactly as in ViCare. Switching one on switches all the others off; switching the active one off returns to Normal. Only the programs your boiler really has are created — the same list as ViCare (operating mode Heating/Off, Extended heating, Holiday, Holiday at home; hot water Comfort/Eco/Off).
+- **Normal** follows the boiler time schedule (normal and reduced periods).
+- **Extended heating** keeps the current comfort/normal period going (`forcedLastFromSchedule`; on boilers without it, `comfort.activate`). The boiler accepts it only while the circuit is heating.
+- **Holiday at home** keeps the normal temperature all day (no reduced periods), hot water as usual. It starts today and lasts `holidayAtHomeDays` days (default 7).
+- **Holiday** puts every circuit at the reduced temperature, turns hot water off and keeps frost protection. It starts today and lasts `holidayDays` days (default 7).
+- **Off** is standby: the heating-circuit tile or the Off entry in its mode menu.
+- **Temperatures**: Reduced, Normal and Comfort are the three temperature levels the time schedule uses. Each is its own thermostat tile ("Temp Reduced", "Temp Normal", "Temp Comfort"): its dial changes that level on the boiler, and it follows the time schedule: only the level the boiler is using right now is on (all off when the circuit is off; Holiday → Reduced, Holiday at home → Normal, Extended heating → Comfort). To change a level that is not in use, switch its tile to Heat, set the temperature, and it returns to Off two minutes later, also from automations (`exposeProgramTemperatures`, on by default). The main heating dial changes the level currently in force.
+- There is no Reduced switch: the boiler has no command to select the reduced temperature, the time schedule decides it. The reduced temperature is still shown by the dial while Holiday is on.
+
+Hot water: Comfort, Eco and Off are mutually exclusive too; switching the active mode off returns to `dhwDefaultMode` (default Eco).
+
+For a custom leave radius, use a Shortcuts personal automation (*Leave* a location, with the radius you want) that runs a Home scene.
+
+Hot water: on combi / instantaneous boilers the outlet sensor is lukewarm at rest and only reaches the set temperature while a tap is open. Set `"dhwTemperatureDisplay": "peak"` to show the highest temperature of the last `dhwPeakHours` hours (default 6) instead.
+
+Before 2.0.80 the plugin also created sensors that reused other HomeKit types: gas usage as occupancy, starts per hour as air quality, temperature progress as humidity, water pressure as a leak sensor, and modulation as a light bulb. Apple Home mixes those into the whole-home summaries ("Air quality: poor", "Humidity 100%"), and the leak sensor can raise critical alerts. They are now off by default and removed automatically. Set `"enableLegacyDiagnosticSensors": true` in `features` only if your automations still use them. All of those values are still available in the Eve history, the CSV/MySQL logs, the HTML report and Grafana.
+
+```json
+"features": {
+  "enableBoilerAlarm": true,
+  "dhwTemperatureDisplay": "sensor",
+  "dhwPeakHours": 6,
+  "enableLegacyDiagnosticSensors": false
+}
+```
+
 ## 📦 Installation
 
 ### Via Homebridge Config UI X (Recommended)
@@ -1102,6 +1151,50 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.80] - 2026-09-27
+- feat: **report redesigned** for technicians and non-technical users alike (IT/EN):
+  - an illustrated drawing of the system (outdoor, house, radiator, boiler, hot water, gas meter) with the period values
+  - an overall score plus scores for comfort, efficiency, boiler, hot water and reliability
+  - **assistant advice**: for each point, why it happens, what to do step by step, who does it and the estimated yearly saving in m³ and €; plus a "What is going well" list
+  - in summer the advice uses the last heating season, so it stays useful all year
+  - plain-language explanation under every value; glossary; sticky section menu; zoomable charts; dark mode
+  - all the previous sections are kept: period overview with weekly schedule, gas & costs with monthly table and forecast, heating, heating curve, burner with heatmap, hot water, house heat loss and sizing, official Viessmann counters, solar/battery, rooms, boiler messages
+- fix: every report value was checked against the raw data and against real gas bills:
+  - burner starts, hours and run length now come from the boiler counters; ignition events were being counted as burner states
+  - daily gas is taken from the monthly counters on local days (it was about 50% too high); partial months are marked
+  - heating comfort only uses days when gas was really burned for heating (summer "heating" mode gave +11 °C "overheating")
+  - modulation leaves out repeated stale values
+  - Comfort-vs-Efficiency and "thermal efficiency" were removed: the boiler computes its heat figure from gas, so they were meaningless
+  - hot water on combi/Eco boilers is judged on its peak temperature
+  - device message times are shown in local time, and undocumented codes are labelled as such
+  - the period is clamped to the first data
+- feat: the report compares the boiler outdoor sensor with the real local temperature (Open-Meteo) and flags a biased sensor
+- feat (HomeKit): new **boiler alarm** contact sensor. It opens on boiler fault codes (F.xx) or water pressure outside 0.8–3.0 bar, so Apple Home can notify you and run automations (`features.enableBoilerAlarm`, on by default)
+- fix (HomeKit): the "creative" boiler sensors are no longer created by default and are removed from existing setups. These were gas as occupancy, starts per hour as air quality, temperature progress as humidity, pressure as a leak sensor and modulation as a light bulb. They made Apple Home report "Air quality: poor" and "Humidity 100%" for the whole home, and the leak sensor could raise false critical alerts. `features.enableLegacyDiagnosticSensors: true` restores them
+- fix (HomeKit): heating **plans are mutually exclusive**, as in ViCare: Off, Normal (time schedule), Extended heating, Holiday at home and Holiday. Switching one on switches all the others off; switching the active one off returns to Normal. The plans now really change the boiler, so automations such as "last person leaves → Off" work. Only the programs the boiler really has are created:
+  - Extended heating = `forcedLastFromSchedule` (Vitodens); `comfort.activate` on boilers without it
+  - no separate heating Comfort switch (ViCare has none; the boiler refuses `comfort.activate` when extended heating exists). The switches match ViCare's list
+  - Holiday at home = normal temperature all day, hot water as usual, `holidayAtHomeDays` (default 7)
+  - Holiday = reduced temperature on every circuit, hot water off, frost protection, `holidayDays` (default 7)
+  - Off = standby, from the heating-circuit tile or the Off entry in its mode menu
+  - the Reduced switch is gone: the boiler has no command to select the reduced temperature
+  - before, the program switches only re-sent the program's own temperature and flipped back after ~2 minutes
+- feat (HomeKit): the Reduced / Normal / Comfort temperatures can be changed from Apple Home: one separate thermostat tile per level that follows the time schedule (only the level in force is on), usable in automations (`features.exposeProgramTemperatures`, on by default)
+- fix: the heating dial shows the temperature of the program in force right after a restart (it showed the last program read, e.g. Comfort)
+- fix: extended heating no longer uses the "alternative method" that set the Comfort temperature to 37 °C when the boiler refused the command. **If your Comfort temperature shows 37 °C, set it back** (Apple Home "Temp Comfort" tile or ViCare). If extended heating cannot be activated right now (e.g. standby / summer eco), the switch returns to its previous state and the log says why
+- fix (HomeKit): **hot water modes are mutually exclusive**: Comfort, Eco and Off (plus extra modes). Switching the active one off returns to the default mode (`features.dhwDefaultMode`, default Eco); switching Eco off turns hot water off. No more "not responding" errors from scenes
+- fix (HomeKit): the Holiday switch starts today (it started tomorrow) and lasts `holidayDays` days (default 7)
+- fix (HomeKit): service names keep accented letters (a trailing "è" was dropped). The temperatures were removed from the program switch names: they went stale and renamed services at runtime. Names are consistent (custom heating-circuit name for Holiday / Holiday at home / Extended heating)
+- feat (HomeKit): hot water temperature also as a temperature sensor (automation trigger, `features.exposeDhwTemperatureSensor`)
+- feat (HomeKit, #1 #2 #5): Vitocharge / PV / battery / wallbox / heat-pump **power values as sensors** (W): PV production, battery charging, battery discharging, EV charging power, COP. They can trigger Apple Home automations (e.g. "PV above 3000 W → start the dishwasher") and no longer appear among the lights (the light bulbs remain with `enableLegacyDiagnosticSensors`). Created only for the devices the installation really has
+- feat (HomeKit, #4): ViCare Smart Climate **room sensors are on by default** (`enableRoomSensors`). Accessories are created only for rooms that really exist
+- feat: optional push message when the boiler alarm opens or clears (`features.alarmNotifyUrl`: Telegram, ntfy or any webhook)
+- feat (HomeKit): `features.dhwTemperatureDisplay: "peak"` shows the highest hot-water temperature of the last hours, for combi boilers whose outlet sensor is lukewarm at rest
+- feat: new `--elPriceEur` option (electricity price, default 0.30 €/kWh)
+- feat: nothing in the report is tied to one location: the design temperature (coldest 3-day mean of the last 12 months) and the length of the heating-free season are derived from each installation's own weather; `--designTemp` still overrides
+- feat: Grafana dashboard uses the ViCare names (Extended heating / Riscaldamento ampliato, Holiday at home / Ferie a casa) and marks water pressure above 3.0 bar in red like the boiler alarm. Re-import `grafana/viessmann-dashboard.json` to update
+- chore: the pre-2.0.80 program handlers (the fake Reduced/Normal/Comfort switches and the 37 °C "alternative method") were removed from the code
 
 ### [2.0.79] - 2026-09-26
 - fix: **report gas forecast** rewritten: weather-normalised degree-day model (real outdoor temperatures from Open-Meteo for the installation location, calibrated on the boiler yearly counters), daily gas from the monthly counters over the whole history. Works with any amount of data (was "0 m³" / "needs 300 days"). Options `--lat/--lon` and `--hddBase`
