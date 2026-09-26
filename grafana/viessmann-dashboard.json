@@ -83,7 +83,7 @@
         "name": "kwh_m3",
         "label": "kWh/m³",
         "type": "constant",
-        "query": "10.5",
+        "query": "11.0",
         "hide": 2
       },
       {
@@ -1217,11 +1217,11 @@
         },
         "hide": 2,
         "refresh": 1,
-        "query": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Calorific value from variable kwh_m3 (default 10.5 kWh/m³). Above 100% = inaccurate boiler estimate. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.')",
-        "definition": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Calorific value from variable kwh_m3 (default 10.5 kWh/m³). Above 100% = inaccurate boiler estimate. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.')",
+        "query": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Gross calorific value from variable kwh_m3 (default 11.0 kWh/Smc = 0.0396 GJ/Smc, as printed on Italian gas bills). Based on GCV: a well-condensing boiler is around 90–97%. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico superiore da variabile kwh_m3 (default 11,0 kWh/Smc = 0,0396 GJ/Smc, il valore riportato in bolletta). Calcolato sul PCS: una condensazione ottima sta intorno al 90–97%. Dalla v2.0.75.')",
+        "definition": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Gross calorific value from variable kwh_m3 (default 11.0 kWh/Smc = 0.0396 GJ/Smc, as printed on Italian gas bills). Based on GCV: a well-condensing boiler is around 90–97%. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico superiore da variabile kwh_m3 (default 11,0 kWh/Smc = 0,0396 GJ/Smc, il valore riportato in bolletta). Calcolato sul PCS: una condensazione ottima sta intorno al 90–97%. Dalla v2.0.75.')",
         "current": {
-          "text": "Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.",
-          "value": "Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75."
+          "text": "Calore prodotto / energia del gas (anno corrente). Potere calorifico superiore da variabile kwh_m3 (default 11,0 kWh/Smc = 0,0396 GJ/Smc, il valore riportato in bolletta). Calcolato sul PCS: una condensazione ottima sta intorno al 90–97%. Dalla v2.0.75.",
+          "value": "Calore prodotto / energia del gas (anno corrente). Potere calorifico superiore da variabile kwh_m3 (default 11,0 kWh/Smc = 0,0396 GJ/Smc, il valore riportato in bolletta). Calcolato sul PCS: una condensazione ottima sta intorno al 90–97%. Dalla v2.0.75."
         },
         "options": [],
         "multi": false,
@@ -1415,55 +1415,11 @@
         },
         "hide": 2,
         "refresh": 1,
-        "query": "SELECT IF('${lang}'='en','A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
-        "definition": "SELECT IF('${lang}'='en','A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
+        "query": "SELECT IF('${lang}'='en','Bands: red below 0.8 bar (refill), green 1.0–2.5 bar (optimal), orange above 2.5 bar. A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Fasce: rosso sotto 0,8 bar (ricaricare), verde 1,0–2,5 bar (ottimale), arancio sopra 2,5 bar. Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
+        "definition": "SELECT IF('${lang}'='en','Bands: red below 0.8 bar (refill), green 1.0–2.5 bar (optimal), orange above 2.5 bar. A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Fasce: rosso sotto 0,8 bar (ricaricare), verde 1,0–2,5 bar (ottimale), arancio sopra 2,5 bar. Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
         "current": {
-          "text": "Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.",
-          "value": "Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare."
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "regex": "",
-        "sort": 0,
-        "skipUrlSync": true
-      },
-      {
-        "name": "t_curve",
-        "type": "query",
-        "datasource": {
-          "type": "mysql",
-          "uid": "${ds}"
-        },
-        "hide": 2,
-        "refresh": 1,
-        "query": "SELECT IF('${lang}'='en','Heating curve','Curva di riscaldamento')",
-        "definition": "SELECT IF('${lang}'='en','Heating curve','Curva di riscaldamento')",
-        "current": {
-          "text": "Curva di riscaldamento",
-          "value": "Curva di riscaldamento"
-        },
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "regex": "",
-        "sort": 0,
-        "skipUrlSync": true
-      },
-      {
-        "name": "t_curve_d",
-        "type": "query",
-        "datasource": {
-          "type": "mysql",
-          "uid": "${ds}"
-        },
-        "hide": 2,
-        "refresh": 1,
-        "query": "SELECT IF('${lang}'='en','Slope and shift of the weather-compensated heating curve. A slope that is too high raises flow temperature and burner starts.','Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.')",
-        "definition": "SELECT IF('${lang}'='en','Slope and shift of the weather-compensated heating curve. A slope that is too high raises flow temperature and burner starts.','Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.')",
-        "current": {
-          "text": "Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.",
-          "value": "Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni."
+          "text": "Fasce: rosso sotto 0,8 bar (ricaricare), verde 1,0–2,5 bar (ottimale), arancio sopra 2,5 bar. Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.",
+          "value": "Fasce: rosso sotto 0,8 bar (ricaricare), verde 1,0–2,5 bar (ottimale), arancio sopra 2,5 bar. Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare."
         },
         "options": [],
         "multi": false,
@@ -1486,6 +1442,270 @@
         "current": {
           "text": "Segnale Wi-Fi caldaia",
           "value": "Segnale Wi-Fi caldaia"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_wifi_ts_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Bands: green above -67 dBm (good), orange -67…-80 dBm (fair), red below -80 dBm (dropouts likely).','Fasce: verde oltre -67 dBm (ottimo), arancio -67…-80 dBm (sufficiente), rosso sotto -80 dBm (disconnessioni probabili).')",
+        "definition": "SELECT IF('${lang}'='en','Bands: green above -67 dBm (good), orange -67…-80 dBm (fair), red below -80 dBm (dropouts likely).','Fasce: verde oltre -67 dBm (ottimo), arancio -67…-80 dBm (sufficiente), rosso sotto -80 dBm (disconnessioni probabili).')",
+        "current": {
+          "text": "Fasce: verde oltre -67 dBm (ottimo), arancio -67…-80 dBm (sufficiente), rosso sotto -80 dBm (disconnessioni probabili).",
+          "value": "Fasce: verde oltre -67 dBm (ottimo), arancio -67…-80 dBm (sufficiente), rosso sotto -80 dBm (disconnessioni probabili)."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_calc",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Curve flow','Mandata da curva')",
+        "definition": "SELECT IF('${lang}'='en','Curve flow','Mandata da curva')",
+        "current": {
+          "text": "Mandata da curva",
+          "value": "Mandata da curva"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_meas",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Measured flow (burner on)','Mandata misurata (bruciatore acceso)')",
+        "definition": "SELECT IF('${lang}'='en','Measured flow (burner on)','Mandata misurata (bruciatore acceso)')",
+        "current": {
+          "text": "Mandata misurata (bruciatore acceso)",
+          "value": "Mandata misurata (bruciatore acceso)"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_outdoor",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Outdoor (boiler sensor)','Temperatura esterna (sonda caldaia)')",
+        "definition": "SELECT IF('${lang}'='en','Outdoor (boiler sensor)','Temperatura esterna (sonda caldaia)')",
+        "current": {
+          "text": "Temperatura esterna (sonda caldaia)",
+          "value": "Temperatura esterna (sonda caldaia)"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating curve','Curva climatica')",
+        "definition": "SELECT IF('${lang}'='en','Heating curve','Curva climatica')",
+        "current": {
+          "text": "Curva climatica",
+          "value": "Curva climatica"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Line: flow temperature computed from the curve (slope, shift and Normal temperature) versus the outdoor sensor. Dots: average measured flow with the circuit heating and the burner on, in the selected period (no dots in summer). Note: the curve uses the boiler outdoor sensor, not the real outdoor temperature.','Linea: temperatura di mandata calcolata dalla curva (pendenza, spostamento e temperatura Normale) in funzione della sonda esterna. Punti: mandata media misurata con circuito in riscaldamento e bruciatore acceso, nel periodo selezionato (in estate non ci sono punti). Nota: la curva usa la sonda esterna della caldaia, non la temperatura reale.')",
+        "definition": "SELECT IF('${lang}'='en','Line: flow temperature computed from the curve (slope, shift and Normal temperature) versus the outdoor sensor. Dots: average measured flow with the circuit heating and the burner on, in the selected period (no dots in summer). Note: the curve uses the boiler outdoor sensor, not the real outdoor temperature.','Linea: temperatura di mandata calcolata dalla curva (pendenza, spostamento e temperatura Normale) in funzione della sonda esterna. Punti: mandata media misurata con circuito in riscaldamento e bruciatore acceso, nel periodo selezionato (in estate non ci sono punti). Nota: la curva usa la sonda esterna della caldaia, non la temperatura reale.')",
+        "current": {
+          "text": "Linea: temperatura di mandata calcolata dalla curva (pendenza, spostamento e temperatura Normale) in funzione della sonda esterna. Punti: mandata media misurata con circuito in riscaldamento e bruciatore acceso, nel periodo selezionato (in estate non ci sono punti). Nota: la curva usa la sonda esterna della caldaia, non la temperatura reale.",
+          "value": "Linea: temperatura di mandata calcolata dalla curva (pendenza, spostamento e temperatura Normale) in funzione della sonda esterna. Punti: mandata media misurata con circuito in riscaldamento e bruciatore acceso, nel periodo selezionato (in estate non ci sono punti). Nota: la curva usa la sonda esterna della caldaia, non la temperatura reale."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_params",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Curve settings','Impostazioni curva')",
+        "definition": "SELECT IF('${lang}'='en','Curve settings','Impostazioni curva')",
+        "current": {
+          "text": "Impostazioni curva",
+          "value": "Impostazioni curva"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_params_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Current values set on the boiler. Typical slope for radiators 1.0–1.6; typical shift 0–5. The Comfort temperature is used only with the Comfort program / extended heating.','Valori attuali impostati in caldaia. Pendenza tipica radiatori 1,0–1,6; spostamento tipico 0–5. La temperatura Comfort viene usata solo con programma Comfort / riscaldamento prolungato.')",
+        "definition": "SELECT IF('${lang}'='en','Current values set on the boiler. Typical slope for radiators 1.0–1.6; typical shift 0–5. The Comfort temperature is used only with the Comfort program / extended heating.','Valori attuali impostati in caldaia. Pendenza tipica radiatori 1,0–1,6; spostamento tipico 0–5. La temperatura Comfort viene usata solo con programma Comfort / riscaldamento prolungato.')",
+        "current": {
+          "text": "Valori attuali impostati in caldaia. Pendenza tipica radiatori 1,0–1,6; spostamento tipico 0–5. La temperatura Comfort viene usata solo con programma Comfort / riscaldamento prolungato.",
+          "value": "Valori attuali impostati in caldaia. Pendenza tipica radiatori 1,0–1,6; spostamento tipico 0–5. La temperatura Comfort viene usata solo con programma Comfort / riscaldamento prolungato."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_slope",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Slope','Pendenza')",
+        "definition": "SELECT IF('${lang}'='en','Slope','Pendenza')",
+        "current": {
+          "text": "Pendenza",
+          "value": "Pendenza"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_shift",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Shift','Spostamento')",
+        "definition": "SELECT IF('${lang}'='en','Shift','Spostamento')",
+        "current": {
+          "text": "Spostamento",
+          "value": "Spostamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_normal",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Normal','Normale')",
+        "definition": "SELECT IF('${lang}'='en','Normal','Normale')",
+        "current": {
+          "text": "Normale",
+          "value": "Normale"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_reduced",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Reduced','Ridotta')",
+        "definition": "SELECT IF('${lang}'='en','Reduced','Ridotta')",
+        "current": {
+          "text": "Ridotta",
+          "value": "Ridotta"
         },
         "options": [],
         "multi": false,
@@ -2045,7 +2265,7 @@
               },
               {
                 "color": "orange",
-                "value": 1500
+                "value": 1800
               },
               {
                 "color": "red",
@@ -2139,7 +2359,7 @@
             {
               "type": "value",
               "options": {
-                "Ridotto": {
+                "Reduced": {
                   "color": "blue",
                   "index": 3
                 }
@@ -2148,7 +2368,7 @@
             {
               "type": "value",
               "options": {
-                "Reduced": {
+                "Ridotto": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2175,7 +2395,7 @@
             {
               "type": "value",
               "options": {
-                "Vacanza": {
+                "Holiday": {
                   "color": "yellow",
                   "index": 7
                 }
@@ -2184,7 +2404,7 @@
             {
               "type": "value",
               "options": {
-                "Holiday": {
+                "Vacanza": {
                   "color": "yellow",
                   "index": 8
                 }
@@ -2284,7 +2504,7 @@
             {
               "type": "value",
               "options": {
-                "DHW only": {
+                "Solo ACS": {
                   "color": "blue",
                   "index": 3
                 }
@@ -2293,7 +2513,7 @@
             {
               "type": "value",
               "options": {
-                "Solo ACS": {
+                "DHW only": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2402,7 +2622,7 @@
             {
               "type": "value",
               "options": {
-                "Off": {
+                "Spenta": {
                   "color": "text",
                   "index": 2
                 }
@@ -2411,7 +2631,7 @@
             {
               "type": "value",
               "options": {
-                "Spenta": {
+                "Off": {
                   "color": "text",
                   "index": 3
                 }
@@ -2420,7 +2640,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente": {
+                "Efficient": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2429,7 +2649,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient": {
+                "Efficiente": {
                   "color": "blue",
                   "index": 5
                 }
@@ -2438,7 +2658,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -2447,7 +2667,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -2939,7 +3159,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Room target"
+              "options": "Obiettivo ambiente"
             },
             "properties": [
               {
@@ -2954,7 +3174,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Obiettivo ambiente"
+              "options": "Room target"
             },
             "properties": [
               {
@@ -3107,7 +3327,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Circuit flow"
+              "options": "Mandata circuito"
             },
             "properties": [
               {
@@ -3122,7 +3342,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Mandata circuito"
+              "options": "Circuit flow"
             },
             "properties": [
               {
@@ -3262,7 +3482,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "DHW target"
+              "options": "Obiettivo ACS"
             },
             "properties": [
               {
@@ -3277,7 +3497,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Obiettivo ACS"
+              "options": "DHW target"
             },
             "properties": [
               {
@@ -3453,7 +3673,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Reduced"
+              "options": "Ridotta"
             },
             "properties": [
               {
@@ -3468,7 +3688,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Ridotta"
+              "options": "Reduced"
             },
             "properties": [
               {
@@ -3642,7 +3862,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Modulazione"
+              "options": "Modulation"
             },
             "properties": [
               {
@@ -3657,7 +3877,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Modulation"
+              "options": "Modulazione"
             },
             "properties": [
               {
@@ -4238,11 +4458,11 @@
               },
               {
                 "color": "green",
-                "value": 88
+                "value": 86
               },
               {
                 "color": "purple",
-                "value": 110
+                "value": 105
               }
             ]
           },
@@ -4409,7 +4629,7 @@
             {
               "type": "value",
               "options": {
-                "Ridotto": {
+                "Reduced": {
                   "color": "blue",
                   "index": 3
                 }
@@ -4418,7 +4638,7 @@
             {
               "type": "value",
               "options": {
-                "Reduced": {
+                "Ridotto": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4445,7 +4665,7 @@
             {
               "type": "value",
               "options": {
-                "Vacanza": {
+                "Holiday": {
                   "color": "yellow",
                   "index": 7
                 }
@@ -4454,7 +4674,7 @@
             {
               "type": "value",
               "options": {
-                "Holiday": {
+                "Vacanza": {
                   "color": "yellow",
                   "index": 8
                 }
@@ -4490,7 +4710,7 @@
             {
               "type": "value",
               "options": {
-                "DHW only": {
+                "Solo ACS": {
                   "color": "blue",
                   "index": 3
                 }
@@ -4499,7 +4719,7 @@
             {
               "type": "value",
               "options": {
-                "Solo ACS": {
+                "DHW only": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4613,7 +4833,7 @@
             {
               "type": "value",
               "options": {
-                "Off": {
+                "Spenta": {
                   "color": "text",
                   "index": 2
                 }
@@ -4622,7 +4842,7 @@
             {
               "type": "value",
               "options": {
-                "Spenta": {
+                "Off": {
                   "color": "text",
                   "index": 3
                 }
@@ -4631,7 +4851,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente": {
+                "Efficient": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4640,7 +4860,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient": {
+                "Efficiente": {
                   "color": "blue",
                   "index": 5
                 }
@@ -4649,7 +4869,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -4658,7 +4878,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -4707,8 +4927,8 @@
         "uid": "${ds}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 7,
+        "w": 12,
         "x": 0,
         "y": 63
       },
@@ -4751,19 +4971,46 @@
               "mode": "none",
               "group": "A"
             },
-            "axisBorderShow": false
+            "axisBorderShow": false,
+            "thresholdsStyle": {
+              "mode": "area"
+            },
+            "pointSize": 6
           },
           "color": {
             "mode": "palette-classic"
           },
           "decimals": 2,
-          "noValue": "—"
+          "min": 0,
+          "max": 3,
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 1.0
+              },
+              {
+                "color": "orange",
+                "value": 2.5
+              }
+            ]
+          }
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "Pressure"
+              "options": "Pressione"
             },
             "properties": [
               {
@@ -4778,7 +5025,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Pressione"
+              "options": "Pressure"
             },
             "properties": [
               {
@@ -4797,79 +5044,15 @@
     {
       "type": "timeseries",
       "id": 37,
-      "title": "${t_curve}",
-      "datasource": {
-        "type": "mysql",
-        "uid": "${ds}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 63
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "mysql",
-            "uid": "${ds}"
-          },
-          "rawQuery": true,
-          "editorMode": "code",
-          "format": "time_series",
-          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Slope','Pendenza') AS metric, hc_slope AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_slope IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Shift','Spostamento') AS metric, hc_shift AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_shift IS NOT NULL ORDER BY time"
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "showPoints": "auto",
-            "spanNulls": 3600000,
-            "barAlignment": 0,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisBorderShow": false
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "description": "${t_curve_d}"
-    },
-    {
-      "type": "timeseries",
-      "id": 38,
       "title": "${t_wifi_ts}",
       "datasource": {
         "type": "mysql",
         "uid": "${ds}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
+        "h": 7,
+        "w": 12,
+        "x": 12,
         "y": 63
       },
       "targets": [
@@ -4911,16 +5094,230 @@
               "mode": "none",
               "group": "A"
             },
-            "axisBorderShow": false
+            "axisBorderShow": false,
+            "thresholdsStyle": {
+              "mode": "area"
+            },
+            "pointSize": 6
           },
           "color": {
             "mode": "palette-classic"
           },
           "decimals": 0,
-          "noValue": "—"
+          "min": -95,
+          "max": -30,
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": -80
+              },
+              {
+                "color": "green",
+                "value": -67
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RSSI"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_wifi_ts_d}"
+    },
+    {
+      "type": "trend",
+      "id": 38,
+      "title": "${t_curve}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 70
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "WITH RECURSIVE s(x) AS (SELECT -15 UNION ALL SELECT x+1 FROM s WHERE x<25), p AS (SELECT hc_slope sl, hc_shift sh, COALESCE(hc_normal_temp, 20) rt FROM viessmann_history WHERE accessory='hc0' AND hc_slope IS NOT NULL ORDER BY ts DESC LIMIT 1), m AS (SELECT ROUND(b.outside_temp) o, ROUND(AVG(h.flow_temp),1) f, COUNT(*) n FROM viessmann_history h JOIN viessmann_history b ON b.accessory='boiler' AND b.event_type='snapshot' AND b.ts BETWEEN h.ts - INTERVAL 10 SECOND AND h.ts + INTERVAL 10 SECOND WHERE h.accessory='hc0' AND h.event_type='snapshot' AND h.mode='heating' AND b.burner_active=1 AND h.flow_temp > 0 AND h.ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND GROUP BY ROUND(b.outside_temp)) SELECT s.x AS outdoor, LEAST(GREATEST(ROUND(p.rt + p.sh - p.sl*(s.x-p.rt)*(1.4347 + 0.021*(s.x-p.rt) + 0.0002479*POW(s.x-p.rt,2)),1), p.rt), 80) AS `${t_curve_calc}`, m.f AS `${t_curve_meas}` FROM s JOIN p LEFT JOIN m ON m.o = s.x ORDER BY s.x"
+        }
+      ],
+      "description": "${t_curve_d}",
+      "options": {
+        "xField": "outdoor",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "fillOpacity": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "outdoor"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "${t_outdoor}"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "${t_curve_calc}"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "${t_curve_meas}"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "points"
+              },
+              {
+                "id": "custom.pointSize",
+                "value": 8
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "stat",
+      "id": 39,
+      "title": "${t_curve_params}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 70
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, hc_slope AS `${t_slope}`, hc_shift AS `${t_shift}`, hc_normal_temp AS `${t_normal} (°C)`, hc_reduced_temp AS `${t_reduced} (°C)`, hc_comfort_temp AS `Comfort (°C)` FROM viessmann_history WHERE accessory='hc0' AND hc_slope IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
         },
         "overrides": []
-      }
+      },
+      "description": "${t_curve_params_d}"
     }
   ]
 }
