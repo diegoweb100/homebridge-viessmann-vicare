@@ -2139,7 +2139,7 @@
             {
               "type": "value",
               "options": {
-                "Reduced": {
+                "Ridotto": {
                   "color": "blue",
                   "index": 3
                 }
@@ -2148,7 +2148,7 @@
             {
               "type": "value",
               "options": {
-                "Ridotto": {
+                "Reduced": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2438,7 +2438,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -2447,7 +2447,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -2891,7 +2891,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 10,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -2939,21 +2939,6 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Obiettivo ambiente"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "yellow"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
               "options": "Room target"
             },
             "properties": [
@@ -2969,7 +2954,22 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Esterna"
+              "options": "Obiettivo ambiente"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outside"
             },
             "properties": [
               {
@@ -2984,7 +2984,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Outside"
+              "options": "Esterna"
             },
             "properties": [
               {
@@ -3089,7 +3089,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 10,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3107,7 +3107,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Circuit flow"
+              "options": "Mandata circuito"
             },
             "properties": [
               {
@@ -3122,7 +3122,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Mandata circuito"
+              "options": "Circuit flow"
             },
             "properties": [
               {
@@ -3214,7 +3214,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 10,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3390,7 +3390,7 @@
             "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "fillOpacity": 0,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3453,7 +3453,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Ridotta"
+              "options": "Reduced"
             },
             "properties": [
               {
@@ -3468,7 +3468,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Reduced"
+              "options": "Ridotta"
             },
             "properties": [
               {
@@ -3622,7 +3622,7 @@
             "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "fillOpacity": 30,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3729,7 +3729,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 80,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3845,7 +3845,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 80,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -3940,7 +3940,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 80,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -4034,7 +4034,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 80,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -4128,7 +4128,7 @@
             "lineInterpolation": "linear",
             "lineWidth": 2,
             "fillOpacity": 80,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -4409,7 +4409,7 @@
             {
               "type": "value",
               "options": {
-                "Reduced": {
+                "Ridotto": {
                   "color": "blue",
                   "index": 3
                 }
@@ -4418,7 +4418,7 @@
             {
               "type": "value",
               "options": {
-                "Ridotto": {
+                "Reduced": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4649,7 +4649,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -4658,7 +4658,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -4744,7 +4744,7 @@
             "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "fillOpacity": 10,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -4840,7 +4840,7 @@
             "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "fillOpacity": 0,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {
@@ -4904,7 +4904,7 @@
             "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "fillOpacity": 10,
-            "showPoints": "never",
+            "showPoints": "auto",
             "spanNulls": 3600000,
             "barAlignment": 0,
             "stacking": {

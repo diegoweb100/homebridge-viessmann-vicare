@@ -821,10 +821,14 @@ const periodHours = (firstVBR && lastVBR)
 const sph = (deltaStarts !== null && periodHours !== null && periodHours > 0)
   ? (deltaStarts / periodHours).toFixed(1)
   : null;
-const avgCycleDurReal = (deltaStarts !== null && deltaHours !== null && deltaStarts > 0)
+// burner_hours from the API is an INTEGER counter (1 h resolution). With less than
+// 2 h of runtime in the period the delta is 0/1 and duration/runtime would be
+// meaningless (e.g. "0.0 min" → false short-cycling alarm) — report them as N/A.
+const hoursLowRes = deltaHours !== null && deltaHours < 2;
+const avgCycleDurReal = (!hoursLowRes && deltaStarts !== null && deltaHours !== null && deltaStarts > 0)
   ? (deltaHours * 60 / deltaStarts).toFixed(1)
   : null;
-const burnerRuntimePct = (deltaHours !== null && periodHours !== null && periodHours > 0)
+const burnerRuntimePct = (!hoursLowRes && deltaHours !== null && periodHours !== null && periodHours > 0)
   ? (deltaHours / periodHours * 100).toFixed(0)
   : null;
 const realCycleCount = deltaStarts;
@@ -1154,7 +1158,9 @@ const reportHours   = DAYS * 24;
 // cyclesPerHour: prefer real API delta; CSV edge fallback only if no delta available
 const cyclesPerHour = sph || (cycleCount && reportHours ? (cycleCount / reportHours).toFixed(2) : null);
 // avgCycleDurNum: prefer real API-derived value
-const avgCycleDurNum  = realAvgDur ? parseFloat(realAvgDur) : (avgCycleDur ? parseFloat(avgCycleDur) : null);
+// When the hours counter resolution is too coarse, do not fall back to the CSV-sampled
+// estimate either (15-min snapshots cannot measure cycle length).
+const avgCycleDurNum  = realAvgDur ? parseFloat(realAvgDur) : (!hoursLowRes && avgCycleDur ? parseFloat(avgCycleDur) : null);
 const shortCycling    = avgCycleDurNum !== null && avgCycleDurNum < 5;
 const excessiveCycling = cyclesPerHour !== null && parseFloat(cyclesPerHour) > 6;
 // Note: with real API data, Vitodens typically shows 6-12 starts/hour in partial load,
@@ -1308,7 +1314,10 @@ if (hasBoilerKW && heatDemandKW && burnerHours && hasGasData) {
 // ── Heating curve behaviour: correlation flow vs outdoor ─────────────────────
 // Pearson correlation: negative = correct curve, ~0 = fixed flow, positive = misconfigured
 let heatCurveCorr = null, heatCurveBehaviour = null, heatCurveCls = 'neutral';
-const corrPairs = hcRows
+// Only samples where the heating circuit is actually heating: in standby (summer)
+// the flow temperature follows DHW production and says nothing about the curve.
+const hcHeatingRows = hcRows.filter(r => (r.mode || '').toLowerCase().includes('heating'));
+const corrPairs = hcHeatingRows
   .map(r => {
     const flow = parseFloat(r.flow_temp);
     const out  = parseFloat(r.outside_temp) || parseFloat(
@@ -1321,7 +1330,7 @@ const corrPairs = hcRows
 // Also try matching outdoor from boilerRows by nearest timestamp
 const corrPairs2 = (() => {
   const bySorted = [...boilerRows].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp));
-  return hcRows.map(r => {
+  return hcHeatingRows.map(r => {
     const flow = parseFloat(r.flow_temp);
     if (isNaN(flow) || flow <= 0) return null;
     const t = new Date(r.timestamp).getTime();
@@ -1352,9 +1361,9 @@ if (usePairs.length >= 20) {
       insights.push({ type:'warn', text: T('insightCurveMiscfg', {r: heatCurveCorr}) });
     else if (c > -0.3 && c < 0.1)
       insights.push({ type:'info', text: T('insightFixedFlow', {r: heatCurveCorr}) });
-    // Rec 3: weather comp not active — add to recommendations
+    // Rec 3: weather comp not active — add to recommendations (only when it is NOT active)
     const rec3 = TR('recNoWeatherComp');
-    recommendations.push({
+    if (c >= -0.3) recommendations.push({
       type: 'info',
       title: rec3.title,
       body: rec3.body?.replaceAll('{r}', heatCurveCorr),
@@ -1666,6 +1675,9 @@ if (gasDays.length >= 3) {
   // Monthly: sum of next 30 days
   let monthSum = 0;
   for (let i = 1; i <= 30; i++) monthSum += projectDay(i);
+  // With few days a regression extrapolated 30 days ahead is unreliable (a falling
+  // trend clamps to ~0). Below 14 days use the period average instead.
+  if (n < 14) monthSum = yMean * 30;
   // Annual: sum of next 365 days (approximated as 30-day avg × 12 with seasonal note)
   // For simplicity: annualise the period avg × 365 (more stable than long regression)
   const periodAvgPerDay = yMean;
