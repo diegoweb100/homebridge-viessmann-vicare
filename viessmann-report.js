@@ -151,6 +151,7 @@ const STRINGS = {
     // ── Comfort efficiency strings ────────────────────────────────────────
     ceTitle:            '⚖️ Comfort vs Efficiency',
     ceNotEnoughData:    'Accumulating data — this analysis will be available after {need} days of monitoring ({have} of {need} collected so far).',
+    ceNoHeating:        'No space heating in the selected period (summer / hot water only): comfort vs efficiency cannot be evaluated.',
     ceStabilityLabel:   'Temperature stability',
     ceGasNormLabel:     'Normalised gas consumption',
     ceTrendStability:   'Comfort trend',
@@ -492,6 +493,7 @@ const STRINGS = {
     // ── Comfort efficiency strings ────────────────────────────────────────
     ceTitle:            '⚖️ Comfort vs Efficienza',
     ceNotEnoughData:    "Dati in accumulo — questa analisi sarà disponibile dopo {need} giorni di monitoraggio ({have} di {need} raccolti finora).",
+    ceNoHeating:        "Nessun riscaldamento ambiente nel periodo selezionato (estate / solo acqua calda): comfort ed efficienza non sono valutabili.",
     ceStabilityLabel:   'Stabilità temperatura',
     ceGasNormLabel:     'Consumo gas normalizzato',
     ceTrendStability:   'Trend comfort',
@@ -850,7 +852,7 @@ const avgCycleDurReal = (!hoursLowRes && deltaStarts !== null && deltaHours !== 
   ? (deltaHours * 60 / deltaStarts).toFixed(1)
   : null;
 const burnerRuntimePct = (!hoursLowRes && deltaHours !== null && periodHours !== null && periodHours > 0)
-  ? (deltaHours / periodHours * 100).toFixed(0)
+  ? (deltaHours / periodHours * 100).toFixed(deltaHours / periodHours * 100 < 1 ? 1 : 0)
   : null;
 const realCycleCount = deltaStarts;
 const realAvgDur     = avgCycleDurReal;
@@ -1344,7 +1346,7 @@ const corrPairs = hcHeatingRows
     const out  = parseFloat(r.outside_temp) || parseFloat(
       (nearestRow(boilerRows, r.timestamp).diff === 0 ? nearestRow(boilerRows, r.timestamp).row.outside_temp : '') || ''
     );
-    return (isNaN(flow) || isNaN(out) || flow <= 0 || out === 0) ? null : [out, flow];
+    return (isNaN(flow) || isNaN(out) || flow <= 0 || out === 0 || out >= 16) ? null : [out, flow];
   })
   .filter(Boolean);
 
@@ -1355,7 +1357,9 @@ const corrPairs2 = (() => {
     if (isNaN(flow) || flow <= 0) return null;
     const { row: best, diff: bd } = nearestRow(boilerRows, r.timestamp);
     const out = best && bd < 30*60*1000 ? parseFloat(best.outside_temp) : NaN;
-    return (!isNaN(out) && out !== 0) ? [out, flow] : null;
+    // Heating season only: above ~16 °C outdoor the circuit is in summer/ECO
+    // standby and the flow temperature follows DHW, not the heating curve.
+    return (!isNaN(out) && out !== 0 && out < 16) ? [out, flow] : null;
   }).filter(Boolean);
 })();
 
@@ -1632,6 +1636,8 @@ const comfortEfficiency = (() => {
   }
 
   if (windows.length < 10) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
+  // No space-heating gas in the period (summer): the comparison is meaningless
+  if (!windows.some(w => w.gasNorm > 0)) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT, noHeating: true };
 
   // Split into first/second half for trend
   const half = Math.floor(windows.length / 2);
@@ -1698,7 +1704,9 @@ if (gasDays.length >= 3) {
   const GAS_PRICE = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
   // Annual estimate requires at least 14 days to avoid misleading projections
   // from short atypical periods (e.g. unusually cold/warm week).
-  const ANNUAL_MIN_DAYS = 14;
+  // A yearly figure extrapolated from a few summer weeks (DHW only) is meaningless:
+  // require data covering most of a year.
+  const ANNUAL_MIN_DAYS = 300;
   const hasEnoughForAnnual = n >= ANNUAL_MIN_DAYS;
   gasForecast = {
     avgPerDay:         yMean.toFixed(2),
@@ -2162,7 +2170,7 @@ footer{text-align:center;font-size:10px;color:#bbb;padding:16px}
   })()}` : `
   <div style="padding:18px 16px;background:#f8f9fa;border-radius:8px;border:1px dashed #ddd;text-align:center;color:#888;font-size:13px">
     <div style="font-size:24px;margin-bottom:8px">📊</div>
-    <div>${T('ceNotEnoughData', {need: comfortEfficiency.daysNeed, have: comfortEfficiency.daysHave})}</div>
+    <div>${comfortEfficiency.noHeating ? T('ceNoHeating') : T('ceNotEnoughData', {need: comfortEfficiency.daysNeed, have: comfortEfficiency.daysHave})}</div>
   </div>`}
 </div>
 

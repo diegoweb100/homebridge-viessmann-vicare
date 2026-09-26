@@ -3,6 +3,13 @@
 All notable changes to homebridge-viessmann-vicare.
 
 
+### [2.0.78] - 2026-09-26
+- fix: **report "Device messages" were frozen**: the plugin stopped writing `viessmann-messages-<installation>-<device>.json` in 2.0.50, so the report showed months-old codes. The writer is back, now also includes fault codes (`device.messages.errors.raw`) and keeps a history (the API only returns current messages)
+- fix: report heating-curve analysis uses only heating-season samples (outdoor < 16 °C): no more "weather compensation not active" advice in summer
+- fix: report annual gas estimate requires ~a full year of data (a few summer weeks gave e.g. 52 m³/year)
+- fix: report comfort-vs-efficiency is not evaluated when there is no space-heating gas in the period (it claimed "system optimisation is working" in summer)
+- fix: report burner runtime shows one decimal below 1 %
+
 ### [2.0.77] - 2026-09-26
 - fix: **30/90/365-day reports failed with "Load failed"**: report generation was O(n²) (90 days took ~3 min on a Raspberry Pi, now a few seconds), the browser request stayed open for minutes, and the report tab was opened after the wait (blocked as a pop-up by Safari). Reports now run as background jobs polled by the page, and the tab is opened at click time
 - fix: report analysis: no false "short cycling" alarm when burner hours changed by less than 2 h (integer counter), heating-curve check uses only samples with the circuit in heating mode, 30-day gas forecast uses the period average with fewer than 14 days of data

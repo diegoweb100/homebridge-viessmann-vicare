@@ -787,6 +787,10 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Energy / Heat Pump accessory (PV, battery, wallbox, electric DHW, Wärmepumpe)
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
+      // Device messages (S./F./I. codes) for the HTML report — restored in 2.0.78
+      // (the writer was accidentally removed in 2.0.50, so the report showed stale messages)
+      this.writeDeviceMessages(features, installation.id, device.id);
+
       // ViCare Smart Climate rooms (one accessory per room) — issue #4
       if ((this.config as any).features?.enableRoomSensors) {
         await this.setupRoomAccessories(installation, gateway, device, features);
@@ -1157,6 +1161,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             clearTimeout(timeoutId);
             deviceFeatureCache.set(deviceKey, features);
             successfulDevices++;
+            this.writeDeviceMessages(features, accessory.context.installation.id, accessory.context.device.id);
             this.log.debug(`✅ Fetched ${features.length} features for device ${accessory.context.device.id}`);
 
             // Small delay between distinct device API calls only
@@ -1209,6 +1214,54 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       this.adjustRefreshInterval(true);
     } finally {
       this.isUpdating = false;
+    }
+  }
+
+  /**
+   * Writes device.messages.* entries (status S.xx, info I.xx, service, errors F.xx) to
+   * viessmann-messages-<installationId>-<deviceId>.json, used by viessmann-report.js.
+   * The API only returns the CURRENT messages, so entries are merged with the existing
+   * file (deduplicated by code+timestamp, newest first, max 200) to keep a history.
+   */
+  private writeDeviceMessages(features: any[], installationId: number, deviceId: string): void {
+    try {
+      const fsm = require('fs');
+      const pathm = require('path');
+      const sources: Array<[string, string]> = [
+        ['device.messages.errors.raw', 'error'],
+        ['device.messages.status.raw', 'status'],
+        ['device.messages.info.raw', 'info'],
+        ['device.messages.service.raw', 'service'],
+      ];
+      const fresh: any[] = [];
+      let found = false;
+      for (const [featureName, type] of sources) {
+        const entries = features.find(f => f.feature === featureName)?.properties?.entries?.value;
+        if (!Array.isArray(entries)) continue;
+        found = true;
+        for (const e of entries) {
+          if (e?.errorCode) {
+            fresh.push({ errorCode: e.errorCode, timestamp: e.timestamp || new Date().toISOString(), type,
+              busAddress: e.busAddress, busType: e.busType });
+          }
+        }
+      }
+      if (!found) return; // device without message features: leave any existing file untouched
+
+      const file = pathm.join(this.api.user.storagePath(), `viessmann-messages-${installationId}-${deviceId}.json`);
+      let old: any[] = [];
+      try { old = JSON.parse(fsm.readFileSync(file, 'utf8')); if (!Array.isArray(old)) old = []; } catch { /* first run */ }
+      const seen = new Set<string>();
+      const merged = [...fresh, ...old].filter(m => {
+        const k = `${m.errorCode}|${m.timestamp}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 200);
+      fsm.writeFileSync(file, JSON.stringify(merged, null, 2), 'utf8');
+      this.log.debug(`📋 Device messages: ${fresh.length} current, ${merged.length} kept → ${file}`);
+    } catch (e) {
+      this.log.debug(`📋 writeDeviceMessages failed: ${e}`);
     }
   }
 
