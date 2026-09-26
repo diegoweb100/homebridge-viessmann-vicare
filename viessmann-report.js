@@ -735,6 +735,27 @@ function TR(key) {
 }
 
 
+// ── Fast nearest-row lookup (binary search) ──────────────────────────────────
+// Several analyses need "the boiler row closest in time to this HC row". Doing it
+// with a linear scan per row was O(n²): a 90-day report took minutes on a Pi.
+const _nearestIndex = new WeakMap();
+function nearestRow(rows, ts) {
+  let idx = _nearestIndex.get(rows);
+  if (!idx) {
+    idx = rows.map(r => ({ t: new Date(r.timestamp).getTime(), r }))
+              .filter(x => !isNaN(x.t)).sort((a, b) => a.t - b.t);
+    _nearestIndex.set(rows, idx);
+  }
+  if (!idx.length) return { row: null, diff: Infinity };
+  const t = typeof ts === 'number' ? ts : new Date(ts).getTime();
+  let lo = 0, hi = idx.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (idx[mid].t < t) lo = mid + 1; else hi = mid; }
+  let best = idx[lo];
+  if (lo > 0 && Math.abs(idx[lo - 1].t - t) <= Math.abs(best.t - t)) best = idx[lo - 1];
+  return { row: best.r, diff: Math.abs(best.t - t) };
+}
+
+
 const HB_PATH = getArg('--path', '/var/lib/homebridge');
 const INSTALLATION_ID = getArg('--installation', '');
 const csvSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
@@ -1321,7 +1342,7 @@ const corrPairs = hcHeatingRows
   .map(r => {
     const flow = parseFloat(r.flow_temp);
     const out  = parseFloat(r.outside_temp) || parseFloat(
-      boilerRows.find(b => b.timestamp === r.timestamp)?.outside_temp || ''
+      (nearestRow(boilerRows, r.timestamp).diff === 0 ? nearestRow(boilerRows, r.timestamp).row.outside_temp : '') || ''
     );
     return (isNaN(flow) || isNaN(out) || flow <= 0 || out === 0) ? null : [out, flow];
   })
@@ -1329,16 +1350,10 @@ const corrPairs = hcHeatingRows
 
 // Also try matching outdoor from boilerRows by nearest timestamp
 const corrPairs2 = (() => {
-  const bySorted = [...boilerRows].sort((a,b) => new Date(a.timestamp)-new Date(b.timestamp));
   return hcHeatingRows.map(r => {
     const flow = parseFloat(r.flow_temp);
     if (isNaN(flow) || flow <= 0) return null;
-    const t = new Date(r.timestamp).getTime();
-    let best = null, bd = Infinity;
-    for (const b of bySorted) {
-      const d = Math.abs(new Date(b.timestamp).getTime() - t);
-      if (d < bd) { bd = d; best = b; }
-    }
+    const { row: best, diff: bd } = nearestRow(boilerRows, r.timestamp);
     const out = best && bd < 30*60*1000 ? parseFloat(best.outside_temp) : NaN;
     return (!isNaN(out) && out !== 0) ? [out, flow] : null;
   }).filter(Boolean);
@@ -1529,10 +1544,7 @@ const condensingScore = (() => {
       const flow = parseFloat(r.flow_temp);
       const ts   = r.timestamp;
       // find nearest boiler row for modulation
-      const b = boilerRows.reduce((best, br) => {
-        const d = Math.abs(new Date(br.timestamp) - new Date(ts));
-        return (!best || d < Math.abs(new Date(best.timestamp) - new Date(ts))) ? br : best;
-      }, null);
+      const b = nearestRow(boilerRows, ts).row;
       const mod = b ? parseFloat(b.modulation) : NaN;
       if (isNaN(flow) || flow <= 0 || isNaN(mod)) return null;
       const deltaT = Math.max(5, Math.min(15, 5 + 0.1 * mod));
@@ -1582,10 +1594,7 @@ const comfortEfficiency = (() => {
       const rt  = parseFloat(r.room_temp);
       if (isNaN(rt) || rt <= 0) return null;
       // nearest boiler row
-      const b = boilerRows.reduce((best, br) => {
-        const d = Math.abs(new Date(br.timestamp).getTime() - ts);
-        return (!best || d < Math.abs(new Date(best.timestamp).getTime() - ts)) ? br : best;
-      }, null);
+      const b = nearestRow(boilerRows, ts).row;
       const out = b ? parseFloat(b.outside_temp) : NaN;
       const gas = b ? parseFloat(b.gas_heating_day_m3) : NaN;
       return { ts, rt, out: isNaN(out) ? null : out, gas: isNaN(gas) ? null : gas };
@@ -1596,8 +1605,11 @@ const comfortEfficiency = (() => {
   if (timeline.length < 20) return { available: false, daysHave: dataDays, daysNeed: MIN_DAYS_COMFORT };
 
   const windows = [];
+  let wEnd = 0; // timeline is sorted: sliding window with two pointers (was O(n²))
   for (let i = 0; i < timeline.length; i++) {
-    const win = timeline.filter(p => p.ts >= timeline[i].ts && p.ts < timeline[i].ts + WINDOW_MS);
+    if (wEnd < i) wEnd = i;
+    while (wEnd < timeline.length && timeline[wEnd].ts < timeline[i].ts + WINDOW_MS) wEnd++;
+    const win = timeline.slice(i, wEnd);
     if (win.length < 5) continue;
 
     const temps = win.map(p => p.rt).filter(v => v != null);

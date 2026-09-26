@@ -123,7 +123,10 @@ export function discoverRoomSensorData(
 
       if (val !== undefined && val !== null) {
         // Collect numeric temperature-range values
-        if (typeof val === 'number' && val > -30 && val < 100 && unit !== '%') {
+        // Only real temperatures: unit celsius/fahrenheit or a "temperature" path.
+        // (Before 2.0.77 any number matched, e.g. device.heatingCircuitId = 0 → "0 °C".)
+        const isTemp = /celsius|fahrenheit/i.test(unit) || /temperature/i.test(f.feature);
+        if (typeof val === 'number' && val > -30 && val < 100 && unit !== '%' && isTemp) {
           allTempFeatures.push({ path: f.feature, prop: pk, value: val, unit });
         }
         const display = Array.isArray(val)

@@ -21,6 +21,7 @@ import { ViessmannDHWAccessory } from './accessories/dhw-accessory';
 import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-accessory';
 import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
 import { ViessmannRoomSensorAccessory, discoverRoomSensorData } from './accessories/room-sensor-accessory';
+import { ViessmannRoomAccessory, detectRoomIndexes } from './accessories/rooms-accessory';
 import * as fs from 'fs';
 import { PLUGIN_NAME, PLUGIN_VERSION, BURNER_UPDATE_CONFIG } from './settings';
 
@@ -786,6 +787,11 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Setup Energy / Heat Pump accessory (PV, battery, wallbox, electric DHW, Wärmepumpe)
       await this.setupEnergyAccessory(installation, gateway, device, features);
 
+      // ViCare Smart Climate rooms (one accessory per room) — issue #4
+      if ((this.config as any).features?.enableRoomSensors) {
+        await this.setupRoomAccessories(installation, gateway, device, features);
+      }
+
       // TRV / Room Sensor discovery mode (logs all features, creates TemperatureSensor per device)
       if ((this.config as any).features?.enableRoomSensorDiscovery) {
         await this.setupRoomSensorDiscovery(installation, gateway, device, features);
@@ -807,16 +813,30 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     device: ViessmannDevice,
     features: ViessmannFeature[]
   ) {
-    const boilerFeatures = features.filter(f => 
-      f.feature.includes('heating.boiler') || 
-      f.feature.includes('heating.burners')
+    // Only ENABLED boiler/burner features that carry real values count (issue #6):
+    // energy devices (e.g. VitoCharge) expose disabled/empty heating.boiler.* stubs,
+    // which created an empty second "Boiler" accessory.
+    const hasValue = (f: ViessmannFeature) =>
+      Object.values((f as any).properties || {}).some((p: any) => p && p.value !== undefined && p.value !== null && p.value !== '');
+    const boilerFeatures = features.filter(f =>
+      f.isEnabled !== false &&
+      (f.feature.startsWith('heating.boiler') || f.feature.startsWith('heating.burners')) &&
+      hasValue(f)
     );
 
+    const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-boiler`);
+
     if (boilerFeatures.length === 0) {
+      // Remove a stale empty "Boiler" left in the cache by earlier versions
+      const stale = this.accessories.find(accessory => accessory.UUID === uuid);
+      if (stale) {
+        this.log.info(`🧹 Removing empty Boiler accessory for device ${device.id} (no boiler/burner data): ${stale.displayName}`);
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [stale]);
+        this.accessories.splice(this.accessories.indexOf(stale), 1);
+      }
       return;
     }
 
-    const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-boiler`);
     const customNames = this.config.customNames || {};
     const boilerName = customNames.boiler || 'Boiler';
     const displayName = `${installation.description} ${boilerName}`;
@@ -1030,8 +1050,43 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       this, accessory, installation, gateway, device, features
     );
 
-    // Attach updateHandler so the main refresh loop can call update()
-    (accessory as any).updateHandler = (feats: ViessmannFeature[]) => handler.update(feats);
+    // Attach updateHandler so the main refresh loop can call update().
+    // NOTE: the refresh loop reads accessory.context.updateHandler — before 2.0.77 this
+    // was set on the accessory object itself, so discovery sensors never refreshed.
+    accessory.context.updateHandler = (feats: ViessmannFeature[]) => handler.update(feats);
+  }
+
+  // 🏠 One HomeKit accessory per ViCare room (rooms.N.sensors.temperature) — issue #4
+  private async setupRoomAccessories(
+    installation: ViessmannInstallation,
+    gateway:      ViessmannGateway,
+    device:       ViessmannDevice,
+    features:     ViessmannFeature[],
+  ): Promise<void> {
+    const rooms = detectRoomIndexes(features);
+    if (!rooms.length) return;
+    const customNames = (this.config as any).customNames ?? {};
+    const prefix = customNames.installationPrefix || installation.description || String(installation.id);
+    this.log.info(`🏠 ${rooms.length} ViCare room(s) found on device ${device.id}: ${rooms.join(', ')}`);
+
+    for (const n of rooms) {
+      const roomName = customNames.roomNames?.[n] || customNames.rooms?.[String(n)] || `Room ${n + 1}`;
+      const name = `${prefix} ${roomName}`;
+      const uuid = this.api.hap.uuid.generate(`vicare-room-${installation.id}-${device.id}-${n}`);
+      let accessory = this.accessories.find(a => a.UUID === uuid);
+      if (!accessory) {
+        this.log.info(`🏠 Adding room accessory: "${name}"`);
+        accessory = new this.api.platformAccessory(name, uuid);
+        accessory.context = { installation, gateway, device, roomIndex: n };
+        this.api.registerPlatformAccessories(PLUGIN_NAME, 'ViessmannPlatform', [accessory]);
+        this.accessories.push(accessory);
+      } else {
+        accessory.context.device = device;
+        accessory.context.installation = installation;
+        accessory.context.gateway = gateway;
+      }
+      new ViessmannRoomAccessory(this, accessory, installation, gateway, device, n, features);
+    }
   }
 
   async updateAllDevices() {

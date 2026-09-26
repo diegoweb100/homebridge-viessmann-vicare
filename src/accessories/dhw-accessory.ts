@@ -9,6 +9,12 @@ export class ViessmannDHWAccessory {
   private comfortService?: Service;
   private ecoService?: Service;
   private offService?: Service;
+  // Extra DHW modes exposed by some devices (e.g. balanced, efficient) — issue #8
+  private extraModeServices = new Map<string, Service>();
+  // One-time DHW charge ("Warm water once" in the ViCare app) — issue #8
+  private oneTimeChargeService?: Service;
+  private supportsOneTimeCharge = false;
+  private oneTimeChargeActive = false;
   
   private availableModes: string[] = [];
   private supportsTemperatureControl = false;
@@ -153,7 +159,12 @@ export class ViessmannDHWAccessory {
       }
     }
 
-    this.platform.log.info(`DHW Capabilities - Modes: [${this.availableModes.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}`);
+    // One-time charge ("Warm water once")
+    const otc = features.find(f => f.feature === 'heating.dhw.oneTimeCharge');
+    this.supportsOneTimeCharge = !!(otc?.isEnabled !== false && otc?.commands?.activate);
+    this.oneTimeChargeActive = otc?.properties?.active?.value === true;
+
+    this.platform.log.info(`DHW Capabilities - Modes: [${this.availableModes.join(', ')}], Temperature: ${this.supportsTemperatureControl ? 'Yes' : 'No'}, One-time charge: ${this.supportsOneTimeCharge ? 'Yes' : 'No'}`);
   }
 
 private setupCharacteristics() {
@@ -367,6 +378,45 @@ private setupCharacteristics() {
         .onSet(this.setOffMode.bind(this));
     }
 
+    // Extra modes (balanced, efficient, efficientWithMinComfort, …): one switch each
+    const EXTRA_LABELS: Record<string, string> = {
+      balanced: 'Balanced', efficient: 'Efficient', efficientWithMinComfort: 'Efficient+',
+    };
+    for (const mode of this.availableModes.filter(m => !['comfort', 'eco', 'off'].includes(m))) {
+      const label = (config as any).customNames?.[`dhw_${mode}`] || EXTRA_LABELS[mode] || mode;
+      const name = `${installationName} ${dhwName} ${label}`;
+      this.platform.log.info(`🏷️ Creating ${mode} service: "${name}"`);
+      const svc = this.accessory.addService(this.platform.Service.Switch, name, `dhw-${mode}-${subtypeVersion}`);
+      svc.setCharacteristic(this.platform.Characteristic.Name, name);
+      svc.displayName = name;
+      svc.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.currentMode === mode)
+        .onSet(async (value: CharacteristicValue) => {
+          if (this._updatingCharacteristics) return;
+          if (value && this.currentMode !== mode) {
+            await this.setMode(mode);
+          } else if (!value && this.currentMode === mode && this.availableModes.includes('off')) {
+            await this.setMode('off');
+          } else if (!value) {
+            setImmediate(() => this.updateAllCharacteristics());
+          }
+        });
+      this.extraModeServices.set(mode, svc);
+    }
+
+    // One-time charge switch ("Warm water once")
+    if (this.supportsOneTimeCharge) {
+      const label = (config as any).customNames?.dhw_oneTimeCharge || 'Once';
+      const name = `${installationName} ${dhwName} ${label}`;
+      this.platform.log.info(`🏷️ Creating one-time charge service: "${name}"`);
+      this.oneTimeChargeService = this.accessory.addService(this.platform.Service.Switch, name, `dhw-onetimecharge-${subtypeVersion}`);
+      this.oneTimeChargeService.setCharacteristic(this.platform.Characteristic.Name, name);
+      this.oneTimeChargeService.displayName = name;
+      this.oneTimeChargeService.getCharacteristic(this.platform.Characteristic.On)
+        .onGet(() => this.oneTimeChargeActive)
+        .onSet(this.setOneTimeCharge.bind(this));
+    }
+
     this.platform.log.info(`✅ DHW mode services setup completed for modes: [${this.availableModes.join(', ')}] with subtype version: ${subtypeVersion}`);
   }
 
@@ -389,6 +439,27 @@ private setupCharacteristics() {
     this.comfortService = undefined;
     this.ecoService = undefined;
     this.offService = undefined;
+    this.extraModeServices.clear();
+    this.oneTimeChargeService = undefined;
+  }
+
+  // 🚿 One-time DHW charge ("Warm water once") — heating.dhw.oneTimeCharge activate/deactivate
+  async setOneTimeCharge(value: CharacteristicValue) {
+    if (this._updatingCharacteristics) return;
+    const on = value as boolean;
+    try {
+      const ok = await this.platform.viessmannAPI.executeCommand(
+        this.installation.id, this.gateway.serial, this.device.id,
+        'heating.dhw.oneTimeCharge', on ? 'activate' : 'deactivate', {},
+      );
+      if (!ok) throw new Error('command rejected');
+      this.oneTimeChargeActive = on;
+      this.platform.log.info(`🚿 DHW one-time charge ${on ? 'started' : 'stopped'}`);
+    } catch (error) {
+      this.platform.log.error(`Failed to ${on ? 'start' : 'stop'} DHW one-time charge:`, error instanceof Error ? error.message : error);
+      setImmediate(() => this.oneTimeChargeService?.updateCharacteristic(this.platform.Characteristic.On, this.oneTimeChargeActive));
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
   }
   
 async setActive(value: CharacteristicValue) {
@@ -558,6 +629,12 @@ async setActive(value: CharacteristicValue) {
       
       if (this.offService) {
         this.offService.updateCharacteristic(this.platform.Characteristic.On, isOff);
+      }
+      for (const [mode, svc] of this.extraModeServices) {
+        svc.updateCharacteristic(this.platform.Characteristic.On, this.currentMode === mode);
+      }
+      if (this.oneTimeChargeService) {
+        this.oneTimeChargeService.updateCharacteristic(this.platform.Characteristic.On, this.oneTimeChargeActive);
       }
       
       this.platform.log.debug(`DHW States - Mode: ${this.currentMode.toUpperCase()}, Active: ${isActive}, Comfort: ${isComfort}, Eco: ${isEco}, Off: ${isOff}`);
@@ -762,6 +839,13 @@ async setActive(value: CharacteristicValue) {
 
   private async updateFromFeatures(features: any[]) {
     let changed = false;
+
+    // One-time charge state (ends automatically when the cylinder is charged)
+    const otcFeature = features.find(f => f.feature === 'heating.dhw.oneTimeCharge');
+    if (otcFeature?.properties?.active?.value !== undefined) {
+      const otc = otcFeature.properties.active.value === true;
+      if (otc !== this.oneTimeChargeActive) { this.oneTimeChargeActive = otc; changed = true; }
+    }
 
     // Update DHW current temperature
     const dhwTempFeature = features.find(f => 

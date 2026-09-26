@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.76';
+export const PLUGIN_VERSION = '2.0.77';
 
 /**
  * Default configuration values
@@ -55,6 +55,8 @@ export const DEFAULT_CONFIG = {
     enableBurnerStatus: true,
     // TRV / Smart Climate discovery (verbose — use only for diagnostics)
     enableRoomSensorDiscovery: false,
+    // ViCare Smart Climate: one HomeKit accessory per room (rooms.N.sensors.temperature)
+    enableRoomSensors: false,
   },
   advanced: {
     maxConsecutiveErrors: 5,

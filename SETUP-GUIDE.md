@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.76
+# Complete Setup Guide - v2.0.77
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.76 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.77 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -760,7 +760,16 @@ All energy data (PV production, battery level, charge/discharge, grid, wallbox) 
 
 > ⚠️ **Beta**: Energy accessory support and history logging are functional but depend on Viessmann API path variants that differ across VitoCharge generations. Enable `debug: true` and share logs if data appears missing.
 
-### 🌡️ TRV / Room Sensor Accessories *(beta)*
+### 🏠 ViCare Smart Climate rooms *(v2.0.77+)*
+
+For installations with a ViCare **RoomControl** and smart radiator valves, enable:
+```json
+"features": { "enableRoomSensors": true },
+"customNames": { "roomNames": ["Living room", "Kitchen", "Bedroom"] }
+```
+One accessory per room is created: **temperature** sensor, **humidity** sensor (only when the room humidity sensor is connected) and **window** contact sensor (when available). Without `roomNames` rooms are called "Room 1", "Room 2", … Room temperatures and setpoints are logged to CSV/MySQL (`room0`, `room1`, …).
+
+### 🌡️ TRV / Room Sensor discovery *(diagnostics)*
 
 Enable with `features.enableRoomSensorDiscovery: true` in plugin config. The plugin scans all non-main gateway devices and creates a `TemperatureSensor` accessory for each device with a temperature reading (ViCare Smart Climate TRVs, zone sensors, etc.).
 
@@ -780,6 +789,8 @@ Temperature history is logged to CSV (`room-<deviceId>` column) and MySQL on eve
   - `[Installation Prefix] [Custom DHW Name] [Custom Comfort Name]` - Comfort Mode Switch
   - `[Installation Prefix] [Custom DHW Name] [Custom Eco Name]` - Eco Mode Switch
   - `[Installation Prefix] [Custom DHW Name] [Custom Off Name]` - Off Mode Switch
+  - Other modes reported by the device (e.g. `balanced`, `efficient`, `efficientWithMinComfort`) get their own switch *(v2.0.77+)*
+- **One-time charge** *(v2.0.77+, if supported)*: `[Installation Prefix] [Custom DHW Name] Once` - Switch that starts a single hot-water charge ("Warm water once" in the ViCare app); it turns off by itself when the cylinder is charged
 
 ### 🏠 Heating Circuit Accessories
 - **Main Circuit Control**: `[Installation Prefix] [Custom Heating Circuit Name] X` - HeaterCooler service for circuit temperature
@@ -1280,6 +1291,11 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.77 (2026-09-26)
+- fix: long reports (30/90/365 days) — much faster, generated in background, no more "Load failed"
+- fix: OAuth URL always logged (Docker), no empty extra Boiler for energy devices, report analysis false alarms
+- feat: ViCare Smart Climate rooms (`features.enableRoomSensors`), extra DHW modes and one-time hot water charge switch
 
 ### v2.0.76 (2026-09-26)
 - fix: report web server supervised (no more silent stop / "Load failed"): logs, automatic restart, clean stop on shutdown

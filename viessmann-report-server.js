@@ -434,8 +434,12 @@ async function generate(){
   const lang=document.getElementById('lang').value;
   btn.disabled=true;
   status.className='loading';
-  status.innerHTML='<span class="spinner"></span>Generating report — please wait (large datasets may take up to 2 min)&hellip;';
-  const p=new URLSearchParams({days});
+  status.innerHTML='<span class="spinner"></span>Generating report&hellip; <span id="elapsed"></span>';
+  // Open the tab NOW, inside the click: browsers (Safari especially) block
+  // window.open() called after a long await, which made 30/90-day reports "vanish".
+  let win=null;
+  try{win=window.open('','_blank');if(win){win.document.write('<!doctype html><title>Viessmann report</title><body style="font-family:-apple-system,Segoe UI,sans-serif;padding:40px;color:#555">Generating report&hellip; this tab will update automatically.</body>');}}catch(_){win=null;}
+  const p=new URLSearchParams({days,async:'1'});
   if(installation)p.set('installation',installation);
   if(boilerKW)p.set('boilerKW',boilerKW);
   if(designTemp)p.set('designTemp',designTemp);
@@ -443,20 +447,29 @@ async function generate(){
   if(curveShift!=='')p.set('curveShift',curveShift);
   if(gasPrice)p.set('gasPrice',gasPrice);
   if(lang)p.set('lang',lang);
+  const t0=Date.now();
   try{
-    const res=await fetch('/report?'+p.toString());
-    if(!res.ok){
-      const errText=await res.text();
-      throw new Error(errText||res.statusText);
+    // Asynchronous job + polling: no single HTTP request stays open for minutes
+    // (Safari aborts long requests with "Load failed").
+    const start=await fetch('/report?'+p.toString());
+    if(!start.ok)throw new Error(await start.text()||start.statusText);
+    const {job}=await start.json();
+    let st;
+    for(;;){
+      await new Promise(r=>setTimeout(r,2000));
+      const el=document.getElementById('elapsed');if(el)el.textContent='('+Math.round((Date.now()-t0)/1000)+'s)';
+      const r=await fetch('/report/job?id='+encodeURIComponent(job));
+      st=await r.json();
+      if(st.status!=='running')break;
     }
-    const html=await res.text();
-    const blob=new Blob([html],{type:'text/html'});
-    window.open(URL.createObjectURL(blob),'_blank');
-    status.className='ok';
-    status.textContent='\u2713 Report opened in new tab';
+    if(st.status==='error')throw new Error(st.error||'report failed');
+    const resultUrl='/report/result?id='+encodeURIComponent(job);
+    if(win&&!win.closed){win.location.href=resultUrl;status.className='ok';status.textContent='✓ Report ready ('+Math.round((Date.now()-t0)/1000)+'s) — opened in the new tab';}
+    else{status.className='ok';status.innerHTML='✓ Report ready: <a href="'+resultUrl+'" target="_blank">open report</a>';}
   }catch(e){
+    if(win&&!win.closed)win.close();
     status.className='err';
-    status.textContent='\u2717 Error: '+e.message;
+    status.textContent='✗ Error: '+e.message;
   }finally{
     btn.disabled=false;
   }
@@ -467,6 +480,18 @@ async function generate(){
 }
 
 // ── HTTP Server ────────────────────────────────────────────────────────────
+
+// ── Async report jobs (v2.0.77) ────────────────────────────────────────────
+// Long reports (30–365 days) can take minutes on a Raspberry Pi. Browsers abort
+// long-running requests, so the UI starts a job and polls its status instead.
+const jobs = new Map(); // id → { status, started, html, error, finished }
+const JOB_TTL_MS = 15 * 60 * 1000;
+function cleanupJobs() {
+  const now = Date.now();
+  for (const [id, j] of jobs) {
+    if (j.finished && now - j.finished > JOB_TTL_MS) jobs.delete(id);
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   const t0      = Date.now();
@@ -502,6 +527,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/report/job') {
+    cleanupJobs();
+    const j = jobs.get(String(parsed.query.id || ''));
+    res.writeHead(j ? 200 : 404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(j
+      ? { status: j.status, elapsed: Math.round(((j.finished || Date.now()) - j.started) / 1000), error: j.error || null }
+      : { status: 'error', error: 'unknown or expired job' }));
+    return;
+  }
+
+  if (pathname === '/report/result') {
+    const j = jobs.get(String(parsed.query.id || ''));
+    if (!j || j.status !== 'done') {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(j ? 'Report not ready yet' : 'Report expired — generate it again');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(j.html);
+    return;
+  }
+
   if (pathname === '/report') {
     const q            = parsed.query;
     const days         = Math.round(numParam(q.days, 7, 1, 365));
@@ -532,6 +579,24 @@ const server = http.createServer(async (req, res) => {
       dbg('ERROR: ' + msg);
       res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end(msg);
+      return;
+    }
+
+    if (q.async === '1') {
+      cleanupJobs();
+      if ([...jobs.values()].filter(j => j.status === 'running').length >= 2) {
+        res.writeHead(429, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Two reports are already being generated — please wait');
+        return;
+      }
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const job = { status: 'running', started: Date.now() };
+      jobs.set(id, job);
+      generateReport({ days, installation, boilerKW, designTemp, gasPrice, curveSlope, curveShift, lang })
+        .then(html => { job.status = 'done'; job.html = html; job.finished = Date.now(); dbg(`job ${id} done`); })
+        .catch(e => { job.status = 'error'; job.error = (e.message || String(e)).slice(0, 2000); job.finished = Date.now(); dbg(`job ${id} error: ${job.error.split('\n')[0]}`); });
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ job: id }));
       return;
     }
 

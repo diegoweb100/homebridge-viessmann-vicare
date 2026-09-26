@@ -271,6 +271,15 @@
             "type": "string",
             "placeholder": "Riscaldamento Extra",
             "description": "Custom name for extended heating mode (comfort boost). Default: 'Extended Heating'. Italian example: 'Riscaldamento Extra'"
+          },
+          "roomNames": {
+            "title": "Room names (ViCare Smart Climate)",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "title": "Room name"
+            },
+            "description": "Names for the ViCare rooms in order (room 1, room 2, …). Leave empty to use \"Room 1\", \"Room 2\", …"
           }
         }
       },
@@ -439,6 +448,12 @@
             "type": "boolean",
             "default": false,
             "description": "Scan all gateway devices for thermostatic radiator valves (TRVs) or per-room temperature sensors. Creates a HomeKit TemperatureSensor for each discovered device and dumps all API feature paths to the Homebridge log. Enable this if you have Viessmann ViCare Smart Climate and want to help implement full TRV support. Disable in production — generates verbose logs."
+          },
+          "enableRoomSensors": {
+            "title": "Room sensors (ViCare Smart Climate)",
+            "type": "boolean",
+            "default": false,
+            "description": "Create one HomeKit accessory per ViCare room (temperature, humidity when a sensor is connected, window open/closed) for installations with a ViCare RoomControl and smart radiator valves. Room names can be set in Custom Names → Room names."
           }
         }
       },
@@ -688,6 +703,7 @@
         "customNames.holiday",
         "customNames.holidayAtHome",
         "customNames.extendedHeating",
+        "customNames.roomNames",
         "forceServiceRecreation"
       ]
     },
@@ -737,7 +753,9 @@
         "features.enableHeatingCircuitAccessories",
         "features.enableTemperaturePrograms",
         "features.enableQuickSelections",
-        "features.enableBurnerStatus"
+        "features.enableBurnerStatus",
+        "features.enableRoomSensors",
+        "features.enableRoomSensorDiscovery"
       ]
     },
     {

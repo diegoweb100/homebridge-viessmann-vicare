@@ -728,34 +728,28 @@ export class AuthManager {
 
 
 private openBrowser(url: string): void {
-  // 🆕 Per servizi systemd: NON tentare di aprire automaticamente
-  // L'utente può aprire da qualsiasi dispositivo sulla rete
-  
+  // Always log the URL first (issue #3): in Docker/Umbrel/other containers the
+  // process runs as root without systemd variables, xdg-open does not exist and the
+  // URL was never shown, making the OAuth flow unrecoverable.
+  this.log.info('='.repeat(80));
+  this.log.info('🔐 AUTHENTICATION REQUIRED');
+  this.log.info('='.repeat(80));
+  this.log.info('');
+  this.log.info('📱 Open this URL from ANY device on your network:');
+  this.log.info('');
+  this.log.info(`   ${url}`);
+  this.log.info('');
+  this.log.info(`🌐 Or open the status page: http://${this.hostIp}:${this.config.redirectPort || 4200}`);
+  this.log.info('⏳ Waiting for authentication...');
+  this.log.info('='.repeat(80));
+
+  // Try to open a local browser only on interactive desktop installs
   const isSystemdService = !!(process.env.SYSTEMD_EXEC_PID || process.env.INVOCATION_ID);
   const isHomebridge = process.env.USER === 'homebridge';
-  
-  // Se siamo in un servizio systemd o utente homebridge, non aprire automaticamente
-  if (isSystemdService || isHomebridge) {
-    this.log.info('='.repeat(80));
-    this.log.info('🔐 AUTHENTICATION REQUIRED');
-    this.log.info('='.repeat(80));
-    this.log.info('');
-    this.log.info('📱 Open this URL from ANY device on your network:');
-    this.log.info('');
-    this.log.info(`   ${url}`);
-    this.log.info('');
-    this.log.info('✅ You can open it from:');
-    this.log.info('   • Your computer/laptop');
-    this.log.info('   • Your smartphone/tablet');
-    this.log.info('   • This Raspberry Pi (if you have a browser)');
-    this.log.info('');
-    this.log.info(`🌐 Auth server is listening on: ${this.hostIp}:${this.config.redirectPort || 4200}`);
-    this.log.info('⏳ Waiting for authentication...');
-    this.log.info('='.repeat(80));
+  const isContainer = require('fs').existsSync('/.dockerenv') || !!process.env.container;
+  if (isSystemdService || isHomebridge || isContainer) {
     return;
   }
-
-  // Solo per installazioni non-systemd (es. macOS, sviluppo locale)
   this.tryOpenBrowserDirect(url);
 }
 
@@ -777,7 +771,7 @@ private tryOpenBrowserDirect(url: string): void {
 
   exec(command, (error: Error | null) => {
     if (error) {
-      this.log.info('📱 Please open the authentication URL manually in your browser');
+      this.log.info(`📱 Could not open a browser automatically — open the URL above manually: ${url}`);
     } else {
       this.log.info('🌐 Opening browser...');
     }

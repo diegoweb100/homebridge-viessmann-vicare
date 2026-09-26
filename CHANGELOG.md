@@ -3,6 +3,16 @@
 All notable changes to homebridge-viessmann-vicare.
 
 
+### [2.0.77] - 2026-09-26
+- fix: **30/90/365-day reports failed with "Load failed"**: report generation was O(n²) (90 days took ~3 min on a Raspberry Pi, now a few seconds), the browser request stayed open for minutes, and the report tab was opened after the wait (blocked as a pop-up by Safari). Reports now run as background jobs polled by the page, and the tab is opened at click time
+- fix: report analysis: no false "short cycling" alarm when burner hours changed by less than 2 h (integer counter), heating-curve check uses only samples with the circuit in heating mode, 30-day gas forecast uses the period average with fewer than 14 days of data
+- fix (#3): the OAuth authorization URL is now always printed in the log (Docker/Umbrel installs never showed it)
+- fix (#6): no more empty extra "Boiler" accessory for energy devices (e.g. VitoCharge); a stale one is removed automatically
+- fix: room-sensor discovery accessories were never refreshed, and could show a non-temperature value (e.g. 0 °C from heatingCircuitId)
+- feat (#4): **ViCare Smart Climate rooms**: one HomeKit accessory per room (temperature, humidity when connected, window open/closed) with `features.enableRoomSensors: true`; names via `customNames.roomNames`
+- feat (#8): DHW modes other than comfort/eco/off (e.g. `balanced`, `efficient`, `efficientWithMinComfort`) get their own switch; new **one-time hot water charge** switch ("Warm water once") when the device supports `heating.dhw.oneTimeCharge`
+- feat: Grafana dashboard: text tiles (burner, program, modes, status code) no longer show "No data", state timelines stop at "now", sparse series show points
+
 ### [2.0.76] - 2026-09-26
 - fix: report web server (`reportServerPort`) could stop silently: it was started with `execFile`, which buffers the child output (1 MB max) and kills it when the buffer is full, especially with `debug: true`. It could also fail with the port still held by an orphan process after a restart. The server now runs as a supervised child process: output goes to the Homebridge log, errors and exits are logged, it restarts automatically with back-off (max 5 attempts) and it is stopped when Homebridge shuts down
 
