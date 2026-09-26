@@ -35,6 +35,11 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   private installations: ViessmannInstallation[] = [];
   private refreshTimer?: NodeJS.Timeout;
   private healthMonitoringTimer?: NodeJS.Timeout;
+  // Report server child process supervision
+  private reportServerChild?: any;
+  private reportServerRestarts = 0;
+  private reportServerStopping = false;
+  private reportServerRestartTimer?: NodeJS.Timeout;
   private isUpdating = false;
   private consecutiveErrors = 0;
   private maxConsecutiveErrors = 5;
@@ -110,14 +115,13 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
           const serverArgs = ['--port', String(reportPort), '--path', reportServerPath, '--timeout', String(reportTimeout)];
           if (this.config.debug) serverArgs.push('--debug');
 
-          const { execFile } = require('child_process');
-          const child = execFile(process.execPath, [reportScript, ...serverArgs], {
-            detached: false,
-            stdio: 'inherit',
-          });
-          child.on('error', (err: Error) => {
-            this.log.warn(`Report server failed to start: ${err.message}`);
-          });
+          // Supervised child process (2.0.76):
+          // - spawn (not execFile): execFile buffers stdout (1 MB max) and ignores
+          //   `stdio`, so with --debug the server was silently killed after a while
+          // - output forwarded to the Homebridge log, exit/errors logged
+          // - automatic restart with back-off (e.g. port still busy after a restart)
+          // - child terminated on Homebridge shutdown (no orphan holding the port)
+          this.startReportServer(reportScript, serverArgs, reportPort);
 
           this.log.info('═'.repeat(60));
           this.log.info('📊 Viessmann Report Server');
@@ -132,6 +136,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     });
 
     this.api.on(APIEvent.SHUTDOWN, () => {
+      this.stopReportServer();
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
       }
@@ -188,6 +193,60 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     this.viessmannAPI.setBurnerUpdateCallback(this.handleBurnerStatusUpdate.bind(this));
     
     this.log.debug('🔥 Burner update system initialized');
+  }
+
+  // 📊 Start the report web server as a supervised child process
+  private startReportServer(script: string, args: string[], port: number): void {
+    const { spawn } = require('child_process');
+    const child = spawn(process.execPath, [script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    this.reportServerChild = child;
+    const startedAt = Date.now();
+
+    const forward = (level: 'debug' | 'warn') => (buf: Buffer) => {
+      for (const line of buf.toString().split('\n')) {
+        const l = line.trim();
+        if (!l) continue;
+        if (level === 'warn' || /error|EADDRINUSE|failed/i.test(l)) {
+          this.log.warn(`[ReportServer] ${l.replace(/^\[ReportServer\]\s*/, '')}`);
+        } else {
+          this.log.debug(`[ReportServer] ${l.replace(/^\[ReportServer\]\s*/, '')}`);
+        }
+      }
+    };
+    child.stdout?.on('data', forward('debug'));
+    child.stderr?.on('data', forward('warn'));
+
+    child.on('error', (err: Error) => {
+      this.log.warn(`📊 Report server failed to start: ${err.message}`);
+    });
+
+    child.on('exit', (code: number | null, signal: string | null) => {
+      this.reportServerChild = undefined;
+      if (this.reportServerStopping) return;
+      // A run longer than 10 minutes resets the back-off counter
+      if (Date.now() - startedAt > 10 * 60 * 1000) this.reportServerRestarts = 0;
+      this.reportServerRestarts++;
+      if (this.reportServerRestarts > 5) {
+        this.log.error(`📊 Report server on port ${port} keeps stopping (code=${code} signal=${signal}) — giving up. ` +
+          'Check that the port is free and restart Homebridge.');
+        return;
+      }
+      const delay = Math.min(5000 * Math.pow(2, this.reportServerRestarts - 1), 120000);
+      this.log.warn(`📊 Report server stopped (code=${code} signal=${signal}) — restarting in ${delay / 1000}s ` +
+        `(attempt ${this.reportServerRestarts}/5)`);
+      this.reportServerRestartTimer = setTimeout(() => this.startReportServer(script, args, port), delay);
+    });
+  }
+
+  // 📊 Stop the report server (Homebridge shutdown)
+  private stopReportServer(): void {
+    this.reportServerStopping = true;
+    if (this.reportServerRestartTimer) clearTimeout(this.reportServerRestartTimer);
+    try {
+      this.reportServerChild?.kill('SIGTERM');
+    } catch {
+      // already gone
+    }
   }
 
   // 🆕 NEW: Handle burner status updates from API

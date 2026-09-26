@@ -1095,6 +1095,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.76] - 2026-09-26
+- fix: report web server (`reportServerPort`) could stop silently: it was started with `execFile`, which buffers the child output (1 MB max) and kills it when the buffer is full, especially with `debug: true`. It could also fail with the port still held by an orphan process after a restart. The server now runs as a supervised child process: output goes to the Homebridge log, errors and exits are logged, it restarts automatically with back-off (max 5 attempts) and it is stopped when Homebridge shuts down
+
 ### [2.0.75] - 2026-09-26
 - fix: history values equal to **0** were written as empty/NULL (`value || undefined`): daily/monthly gas, heat production and outside temperature of 0 now stored correctly (e.g. heating gas in summer)
 - fix: burner update statistics counted debounced updates as attempts (success rate shown ~50%): now only processed updates are counted
