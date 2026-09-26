@@ -1864,7 +1864,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^value$/",
           "values": false
         },
         "colorMode": "background",
@@ -2094,7 +2094,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^value$/",
           "values": false
         },
         "colorMode": "value",
@@ -2121,7 +2121,7 @@
             {
               "type": "value",
               "options": {
-                "Normale": {
+                "Normal": {
                   "color": "green",
                   "index": 1
                 }
@@ -2130,7 +2130,7 @@
             {
               "type": "value",
               "options": {
-                "Normal": {
+                "Normale": {
                   "color": "green",
                   "index": 2
                 }
@@ -2175,7 +2175,7 @@
             {
               "type": "value",
               "options": {
-                "Holiday": {
+                "Vacanza": {
                   "color": "yellow",
                   "index": 7
                 }
@@ -2184,7 +2184,7 @@
             {
               "type": "value",
               "options": {
-                "Vacanza": {
+                "Holiday": {
                   "color": "yellow",
                   "index": 8
                 }
@@ -2239,7 +2239,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^value$/",
           "values": false
         },
         "colorMode": "value",
@@ -2266,7 +2266,7 @@
             {
               "type": "value",
               "options": {
-                "Riscaldamento": {
+                "Heating": {
                   "color": "red",
                   "index": 1
                 }
@@ -2275,7 +2275,7 @@
             {
               "type": "value",
               "options": {
-                "Heating": {
+                "Riscaldamento": {
                   "color": "red",
                   "index": 2
                 }
@@ -2284,7 +2284,7 @@
             {
               "type": "value",
               "options": {
-                "Solo ACS": {
+                "DHW only": {
                   "color": "blue",
                   "index": 3
                 }
@@ -2293,7 +2293,7 @@
             {
               "type": "value",
               "options": {
-                "DHW only": {
+                "Solo ACS": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2302,7 +2302,7 @@
             {
               "type": "value",
               "options": {
-                "ACS + Riscaldamento": {
+                "DHW + Heating": {
                   "color": "orange",
                   "index": 5
                 }
@@ -2311,7 +2311,7 @@
             {
               "type": "value",
               "options": {
-                "DHW + Heating": {
+                "ACS + Riscaldamento": {
                   "color": "orange",
                   "index": 6
                 }
@@ -2366,7 +2366,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^value$/",
           "values": false
         },
         "colorMode": "value",
@@ -2420,7 +2420,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient": {
+                "Efficiente": {
                   "color": "blue",
                   "index": 4
                 }
@@ -2429,7 +2429,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente": {
+                "Efficient": {
                   "color": "blue",
                   "index": 5
                 }
@@ -2438,7 +2438,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -2447,7 +2447,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -2705,7 +2705,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
+          "fields": "/^value$/",
           "values": false
         },
         "colorMode": "background",
@@ -2969,7 +2969,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Outside"
+              "options": "Esterna"
             },
             "properties": [
               {
@@ -2984,7 +2984,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Esterna"
+              "options": "Outside"
             },
             "properties": [
               {
@@ -3107,7 +3107,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Mandata circuito"
+              "options": "Circuit flow"
             },
             "properties": [
               {
@@ -3122,7 +3122,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Circuit flow"
+              "options": "Mandata circuito"
             },
             "properties": [
               {
@@ -3423,7 +3423,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Normale"
+              "options": "Normal"
             },
             "properties": [
               {
@@ -3438,7 +3438,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Normal"
+              "options": "Normale"
             },
             "properties": [
               {
@@ -3520,7 +3520,7 @@
           "rawQuery": true,
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(burner_active=1,IF('${lang}'='en','On','Acceso'),IF('${lang}'='en','Off','Spento')) AS `${t_burner}` FROM viessmann_history WHERE accessory='boiler' AND burner_active IS NOT NULL AND event_type IN ('snapshot','burner_on','burner_off') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+          "rawSql": "SELECT * FROM (SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(burner_active=1,IF('${lang}'='en','On','Acceso'),IF('${lang}'='en','Off','Spento')) AS `${t_burner}` FROM viessmann_history WHERE accessory='boiler' AND burner_active IS NOT NULL AND event_type IN ('snapshot','burner_on','burner_off') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) q UNION ALL SELECT UNIX_TIMESTAMP(), NULL ORDER BY 1"
         }
       ],
       "options": {
@@ -4358,7 +4358,7 @@
           "rawQuery": true,
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE program WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'normal' THEN IF('${lang}'='en','Normal','Normale') WHEN 'reduced' THEN IF('${lang}'='en','Reduced','Ridotto') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'holiday' THEN IF('${lang}'='en','Holiday','Vacanza') WHEN 'holidayAtHome' THEN IF('${lang}'='en','Holiday at home','Vacanza a casa') WHEN 'summerEco' THEN IF('${lang}'='en','Summer eco','Eco estivo') WHEN 'fixed' THEN IF('${lang}'='en','Fixed','Fisso') WHEN 'forcedLastFromSchedule' THEN IF('${lang}'='en','Forced','Forzato') WHEN 'normalEnergySaving' THEN IF('${lang}'='en','Normal (saving)','Normale (risparmio)') WHEN 'reducedEnergySaving' THEN IF('${lang}'='en','Reduced (saving)','Ridotto (risparmio)') WHEN 'comfortEnergySaving' THEN IF('${lang}'='en','Comfort (saving)','Comfort (risparmio)') ELSE program END AS `${t_hc_prog}`, CASE mode WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'heating' THEN IF('${lang}'='en','Heating','Riscaldamento') WHEN 'dhw' THEN IF('${lang}'='en','DHW only','Solo ACS') WHEN 'dhwAndHeating' THEN IF('${lang}'='en','DHW + Heating','ACS + Riscaldamento') WHEN 'heatingCooling' THEN IF('${lang}'='en','Heating/Cooling','Risc. + Raffr.') WHEN 'forcedReduced' THEN IF('${lang}'='en','Forced reduced','Ridotto forzato') WHEN 'forcedNormal' THEN IF('${lang}'='en','Forced normal','Normale forzato') ELSE mode END AS `${t_hc_mode}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND program IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+          "rawSql": "SELECT * FROM (SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE program WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'normal' THEN IF('${lang}'='en','Normal','Normale') WHEN 'reduced' THEN IF('${lang}'='en','Reduced','Ridotto') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'holiday' THEN IF('${lang}'='en','Holiday','Vacanza') WHEN 'holidayAtHome' THEN IF('${lang}'='en','Holiday at home','Vacanza a casa') WHEN 'summerEco' THEN IF('${lang}'='en','Summer eco','Eco estivo') WHEN 'fixed' THEN IF('${lang}'='en','Fixed','Fisso') WHEN 'forcedLastFromSchedule' THEN IF('${lang}'='en','Forced','Forzato') WHEN 'normalEnergySaving' THEN IF('${lang}'='en','Normal (saving)','Normale (risparmio)') WHEN 'reducedEnergySaving' THEN IF('${lang}'='en','Reduced (saving)','Ridotto (risparmio)') WHEN 'comfortEnergySaving' THEN IF('${lang}'='en','Comfort (saving)','Comfort (risparmio)') ELSE program END AS `${t_hc_prog}`, CASE mode WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'heating' THEN IF('${lang}'='en','Heating','Riscaldamento') WHEN 'dhw' THEN IF('${lang}'='en','DHW only','Solo ACS') WHEN 'dhwAndHeating' THEN IF('${lang}'='en','DHW + Heating','ACS + Riscaldamento') WHEN 'heatingCooling' THEN IF('${lang}'='en','Heating/Cooling','Risc. + Raffr.') WHEN 'forcedReduced' THEN IF('${lang}'='en','Forced reduced','Ridotto forzato') WHEN 'forcedNormal' THEN IF('${lang}'='en','Forced normal','Normale forzato') ELSE mode END AS `${t_hc_mode}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND program IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) q UNION ALL SELECT UNIX_TIMESTAMP(), NULL, NULL ORDER BY 1"
         }
       ],
       "options": {
@@ -4391,7 +4391,7 @@
             {
               "type": "value",
               "options": {
-                "Normale": {
+                "Normal": {
                   "color": "green",
                   "index": 1
                 }
@@ -4400,7 +4400,7 @@
             {
               "type": "value",
               "options": {
-                "Normal": {
+                "Normale": {
                   "color": "green",
                   "index": 2
                 }
@@ -4445,7 +4445,7 @@
             {
               "type": "value",
               "options": {
-                "Holiday": {
+                "Vacanza": {
                   "color": "yellow",
                   "index": 7
                 }
@@ -4454,7 +4454,7 @@
             {
               "type": "value",
               "options": {
-                "Vacanza": {
+                "Holiday": {
                   "color": "yellow",
                   "index": 8
                 }
@@ -4472,7 +4472,7 @@
             {
               "type": "value",
               "options": {
-                "Riscaldamento": {
+                "Heating": {
                   "color": "red",
                   "index": 1
                 }
@@ -4481,7 +4481,7 @@
             {
               "type": "value",
               "options": {
-                "Heating": {
+                "Riscaldamento": {
                   "color": "red",
                   "index": 2
                 }
@@ -4490,7 +4490,7 @@
             {
               "type": "value",
               "options": {
-                "Solo ACS": {
+                "DHW only": {
                   "color": "blue",
                   "index": 3
                 }
@@ -4499,7 +4499,7 @@
             {
               "type": "value",
               "options": {
-                "DHW only": {
+                "Solo ACS": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4508,7 +4508,7 @@
             {
               "type": "value",
               "options": {
-                "ACS + Riscaldamento": {
+                "DHW + Heating": {
                   "color": "orange",
                   "index": 5
                 }
@@ -4517,7 +4517,7 @@
             {
               "type": "value",
               "options": {
-                "DHW + Heating": {
+                "ACS + Riscaldamento": {
                   "color": "orange",
                   "index": 6
                 }
@@ -4560,7 +4560,7 @@
           "rawQuery": true,
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE mode WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'off' THEN IF('${lang}'='en','Off','Spenta') WHEN 'efficient' THEN IF('${lang}'='en','Efficient','Efficiente') WHEN 'efficientWithMinComfort' THEN IF('${lang}'='en','Efficient+','Efficiente+') WHEN 'balanced' THEN IF('${lang}'='en','Balanced','Bilanciata') ELSE mode END AS `${t_dhw_mode}` FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND mode IN ('eco','comfort','off','efficient','efficientWithMinComfort','balanced') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+          "rawSql": "SELECT * FROM (SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE mode WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'off' THEN IF('${lang}'='en','Off','Spenta') WHEN 'efficient' THEN IF('${lang}'='en','Efficient','Efficiente') WHEN 'efficientWithMinComfort' THEN IF('${lang}'='en','Efficient+','Efficiente+') WHEN 'balanced' THEN IF('${lang}'='en','Balanced','Bilanciata') ELSE mode END AS `${t_dhw_mode}` FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND mode IN ('eco','comfort','off','efficient','efficientWithMinComfort','balanced') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) q UNION ALL SELECT UNIX_TIMESTAMP(), NULL ORDER BY 1"
         },
         {
           "refId": "B",
@@ -4571,7 +4571,7 @@
           "rawQuery": true,
           "editorMode": "code",
           "format": "table",
-          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(holiday_mode_active=1,IF('${lang}'='en','Active','Attiva'),'—') AS `${t_holiday}`, IF(extended_heating_active=1,IF('${lang}'='en','Active','Attivo'),'—') AS `${t_ext}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND holiday_mode_active IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+          "rawSql": "SELECT * FROM (SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(holiday_mode_active=1,IF('${lang}'='en','Active','Attiva'),'—') AS `${t_holiday}`, IF(extended_heating_active=1,IF('${lang}'='en','Active','Attivo'),'—') AS `${t_ext}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND holiday_mode_active IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) q UNION ALL SELECT UNIX_TIMESTAMP(), NULL, NULL ORDER BY 1"
         }
       ],
       "options": {
@@ -4631,7 +4631,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient": {
+                "Efficiente": {
                   "color": "blue",
                   "index": 4
                 }
@@ -4640,7 +4640,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente": {
+                "Efficient": {
                   "color": "blue",
                   "index": 5
                 }
@@ -4649,7 +4649,7 @@
             {
               "type": "value",
               "options": {
-                "Efficiente+": {
+                "Efficient+": {
                   "color": "blue",
                   "index": 6
                 }
@@ -4658,7 +4658,7 @@
             {
               "type": "value",
               "options": {
-                "Efficient+": {
+                "Efficiente+": {
                   "color": "blue",
                   "index": 7
                 }
@@ -4763,7 +4763,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Pressione"
+              "options": "Pressure"
             },
             "properties": [
               {
@@ -4778,7 +4778,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Pressure"
+              "options": "Pressione"
             },
             "properties": [
               {
