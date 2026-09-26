@@ -200,6 +200,15 @@ const STRINGS = {
     thermalEffNote:          'Thermal efficiency >100% is possible for condensing boilers (latent heat recovery). Values >105% may indicate rounding in Viessmann API data.',
     forecastNote:            'Annual estimate requires at least {min} days of gas data (currently {n}). Run with --days {min} or more. Use --gasPriceEur to set your tariff.',
     forecastProjectionNote:  'Projection based on last {n} day(s) of data · gas price: €{price}/m³ · {trend}',
+    fcModelNote:             'Model from {n} days of gas data (since {from}): {base} m³/day hot water + {k} m³ per degree-day (heating, base 16 °C, R² {r2}) · price €{price}/m³ (--gasPriceEur)',
+    fcNoHeatingNote:         '{n} days of gas data without heating days yet: only hot water is projected ({base} m³/day) · price €{price}/m³ (--gasPriceEur)',
+    fcWeatherNote:           'Real outdoor temperatures from Open-Meteo: next 30 days use the weather forecast ({f} days) and the same dates of last year; the annual estimate uses the weather of the last 365 days.',
+    fcNoLocation:            'Installation location unknown: add --lat and --lon to include the weather in the forecast.',
+    fcWeatherDown:           'Weather service not reachable: heating is not included in the projection.',
+    fcNeedHeating:           'needs some heating days',
+    fcCalNote:               'Degree-day model calibrated on the boiler yearly counters (Viessmann API): {base} m³/day hot water + {k} m³ per degree-day (heating, base 16 °C) · {n} days of detailed data · price €{price}/m³ (--gasPriceEur)',
+    fcRecentNote:            'Average of the last {n} days of gas data ({base} m³/day), without weather correction · price €{price}/m³ (--gasPriceEur)',
+    fcNeedWeather:           'needs weather data',
     forecastTrendRising:     '↑ Rising',
     forecastTrendFalling:    '↓ Falling',
     forecastTrendStable:     '→ Stable',
@@ -542,6 +551,15 @@ const STRINGS = {
     thermalEffNote:          'Efficienza >100% possibile nelle caldaie a condensazione (recupero calore latente). Valori >105% possono indicare arrotondamenti nei dati API Viessmann.',
     forecastNote:            'La stima annuale richiede almeno {min} giorni di dati gas (attualmente {n}). Usa --days {min} o più. Usa --gasPriceEur per impostare la tariffa.',
     forecastProjectionNote:  'Proiezione basata sugli ultimi {n} giorni · prezzo gas: €{price}/m³ · {trend}',
+    fcModelNote:             'Modello da {n} giorni di dati gas (dal {from}): {base} m³/giorno acqua calda + {k} m³ per grado-giorno (riscaldamento, base 16 °C, R² {r2}) · prezzo €{price}/m³ (--gasPriceEur)',
+    fcNoHeatingNote:         '{n} giorni di dati gas ancora senza giorni di riscaldamento: si proietta solo l\'acqua calda ({base} m³/giorno) · prezzo €{price}/m³ (--gasPriceEur)',
+    fcWeatherNote:           'Temperature esterne reali da Open-Meteo: i prossimi 30 giorni usano le previsioni meteo ({f} giorni) e le stesse date dell\'anno scorso; la stima annuale usa il meteo degli ultimi 365 giorni.',
+    fcNoLocation:            'Posizione dell\'impianto sconosciuta: aggiungi --lat e --lon per includere il meteo nella previsione.',
+    fcWeatherDown:           'Servizio meteo non raggiungibile: il riscaldamento non è incluso nella proiezione.',
+    fcNeedHeating:           'servono giorni di riscaldamento',
+    fcCalNote:               'Modello a gradi-giorno calibrato sui contatori annui della caldaia (API Viessmann): {base} m³/giorno acqua calda + {k} m³ per grado-giorno (riscaldamento, base 16 °C) · {n} giorni di dati dettagliati · prezzo €{price}/m³ (--gasPriceEur)',
+    fcRecentNote:            'Media degli ultimi {n} giorni di dati gas ({base} m³/giorno), senza correzione meteo · prezzo €{price}/m³ (--gasPriceEur)',
+    fcNeedWeather:           'servono i dati meteo',
     forecastTrendRising:     '↑ In aumento',
     forecastTrendFalling:    '↓ In calo',
     forecastTrendStable:     '→ Stabile',
@@ -1677,49 +1695,182 @@ const comfortEfficiency = (() => {
 // Strategy: linear regression on last N days → extrapolate to 30/365 days.
 // ─────────────────────────────────────────────────────────────────────────────
 let gasForecast = null;
-if (gasDays.length >= 3) {
-  // Use all available days; total = heating + dhw
-  const totalPerDay = gasDays.map(d => gasPerDay[d].heating + gasPerDay[d].dhw);
-  const n = totalPerDay.length;
-  // Simple linear regression: y = a + b*x  (x = day index)
-  const xMean = (n - 1) / 2;
-  const yMean = totalPerDay.reduce((s, v) => s + v, 0) / n;
-  let num = 0, den = 0;
-  totalPerDay.forEach((y, i) => { num += (i - xMean) * (y - yMean); den += (i - xMean) ** 2; });
-  const slope = den !== 0 ? num / den : 0;
-  const intercept = yMean - slope * xMean;
-  // Project from today (index = n-1) forward
-  const projectDay = (offset) => Math.max(0, intercept + slope * (n - 1 + offset));
-  // Monthly: sum of next 30 days
-  let monthSum = 0;
-  for (let i = 1; i <= 30; i++) monthSum += projectDay(i);
-  // With few days a regression extrapolated 30 days ahead is unreliable (a falling
-  // trend clamps to ~0). Below 14 days use the period average instead.
-  if (n < 14) monthSum = yMean * 30;
-  // Annual: sum of next 365 days (approximated as 30-day avg × 12 with seasonal note)
-  // For simplicity: annualise the period avg × 365 (more stable than long regression)
-  const periodAvgPerDay = yMean;
-  const annualEst = periodAvgPerDay * 365;
-  // Cost estimate (€): use --gasPriceEur param or env (default 0.90 €/m³ — Italian average)
-  const GAS_PRICE = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
-  // Annual estimate requires at least 14 days to avoid misleading projections
-  // from short atypical periods (e.g. unusually cold/warm week).
-  // A yearly figure extrapolated from a few summer weeks (DHW only) is meaningless:
-  // require data covering most of a year.
-  const ANNUAL_MIN_DAYS = 300;
-  const hasEnoughForAnnual = n >= ANNUAL_MIN_DAYS;
+// ─────────────────────────────────────────────────────────────────────────────
+// GAS FORECAST (v2.0.78) — weather-normalised degree-day model
+//   gas/day = base (hot water) + k × HDD,  HDD = max(0, 16 °C − real daily mean)
+// • Daily gas comes from the boiler MONTHLY counters (day counters reset hours late
+//   and under-count), using ALL CSV history, not only the report period.
+// • Real outdoor temperatures come from Open-Meteo for the installation location
+//   (the boiler outdoor sensor is often biased by sun/wall heat).
+// • Next 30 days: 16-day weather forecast + same dates last year.
+// • Annual estimate: base × 365 + k × degree-days of the last 365 days.
+// Works with any amount of data; without heating days only hot water is projected.
+// ─────────────────────────────────────────────────────────────────────────────
+const { spawnSync } = require('child_process');
+function httpJson(url, headers) {
+  const code = `fetch(${JSON.stringify(url)},{headers:${JSON.stringify(headers || {})}})` +
+    `.then(r=>r.ok?r.text():Promise.reject(new Error('HTTP '+r.status)))` +
+    `.then(t=>process.stdout.write(t)).catch(e=>{process.stderr.write(String(e.message||e));process.exit(1)})`;
+  const r = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', timeout: 25000, maxBuffer: 20 * 1024 * 1024 });
+  if (r.status !== 0) throw new Error((r.stderr || 'fetch failed').slice(0, 200));
+  return JSON.parse(r.stdout);
+}
+const localDay = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; };
+const addDays = (ds, n) => { const d = new Date(ds + 'T12:00:00'); d.setDate(d.getDate() + n); return localDay(d); };
+
+function getLocation() {
+  const cliLat = parseFloat(getArg('--lat', '')), cliLon = parseFloat(getArg('--lon', ''));
+  if (!isNaN(cliLat) && !isNaN(cliLon)) return { lat: cliLat, lon: cliLon, src: 'cli' };
+  const locFile = path.join(HB_PATH, `viessmann-location-${INSTALLATION_ID || 'default'}.json`);
+  try { const l = JSON.parse(fs.readFileSync(locFile, 'utf8')); if (l.lat && l.lon) return { ...l, src: 'cache' }; } catch (_) {}
+  if (!INSTALLATION_ID) return null;
+  try {
+    const tokens = JSON.parse(fs.readFileSync(path.join(HB_PATH, 'viessmann-tokens.json'), 'utf8'));
+    const find = (o) => { if (o && typeof o === 'object') { for (const [k, v] of Object.entries(o)) { if ((k === 'accessToken' || k === 'access_token') && typeof v === 'string') return v; const r = find(v); if (r) return r; } } return null; };
+    const tok = find(tokens);
+    if (!tok) return null;
+    const j = httpJson(`https://api.viessmann-climatesolutions.com/iot/v2/equipment/installations/${INSTALLATION_ID}`, { Authorization: 'Bearer ' + tok });
+    const g = j?.data?.address?.geolocation;
+    if (g?.latitude && g?.longitude) {
+      const loc = { lat: +(+g.latitude).toFixed(3), lon: +(+g.longitude).toFixed(3) };
+      try { fs.writeFileSync(locFile, JSON.stringify(loc)); } catch (_) {}
+      return { ...loc, src: 'api' };
+    }
+  } catch (e) { process.stderr.write(`[forecast] location lookup failed: ${e.message}\n`); }
+  return null;
+}
+
+// Daily mean temperatures (real), cached on disk: { 'YYYY-MM-DD': °C }
+function getDailyTemps(loc, fromDay, toDay) {
+  const cacheFile = path.join(HB_PATH, `viessmann-weather-${loc.lat}_${loc.lon}.json`);
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const today = localDay(new Date());
+  const q = `latitude=${loc.lat}&longitude=${loc.lon}&daily=temperature_2m_mean&timezone=auto`;
+  // Archive (final data) for days older than 7 days that are not cached yet
+  const archEnd = addDays(today, -7);
+  let missingFrom = null;
+  for (let d = fromDay; d <= archEnd; d = addDays(d, 1)) { if (cache[d] === undefined) { missingFrom = d; break; } }
+  if (missingFrom) {
+    try {
+      const j = httpJson(`https://archive-api.open-meteo.com/v1/archive?${q}&start_date=${missingFrom}&end_date=${archEnd}`);
+      (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) cache[t] = v; });
+    } catch (e) { process.stderr.write(`[forecast] archive fetch failed: ${e.message}\n`); }
+  }
+  // Recent days + 16-day forecast (not cached: values change)
+  const recent = {};
+  try {
+    const j = httpJson(`https://api.open-meteo.com/v1/forecast?${q}&past_days=10&forecast_days=16`);
+    (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) recent[t] = v; });
+  } catch (e) { process.stderr.write(`[forecast] forecast fetch failed: ${e.message}\n`); }
+  try { fs.writeFileSync(cacheFile, JSON.stringify(cache)); } catch (_) {}
+  return { ...cache, ...recent };
+}
+
+// Daily gas (heating + DHW) from monthly counters, over the WHOLE CSV history
+const gasDailyAll = (() => {
+  const last = {};
+  for (const r of rows) {
+    if (r.accessory !== 'boiler' || (r.event_type && r.event_type !== 'snapshot') || !r.timestamp) continue;
+    if (r.gas_heating_month_m3 === '' && r.gas_dhw_month_m3 === '') continue;
+    const d = localDay(r.timestamp);
+    const v = (parseFloat(r.gas_heating_month_m3) || 0) + (parseFloat(r.gas_dhw_month_m3) || 0);
+    if (!last[d] || r.timestamp > last[d].ts) last[d] = { ts: r.timestamp, v };
+  }
+  const days = Object.keys(last).sort();
+  const out = {};
+  for (let i = 1; i < days.length; i++) {
+    const d = days[i], p = days[i - 1];
+    if (addDays(p, 1) !== d) continue;                       // gap in data: skip
+    const newMonth = d.slice(0, 7) !== p.slice(0, 7);
+    const delta = newMonth ? last[d].v : last[d].v - last[p].v;
+    if (delta >= 0 && delta < 50) out[d] = delta;             // ignore glitches
+  }
+  return out;
+})();
+
+const HDD_BASE = parseFloat(getArg('--hddBase', '16'));
+const GAS_PRICE_EUR = parseFloat(getArg('--gasPriceEur', process.env.GAS_PRICE_EUR || '0.90'));
+const gasModelDays = Object.keys(gasDailyAll).sort();
+if (gasModelDays.length >= 1) {
+  let loc = null, temps = {};
+  try { loc = getLocation(); } catch (_) {}
+  const today = localDay(new Date());
+  if (loc) {
+    try { temps = getDailyTemps(loc, addDays(today, -400), today); } catch (_) {}
+  }
+  const hdd = (t) => Math.max(0, HDD_BASE - t);
+  // Fit gas = a + b·HDD on days with both gas and temperature
+  const pts = gasModelDays.filter(d => temps[d] !== undefined).map(d => [hdd(temps[d]), gasDailyAll[d]]);
+  const heatingDays = pts.filter(p => p[0] >= 3).length;
+  let a, b = null, r2 = null;
+  const summer = pts.filter(p => p[0] === 0).map(p => p[1]);
+  if (heatingDays >= 3) {
+    const n = pts.length, mx = pts.reduce((s, p) => s + p[0], 0) / n, my = pts.reduce((s, p) => s + p[1], 0) / n;
+    const sxy = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0), sxx = pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
+    b = sxx > 0 ? Math.max(0, sxy / sxx) : 0;
+    a = Math.max(0, my - b * mx);
+    if (summer.length >= 5) a = summer.reduce((s, v) => s + v, 0) / summer.length; // hot water base from warm days
+    const syy = pts.reduce((s, p) => s + (p[1] - my) ** 2, 0);
+    const sse = pts.reduce((s, p) => s + (p[1] - (a + b * p[0])) ** 2, 0);
+    r2 = syy > 0 ? Math.max(0, 1 - sse / syy) : null;
+  } else if (pts.length) {
+    // weather available but no heating days yet: hot water only
+    const vals = summer.length ? summer : pts.map(p => p[1]);
+    a = vals.reduce((s, v) => s + v, 0) / vals.length;
+  } else {
+    // no weather data: plain average of the last 30 days
+    const recent = gasModelDays.slice(-30).map(d => gasDailyAll[d]);
+    a = recent.reduce((s, v) => s + v, 0) / recent.length;
+  }
+  // Calibration on the boiler's own yearly counters (Viessmann API summary):
+  // heating currentYear ÷ real degree-days since 1 January gives a robust k even when
+  // the CSV history covers only a few mild weeks; DHW currentYear gives the base.
+  let calibrated = false;
+  if (apiSummary && apiSummary.timestamp && Object.keys(temps).length) {
+    const end = localDay(apiSummary.timestamp);
+    let sh = 0, cnt = 0, tot = 0;
+    for (let d = `${end.slice(0, 4)}-01-01`; d <= end; d = addDays(d, 1)) {
+      tot++;
+      if (temps[d] !== undefined) { sh += hdd(temps[d]); cnt++; }
+    }
+    if (apiSummary.gasHeatYear > 0 && cnt >= tot * 0.9 && sh > 50) {
+      b = apiSummary.gasHeatYear / (sh * tot / cnt);
+      calibrated = true;
+    }
+    if (apiSummary.gasDhwYear > 0 && tot > 0) a = apiSummary.gasDhwYear / tot;
+  }
+  // Next 30 days: forecast temps, else same date last year
+  let month30 = 0, usedForecastDays = 0;
+  for (let i = 1; i <= 30; i++) {
+    const d = addDays(today, i);
+    let t = temps[d];
+    if (t !== undefined) usedForecastDays++; else t = temps[addDays(d, -365)];
+    month30 += a + (b !== null && t !== undefined ? b * hdd(t) : 0);
+  }
+  // Annual: real weather of the last 365 days
+  let annual = null, hddYear = 0, tempDays = 0;
+  for (let i = 1; i <= 365; i++) { const t = temps[addDays(today, -i)]; if (t !== undefined) { hddYear += hdd(t); tempDays++; } }
+  if (b !== null && tempDays >= 330) annual = a * 365 + b * hddYear * 365 / tempDays;
+  const periodAvg = gasDays.length ? gasDays.reduce((s, d) => s + (gasDailyAll[d] ?? 0), 0) / gasDays.length : a;
   gasForecast = {
-    avgPerDay:         yMean.toFixed(2),
-    trend:             slope > 0.05 ? 'rising' : slope < -0.05 ? 'falling' : 'stable',
-    trendSlope:        slope.toFixed(3),
-    month30:           monthSum.toFixed(1),
-    annualEst:         hasEnoughForAnnual ? annualEst.toFixed(0) : null,
-    costMonth:         (monthSum * GAS_PRICE).toFixed(2),
-    costAnnual:        hasEnoughForAnnual ? (annualEst * GAS_PRICE).toFixed(2) : null,
-    gasPrice:          GAS_PRICE.toFixed(2),
-    daysUsed:          n,
-    annualMinDays:     ANNUAL_MIN_DAYS,
-    hasEnoughForAnnual,
+    avgPerDay:     (gasModelDays.length ? gasModelDays.slice(-Math.max(1, Math.min(DAYS, gasModelDays.length))).reduce((s, d) => s + gasDailyAll[d], 0) / Math.max(1, Math.min(DAYS, gasModelDays.length)) : periodAvg).toFixed(2),
+    month30:       month30.toFixed(1),
+    annualEst:     annual !== null ? annual.toFixed(0) : null,
+    costMonth:     (month30 * GAS_PRICE_EUR).toFixed(2),
+    costAnnual:    annual !== null ? (annual * GAS_PRICE_EUR).toFixed(0) : null,
+    gasPrice:      GAS_PRICE_EUR.toFixed(2),
+    daysUsed:      gasModelDays.length,
+    firstDay:      gasModelDays[0],
+    base:          a.toFixed(2),
+    perHdd:        b !== null ? b.toFixed(3) : null,
+    r2:            r2 !== null ? r2.toFixed(2) : null,
+    heatingDays,
+    calibrated,
+    weather:       loc ? (Object.keys(temps).length ? 'ok' : 'unavailable') : 'nolocation',
+    forecastDays:  usedForecastDays,
+    hasEnoughForAnnual: annual !== null,
+    trend: 'stable',
   };
 }
 
@@ -2222,17 +2373,21 @@ ${apiSummary ? `
 ${gasForecast ? `
 <div class="box">
   <h2>${T('sectionGasForecast')}</h2>
-  <p class="note" style="margin-bottom:14px">${T('forecastProjectionNote', {n: gasForecast.daysUsed, price: gasForecast.gasPrice, trend: gasForecast.trend === 'rising' ? T('forecastTrendRising') : gasForecast.trend === 'falling' ? T('forecastTrendFalling') : T('forecastTrendStable')})}</p>
+  <p class="note" style="margin-bottom:14px">${gasForecast.weather !== 'ok'
+      ? T('fcRecentNote', {n: Math.min(30, gasForecast.daysUsed), base: gasForecast.base, price: gasForecast.gasPrice})
+      : gasForecast.perHdd !== null
+      ? T(gasForecast.calibrated ? 'fcCalNote' : 'fcModelNote', {n: gasForecast.daysUsed, from: gasForecast.firstDay, base: gasForecast.base, k: gasForecast.perHdd, r2: gasForecast.r2 ?? '—', price: gasForecast.gasPrice})
+      : T('fcNoHeatingNote', {n: gasForecast.daysUsed, base: gasForecast.base, price: gasForecast.gasPrice})}</p>
   <div class="grid">
     ${sc(T('avgConsPerDay'), gasForecast.avgPerDay, ' m³')}
-    ${sc(T('projNext30'), gasForecast.month30, ' m³', badge(gasForecast.trend === 'rising' ? 'warn' : 'good', '≈ €' + gasForecast.costMonth))}
+    ${sc(T('projNext30'), gasForecast.month30, ' m³', badge('neutral', '≈ €' + gasForecast.costMonth))}
     ${gasForecast.hasEnoughForAnnual
       ? sc(T('annualEstLabel'), gasForecast.annualEst, ' m³', badge('neutral', '≈ €' + gasForecast.costAnnual))
-      : sc(T('annualEstLabel'), 'N/A', '', badge('neutral', T('needDaysShort',{min:gasForecast.annualMinDays,n:gasForecast.daysUsed})))}
+      : sc(T('annualEstLabel'), 'N/A', '', badge('neutral', T(gasForecast.weather !== 'ok' ? 'fcNeedWeather' : 'fcNeedHeating')))}
   </div>
-  <p class="note" style="margin-top:10px">ℹ️ ${gasForecast.hasEnoughForAnnual
-    ? 'Annual estimate uses period average × 365 — seasonal variations not accounted for.'
-    : T('forecastNote', {min: gasForecast.annualMinDays, n: gasForecast.daysUsed})}</p>
+  <p class="note" style="margin-top:10px">ℹ️ ${gasForecast.weather === 'ok'
+      ? T('fcWeatherNote', {f: gasForecast.forecastDays})
+      : gasForecast.weather === 'nolocation' ? T('fcNoLocation') : T('fcWeatherDown')}</p>
 </div>` : ''}
 
 ${energyRows.length >= 1 ? `

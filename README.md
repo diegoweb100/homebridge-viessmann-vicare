@@ -1103,6 +1103,9 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.79] - 2026-09-26
+- fix: **report gas forecast** rewritten: weather-normalised degree-day model (real outdoor temperatures from Open-Meteo for the installation location, calibrated on the boiler yearly counters), daily gas from the monthly counters over the whole history. Works with any amount of data (was "0 m³" / "needs 300 days"). Options `--lat/--lon` and `--hddBase`
+
 ### [2.0.78] - 2026-09-26
 - fix: **report "Device messages" were frozen**: the plugin stopped writing `viessmann-messages-<installation>-<device>.json` in 2.0.50, so the report showed months-old codes. The writer is back, now also includes fault codes (`device.messages.errors.raw`) and keeps a history (the API only returns current messages)
 - fix: report heating-curve analysis uses only heating-season samples (outdoor < 16 °C): no more "weather compensation not active" advice in summer
