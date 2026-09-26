@@ -112,6 +112,21 @@ export interface ViessmannPlatformConfig extends AuthConfig {
     enableIntelligentPrefetch?: boolean;
     compressionEnabled?: boolean;
   };
+
+  // History logging (CSV + optional MySQL/MariaDB)
+  logging?: {
+    csv?: { enabled?: boolean };
+    mysql?: {
+      enabled?: boolean;
+      host?: string;
+      port?: number;
+      database?: string;
+      user?: string;
+      password?: string;
+      table?: string;
+      autoCreateTable?: boolean;
+    };
+  };
 }
 
 // Re-export types for backward compatibility
@@ -168,12 +183,29 @@ export class ViessmannAPI {
 
   private buildCacheConfig(): CacheConfig {
     const cacheConfig = this.config.cache || {};
-    
+
+    // The features cache must expire BEFORE the next refresh cycle, otherwise every
+    // other poll re-uses the previous response and HomeKit/history show data that is
+    // up to 2 × refreshInterval old. Clamp featuresTTL below refreshInterval.
+    let featuresTTL = cacheConfig.featuresTTL || 2 * 60 * 1000;
+    const refresh = this.config.refreshInterval;
+    if (refresh && featuresTTL >= refresh) {
+      const clamped = Math.max(refresh - 60 * 1000, 30 * 1000);
+      this.log.warn(`⚙️ cache.featuresTTL (${Math.round(featuresTTL / 1000)}s) >= refreshInterval (${Math.round(refresh / 1000)}s): ` +
+        `using ${Math.round(clamped / 1000)}s so every refresh gets fresh data. Lower featuresTTL in the config to remove this warning.`);
+      featuresTTL = clamped;
+    }
+    if (refresh && refresh < 5 * 60 * 1000) {
+      const perDevice = Math.round(24 * 60 * 60 * 1000 / refresh);
+      this.log.info(`ℹ️ refreshInterval ${Math.round(refresh / 1000)}s ≈ ${perDevice} feature requests/day per device ` +
+        `(Viessmann free plan: 1450/day). With several devices consider refreshInterval ≥ 300000 (5 min).`);
+    }
+
     return {
       installations: cacheConfig.installationsTTL || 24 * 60 * 60 * 1000, // 24 hours
       gateways: 12 * 60 * 60 * 1000,                                     // 12 hours
       devices: cacheConfig.devicesTTL || 6 * 60 * 60 * 1000,             // 6 hours
-      features: cacheConfig.featuresTTL || 2 * 60 * 1000,                // 2 minutes
+      features: featuresTTL,                                             // default 2 minutes, always < refreshInterval
       commands: 0,                                                        // Never cache commands
       
       maxEntries: cacheConfig.maxEntries || 1000,

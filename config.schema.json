@@ -524,6 +524,79 @@
         "minimum": 120,
         "maximum": 3600,
         "description": "Maximum time in seconds for report generation. RPi 3 benchmark: ~365s for 90 days / ~1460s for 365 days. Default: 600s. Range: 120–3600s."
+      },
+      "logging": {
+        "title": "📊 History Logging",
+        "type": "object",
+        "properties": {
+          "csv": {
+            "title": "CSV Logging",
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "title": "Enable CSV history file",
+                "type": "boolean",
+                "default": true,
+                "description": "Write history to CSV file (viessmann-history-<installationId>.csv). Enabled by default — disable only if using MySQL exclusively."
+              }
+            }
+          },
+          "mysql": {
+            "title": "MySQL / MariaDB Logging",
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "title": "Enable MySQL/MariaDB logging",
+                "type": "boolean",
+                "default": false,
+                "description": "Write history to MySQL or MariaDB (e.g. for Grafana). The mysql2 driver is bundled with the plugin since v2.0.75 — no manual install needed. New columns are added automatically on upgrade."
+              },
+              "host": {
+                "title": "Host",
+                "type": "string",
+                "default": "localhost",
+                "description": "MySQL/MariaDB hostname or IP."
+              },
+              "port": {
+                "title": "Port",
+                "type": "integer",
+                "default": 3306,
+                "minimum": 1024,
+                "maximum": 65535,
+                "description": "MySQL/MariaDB port (default: 3306)."
+              },
+              "database": {
+                "title": "Database",
+                "type": "string",
+                "default": "homebridge",
+                "description": "Database name."
+              },
+              "user": {
+                "title": "User",
+                "type": "string",
+                "default": "viessmann_rw",
+                "description": "MySQL user with INSERT privilege on the table."
+              },
+              "password": {
+                "title": "Password",
+                "type": "string",
+                "description": "MySQL password."
+              },
+              "table": {
+                "title": "Table",
+                "type": "string",
+                "default": "viessmann_history",
+                "description": "Table name. Will be created automatically if autoCreateTable is enabled."
+              },
+              "autoCreateTable": {
+                "title": "Auto-create table",
+                "type": "boolean",
+                "default": true,
+                "description": "CREATE TABLE IF NOT EXISTS on first run, import existing CSV history automatically, and add new columns when the plugin is upgraded (requires CREATE/ALTER privilege)."
+              }
+            }
+          }
+        }
       }
     },
     "required": [

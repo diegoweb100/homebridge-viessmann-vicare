@@ -22,6 +22,7 @@ export class ViessmannDHWAccessory {
   // warnings. While this flag is true, all setXxxMode() calls are ignored.
   private _updatingCharacteristics = false;
   private historyLogger?: ViessmannHistoryLogger;
+  private dhwCirculationPump?: boolean;
   private pendingModeUntil = 0;
   private pendingTempUntil = 0;
   private pendingExpectedMode: string | undefined = undefined;
@@ -63,7 +64,7 @@ export class ViessmannDHWAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', 'ACS', installation?.id);
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', 'ACS', installation?.id, gateway?.serial);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -846,19 +847,26 @@ async setActive(value: CharacteristicValue) {
       this.platform.log.debug(`🚿 ACS state unchanged: ${summary}`);
     }
 
-    // 📊 History logging — FakeGato thermo + CSV
+    // 📊 History logging — FakeGato thermo + CSV/MySQL
     if (this.historyLogger) {
+      // Circulation pump state (feature not present on all installations)
+      const pumpFeature = features.find(f => f.feature === 'heating.dhw.pumps.circulation');
+      if (pumpFeature?.isEnabled) {
+        this.dhwCirculationPump = pumpFeature.properties?.status?.value === 'on';
+      }
       this.historyLogger.addThermoEntry({
         currentTemp: this.states.CurrentTemperature,
         setTemp: this.states.HeatingThresholdTemperature,
       });
-      this.historyLogger.appendCsvRow({
+      this.historyLogger.appendRow({
         timestamp:   new Date().toISOString(),
         accessory:   'dhw',
         event_type:  'snapshot',
         dhw_temp:    this.states.CurrentTemperature,
         dhw_target:  this.states.HeatingThresholdTemperature,
         mode:        this.currentMode,
+        dhw_mode:    this.currentMode,
+        dhw_circulation_pump: this.dhwCirculationPump,
       });
     }
   }

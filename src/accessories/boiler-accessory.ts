@@ -64,6 +64,23 @@ export class ViessmannBoilerAccessory {
     WaterPressure: 0, // Current water pressure in bar
   };
 
+  // 📊 Extended metrics written to MySQL history only (2.0.75). undefined = feature not available.
+  private extMetrics: {
+    waterPressure?: number;
+    gasHeatingYear?: number;
+    gasDhwYear?: number;
+    heatHeatingYear?: number;
+    heatDhwYear?: number;
+    powerHeatingDay?: number;
+    powerDhwDay?: number;
+    powerHeatingMonth?: number;
+    powerDhwMonth?: number;
+    powerHeatingYear?: number;
+    powerDhwYear?: number;
+    statusCode?: string;
+    wifiRssi?: number;
+  } = {};
+
   constructor(
     private readonly platform: ViessmannPlatform,
     private readonly accessory: PlatformAccessory,
@@ -89,7 +106,7 @@ export class ViessmannBoilerAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Boiler', installation?.id);
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Boiler', installation?.id, gateway?.serial);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -895,13 +912,14 @@ export class ViessmannBoilerAccessory {
         if (this.historyLogger) {
           const startsToday = this.states.BurnerStarts - this.dailyRef.startsRef;
           const hoursToday  = this.states.BurnerHours  - this.dailyRef.hoursRef;
-          this.historyLogger.appendCsvRow({
+          this.historyLogger.appendRow({
             timestamp:            new Date().toISOString(),
             accessory:            'boiler',
             event_type:           newBurnerState ? 'burner_on' : 'burner_off',
             burner_active:        newBurnerState,
             modulation:           this.states.Modulation,
-            outside_temp:         this.states.OutsideTemperature || undefined,
+            outside_temp:         this.hasOutsideFeature ? this.states.OutsideTemperature : undefined,
+            boiler_water_temp:    this.states.CurrentTemperature,
             burner_starts:        this.states.BurnerStarts,
             burner_hours:         this.states.BurnerHours,
             burner_starts_today:  startsToday >= 0 ? startsToday : undefined,
@@ -1058,8 +1076,13 @@ export class ViessmannBoilerAccessory {
       this.states.GasConsumptionDhwThisMonth = gasDhwFeature.properties.currentMonth.value;
     }
 
+    // 📊 Extended metrics for MySQL history (2.0.75)
+    this.collectExtendedMetrics(features);
+
     // Update daily delta for burner starts/hours (reset reference at midnight)
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Local calendar day (was UTC → reset happened at 01:00/02:00 local time in Europe)
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     if (this.dailyRef.date !== todayStr) {
       // New day — set reference to current cumulative values
       this.dailyRef.date     = todayStr;
@@ -1209,28 +1232,108 @@ export class ViessmannBoilerAccessory {
       this.historyLogger.addEnergyEntry({ power: this.states.Modulation });
       const startsToday = this.states.BurnerStarts - this.dailyRef.startsRef;
       const hoursToday  = this.states.BurnerHours  - this.dailyRef.hoursRef;
-      this.historyLogger.appendCsvRow({
+      // NOTE: a real 0 (e.g. no gas used today, 0°C outside) is stored as 0.
+      // Before 2.0.75 `value || undefined` turned every 0 into NULL/empty.
+      // Features the device does not expose stay NULL.
+      const g = this.hasGasFeature;
+      const x = this.extMetrics;
+      this.historyLogger.appendRow({
         timestamp:                  new Date().toISOString(),
         accessory:                  'boiler',
         event_type:                 'snapshot',
         burner_active:              this.states.BurnerActive,
         modulation:                 this.states.Modulation,
-        outside_temp:               this.states.OutsideTemperature || undefined,
+        outside_temp:               this.hasOutsideFeature ? this.states.OutsideTemperature : undefined,
         outside_humidity:           this.states.OutsideHumidity,
         burner_starts:              this.states.BurnerStarts,
         burner_hours:               this.states.BurnerHours,
         burner_starts_today:        startsToday >= 0 ? startsToday : undefined,
         burner_hours_today:         hoursToday  >= 0 ? hoursToday  : undefined,
-        gas_heating_day_m3:         this.states.GasConsumptionToday         || undefined,
-        gas_dhw_day_m3:             this.states.GasConsumptionDhwToday       || undefined,
-        gas_heating_month_m3:       this.states.GasConsumptionThisMonth      || undefined,
-        gas_dhw_month_m3:           this.states.GasConsumptionDhwThisMonth   || undefined,
-        heat_heating_day_kwh:       this.states.HeatProductionHeatingToday   || undefined,
-        heat_dhw_day_kwh:           this.states.HeatProductionDhwToday       || undefined,
-        heat_heating_month_kwh:     this.states.HeatProductionHeatingThisMonth || undefined,
-        heat_dhw_month_kwh:         this.states.HeatProductionDhwThisMonth   || undefined,
+        gas_heating_day_m3:         g ? this.states.GasConsumptionToday : undefined,
+        gas_dhw_day_m3:             g ? this.states.GasConsumptionDhwToday : undefined,
+        gas_heating_month_m3:       g ? this.states.GasConsumptionThisMonth : undefined,
+        gas_dhw_month_m3:           g ? this.states.GasConsumptionDhwThisMonth : undefined,
+        heat_heating_day_kwh:       this.hasHeatProduction ? this.states.HeatProductionHeatingToday : undefined,
+        heat_dhw_day_kwh:           this.hasHeatProduction ? this.states.HeatProductionDhwToday : undefined,
+        heat_heating_month_kwh:     this.hasHeatProduction ? this.states.HeatProductionHeatingThisMonth : undefined,
+        heat_dhw_month_kwh:         this.hasHeatProduction ? this.states.HeatProductionDhwThisMonth : undefined,
+        boiler_water_temp:          this.states.CurrentTemperature,
+        // Extended (MySQL only)
+        water_pressure_bar:         x.waterPressure,
+        gas_heating_year_m3:        x.gasHeatingYear,
+        gas_dhw_year_m3:            x.gasDhwYear,
+        heat_heating_year_kwh:      x.heatHeatingYear,
+        heat_dhw_year_kwh:          x.heatDhwYear,
+        power_heating_day_kwh:      x.powerHeatingDay,
+        power_dhw_day_kwh:          x.powerDhwDay,
+        power_heating_month_kwh:    x.powerHeatingMonth,
+        power_dhw_month_kwh:        x.powerDhwMonth,
+        power_heating_year_kwh:     x.powerHeatingYear,
+        power_dhw_year_kwh:         x.powerDhwYear,
+        status_code:                x.statusCode,
+        wifi_rssi:                  x.wifiRssi,
       });
     }
+  }
+
+  /** True once a heat production summary feature has been seen (Vitodens gen3 / heat pumps). */
+  private hasHeatProduction = false;
+  /** Feature-presence flags (a value of 0 is valid and must not mean "absent"). */
+  private hasGasFeature = false;
+  private hasOutsideFeature = false;
+
+  /**
+   * 📊 Collect extended metrics for MySQL history (2.0.75).
+   * Values stay undefined when the feature is not exposed by the device,
+   * so the DB gets NULL (unknown) instead of a misleading 0.
+   */
+  private collectExtendedMetrics(features: any[]): void {
+    const feat = (name: string) => features.find(f => f.feature === name && f.isEnabled !== false);
+    const num = (v: any): number | undefined => (typeof v === 'number' && Number.isFinite(v)) ? v : undefined;
+    const x = this.extMetrics;
+
+    const pressure = feat('heating.sensors.pressure.supply') ||
+      feat('heating.boiler.sensors.pressure.supply') ||
+      feat('heating.circuits.0.sensors.pressure.supply');
+    x.waterPressure = num(pressure?.properties?.value?.value);
+
+    this.hasOutsideFeature = !!feat('heating.sensors.temperature.outside');
+
+    const gasH = feat('heating.gas.consumption.summary.heating')?.properties;
+    const gasD = feat('heating.gas.consumption.summary.dhw')?.properties;
+    this.hasGasFeature = !!(gasH || gasD);
+    x.gasHeatingYear = num(gasH?.currentYear?.value);
+    x.gasDhwYear     = num(gasD?.currentYear?.value);
+    if (gasD?.currentMonth?.value !== undefined) {
+      this.states.GasConsumptionDhwThisMonth = gasD.currentMonth.value;
+    }
+
+    const heatH = feat('heating.heat.production.summary.heating')?.properties;
+    const heatD = feat('heating.heat.production.summary.dhw')?.properties;
+    this.hasHeatProduction = !!(heatH || heatD);
+    x.heatHeatingYear = num(heatH?.currentYear?.value);
+    x.heatDhwYear     = num(heatD?.currentYear?.value);
+
+    const powH = feat('heating.power.consumption.summary.heating')?.properties;
+    const powD = feat('heating.power.consumption.summary.dhw')?.properties;
+    x.powerHeatingDay   = num(powH?.currentDay?.value);
+    x.powerDhwDay       = num(powD?.currentDay?.value);
+    x.powerHeatingMonth = num(powH?.currentMonth?.value);
+    x.powerDhwMonth     = num(powD?.currentMonth?.value);
+    x.powerHeatingYear  = num(powH?.currentYear?.value);
+    x.powerDhwYear      = num(powD?.currentYear?.value);
+
+    // Latest status/error code (e.g. S.6 = ignition, F.xx = fault)
+    const statusEntries = feat('device.messages.status.raw')?.properties?.entries?.value;
+    const errorEntries = feat('device.messages.errors.raw')?.properties?.entries?.value;
+    const latest = (arr: any): string | undefined => {
+      if (!Array.isArray(arr) || !arr.length) return undefined;
+      const sorted = [...arr].sort((a, b) => String(b.timestamp ?? '').localeCompare(String(a.timestamp ?? '')));
+      return sorted[0]?.errorCode ? String(sorted[0].errorCode) : undefined;
+    };
+    x.statusCode = latest(errorEntries) ?? latest(statusEntries);
+
+    x.wifiRssi = num(feat('tcu.wifi')?.properties?.strength?.value);
   }
 
   // 🆕 NEW: Public method to get diagnostic summary for platform health reports

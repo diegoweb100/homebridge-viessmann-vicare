@@ -1,8 +1,8 @@
-# Complete Setup Guide - v2.0.70
+# Complete Setup Guide - v2.0.75
 
 ## Overview
 
-This guide will walk you through setting up the Viessmann ViCare plugin v2.0.70 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
+This guide will walk you through setting up the Viessmann ViCare plugin v2.0.75 for Homebridge, including all the advanced features like intelligent caching, rate limiting protection, comprehensive configuration options, **complete localization support with custom names**, **CSV history logging**, **HTML diagnostic reports**, **energy system monitoring** (PV, battery, wallbox), and **heating schedule awareness** with visual bands in the HTML report, and **heat pump (Wärmepumpe) support** with automatic device detection.
 
 ## Prerequisites
 
@@ -277,25 +277,29 @@ After successful authentication:
 
 ---
 
-### 7. 📊 CSV History Logging & HTML Reports
+### 7. 📊 History Logging, CSV & MySQL
 
-Starting from v2.0.26, the plugin automatically logs heating data to a CSV file and includes a standalone HTML report generator.
+Starting from v2.0.26, the plugin automatically logs heating data to a CSV file and includes a standalone HTML report generator. Starting from v2.0.74, it can also write directly to a **MySQL/MariaDB** database for Grafana integration.
 
 #### **What is logged (every ~15 minutes)**
 
-| Column | Source | Description |
-|---|---|---|
-| `burner_active`, `modulation` | Boiler | Burner state and modulation % |
-| `outside_temp`, `outside_humidity` | Boiler | Outdoor sensors (if available) |
-| `gas_heating_day_m3`, `gas_dhw_day_m3` | Boiler | Daily gas consumption in m³ |
-| `burner_starts`, `burner_hours` | Boiler | Lifetime statistics |
-| `room_temp`, `target_temp` | HC0 | Room temperature and setpoint |
-| `flow_temp` | HC0 | Supply/flow temperature |
-| `program`, `mode` | HC0 | Active heating program and mode |
-| `dhw_temp`, `dhw_target` | ACS | DHW temperature and setpoint |
-| `pv_production_w`, `pv_daily_kwh` | Energy | PV production (if available) |
-| `battery_level`, `battery_charging_w` | Energy | Battery state (if available) |
-| `wallbox_charging`, `wallbox_power_w` | Energy | Wallbox state (if available) |
+| Column | Source | CSV | MySQL |
+|---|---|---|---|
+| `burner_active`, `modulation` | Boiler | ✅ | ✅ |
+| `outside_temp`, `outside_humidity` | Boiler | ✅ | ✅ |
+| `gas_heating_day_m3`, `gas_dhw_day_m3` | Boiler | ✅ | ✅ |
+| `burner_starts/hours`, `burner_starts/hours_today` | Boiler | ✅ | ✅ |
+| `heat_heating/dhw_day/month_kwh` | Boiler | ✅ | ✅ |
+| `room_temp`, `target_temp`, `flow_temp` | HC | ✅ | ✅ |
+| `program`, `mode` | HC | ✅ | ✅ |
+| `dhw_temp`, `dhw_target` | ACS | ✅ | ✅ |
+| `pv_*`, `battery_*`, `wallbox_*`, `grid_*` | Energy | ✅ | ✅ |
+| `boiler_water_temp` | Boiler | — | ✅ |
+| `hc_operating_mode`, `hc_comfort/normal/reduced_temp` | HC | — | ✅ |
+| `hc_slope`, `hc_shift` | HC | — | ✅ |
+| `holiday_mode_active`, `extended_heating_active` | HC | — | ✅ |
+| `dhw_mode`, `dhw_circulation_pump` | ACS | — | ✅ |
+| `installation_id`, `gateway_serial` | All | — | ✅ |
 
 CSV files location: `/var/lib/homebridge/viessmann-history-<installationId>.csv` (one file per installation)
 
@@ -310,6 +314,44 @@ CSV files location: `/var/lib/homebridge/viessmann-history-<installationId>.csv`
 > ```bash
 > sed -i '1s/.*/timestamp,accessory,burner_active,modulation,room_temp,target_temp,outside_temp,outside_humidity,dhw_temp,dhw_target,program,mode,burner_starts,burner_hours,flow_temp,gas_heating_day_m3,gas_dhw_day_m3,pv_production_w,pv_daily_kwh,battery_level,battery_charging_w,battery_discharging_w,grid_feedin_w,grid_draw_w,wallbox_charging,wallbox_power_w/' /var/lib/homebridge/viessmann-history-YOUR_INSTALLATION_ID.csv
 > ```
+
+#### **MySQL / MariaDB logging (v2.0.74+)**
+
+Optional. Writes every row directly to a local database — ideal for **Grafana** dashboards. Since **v2.0.75** the `mysql2` driver is bundled with the plugin (no manual install).
+
+**Step 1 — Create the database user** (once, as DB admin):
+```sql
+CREATE DATABASE IF NOT EXISTS homebridge;
+CREATE USER 'viessmann_rw'@'localhost' IDENTIFIED BY 'your_password';
+GRANT SELECT, INSERT, CREATE, ALTER ON homebridge.* TO 'viessmann_rw'@'localhost';
+```
+`ALTER` is needed only for the automatic column migration on plugin upgrades. Without it the plugin logs the `ALTER TABLE` statement to run manually.
+
+**Step 2 — Enable in plugin config**:
+```json
+"logging": {
+  "csv": { "enabled": true },
+  "mysql": {
+    "enabled": true,
+    "host": "localhost",
+    "port": 3306,
+    "database": "homebridge",
+    "user": "viessmann_rw",
+    "password": "your_password",
+    "table": "viessmann_history",
+    "autoCreateTable": true
+  }
+}
+```
+
+**Step 3 — Restart Homebridge.** The table `viessmann_history` is created automatically. Existing CSV history is imported in the background on first run.
+
+**Step 4 (optional) — Burner events and Grafana**
+- Schedule `viessmann-sync-events.js --installation YOUR_INSTALLATION_ID` daily (cron): with MySQL enabled it also writes precise burner ON/OFF events to the table.
+- Import `grafana/viessmann-dashboard.json` in Grafana (Dashboards → Import), select your MySQL data source in the **Database** drop-down and the language in **Lingua / Language** (Italian default, English available). Days are computed in the `tz` variable time zone (default `Europe/Rome`).
+
+> `logging.csv.enabled` defaults to `true` — CSV and MySQL can run in parallel. Set `csv.enabled: false` only if you want MySQL exclusively. If both are disabled, Homebridge logs a warning at startup.
+
 
 #### **Heating schedule file (v2.0.31+)**
 
@@ -714,7 +756,18 @@ These accessories are created **only if your installation has the corresponding 
 - **Wallbox / EV Charger**: `[Installation] Energy Wallbox` — Switch + Outlet service
 - **Electric DHW Heater**: `[Installation] Energy DHW Heater` — HeaterCooler service
 
-All energy data is also logged to the CSV history file and included in the HTML report.
+All energy data (PV production, battery level, charge/discharge, grid, wallbox) is logged to CSV and MySQL at every refresh cycle. Battery level is also recorded in FakeGato (Eve app graphs).
+
+> ⚠️ **Beta**: Energy accessory support and history logging are functional but depend on Viessmann API path variants that differ across VitoCharge generations. Enable `debug: true` and share logs if data appears missing.
+
+### 🌡️ TRV / Room Sensor Accessories *(beta)*
+
+Enable with `features.enableRoomSensorDiscovery: true` in plugin config. The plugin scans all non-main gateway devices and creates a `TemperatureSensor` accessory for each device with a temperature reading (ViCare Smart Climate TRVs, zone sensors, etc.).
+
+Temperature history is logged to CSV (`room-<deviceId>` column) and MySQL on every refresh cycle.
+
+> ⚠️ **Beta**: Feature paths for TRV models vary by device generation. If temperature shows 0 or is missing, check Homebridge logs for `[RoomDiscovery]` lines and open a GitHub issue with the output.
+
 
 ### 🔥 Boiler Accessories
 - **Main Boiler Control**: `[Installation Prefix] [Custom Boiler Name]` - HeaterCooler service for temperature and mode control
@@ -1227,6 +1280,36 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.75 (2026-09-26)
+- fix: zero values (gas, heat, outside temperature) no longer stored as empty/NULL in CSV and MySQL
+- fix: burner update success rate, api-status plugin version, daily reference at local midnight
+- fix: live feature data was cached with the installations TTL (hours/days): values now refresh at every `refreshInterval` (≈720 requests/day per device at 2 min; free plan 1450/day)
+- feat: MySQL columns for system pressure, yearly gas/heat counters, boiler electricity, status code and Wi-Fi signal, with automatic `ALTER TABLE` migration
+- feat: `viessmann-sync-events.js` writes burner events to MySQL too
+- feat: bilingual (IT/EN) Grafana dashboard in `grafana/viessmann-dashboard.json`
+- chore: `mysql2` is now a regular dependency (manual install step removed)
+
+### v2.0.74 (2026-06-23)
+- feat: optional MySQL/MariaDB history logging (`logging.mysql.*` config section)
+- feat: `DbRow` extends CSV schema with 13 extra DB-only columns: `installation_id`, `gateway_serial`, `boiler_water_temp`, `hc_operating_mode`, `hc_comfort_temp/normal/reduced`, `hc_slope/shift`, `holiday_mode_active`, `extended_heating_active`, `dhw_mode`, `dhw_circulation_pump`
+- feat: table auto-created on first run; existing CSV imported automatically in background
+- feat: `logging.csv.enabled` flag (default `true`) — CSV can now be disabled if using MySQL exclusively
+- warn: if both CSV and MySQL disabled, Homebridge logs a clear warning
+- chore: `mysql2 ^3.11.0` added as `optionalDependencies`
+
+### v2.0.73 (2026-06-23)
+- fix: report server timeout default was 300 s instead of 600 s; clamp raised to 3600 s max (was 1800 s)
+- fix: platform.ts timeout fallback corrected from 300 s to 600 s
+
+### v2.0.72 (2026-06-23)
+- fix: `readApiStatus` function missing from report server — caused crash on every `GET /` request
+- chore: axios updated to `^1.17.0`
+
+### v2.0.71 (2026-05-30)
+- feat: API usage dashboard in report server UI (daily usage bar, health score, rate limit status)
+- feat: `writeApiStatusFile` in platform writes `viessmann-api-status.json` after each update cycle
+- fix: report generation timeout default raised to 600 s, configurable up to 3600 s
 
 ### v2.0.70 (2026-05-29)
 - feat: TRV/room sensor discovery mode (enableRoomSensorDiscovery flag)

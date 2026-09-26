@@ -614,26 +614,31 @@ export class APICache {
    * Get TTL for specific endpoint based on data type
    */
   private getTTLForEndpoint(endpoint: string): number {
-    if (endpoint.includes('/installations')) {
-      return this.config.installations;
-    }
-    
-    if (endpoint.includes('/gateways') && !endpoint.includes('/devices')) {
-      return this.config.gateways;
-    }
-    
-    if (endpoint.includes('/devices') && !endpoint.includes('/features')) {
-      return this.config.devices;
-    }
-    
-    if (endpoint.includes('/features')) {
-      return this.config.features;
-    }
-    
+    // NOTE: order matters. Feature URLs look like
+    //   /iot/v2/features/installations/{id}/gateways/{serial}/devices/{id}/features
+    // so they also contain "/installations", "/gateways" and "/devices".
+    // Before 2.0.75 the "/installations" rule matched first and live feature data
+    // was cached with the installations TTL (hours/days) → stale temperatures.
     if (endpoint.includes('/commands')) {
       return this.config.commands; // Usually 0 (no caching)
     }
-    
+
+    if (endpoint.includes('/features')) {
+      return this.config.features;
+    }
+
+    if (endpoint.includes('/devices')) {
+      return this.config.devices;
+    }
+
+    if (endpoint.includes('/gateways')) {
+      return this.config.gateways;
+    }
+
+    if (endpoint.includes('/installations')) {
+      return this.config.installations;
+    }
+
     // Default to features TTL
     return this.config.features;
   }
@@ -647,13 +652,13 @@ export class APICache {
       return false;
     }
 
-    // Check if installations caching is enabled
-    if (endpoint.includes('/installations') && !this.config.enableInstallationsCache) {
-      return false;
+    // Features first: feature URLs also contain "/installations"
+    if (endpoint.includes('/features')) {
+      return this.config.enableFeaturesCache !== false;
     }
 
-    // Check if features caching is enabled
-    if (endpoint.includes('/features') && !this.config.enableFeaturesCache) {
+    // Check if installations caching is enabled
+    if (endpoint.includes('/installations') && !this.config.enableInstallationsCache) {
       return false;
     }
 

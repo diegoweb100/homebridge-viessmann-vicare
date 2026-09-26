@@ -251,7 +251,7 @@
         "password": "your-password",
         "refreshInterval": 600000,
         "requestTimeout": 60000,
-        "installationIds": [2045780, 1234567],
+        "installationIds": [7654321, 1234567],
         "enableRateLimitProtection": true,
         "maxRetries": 3,
         "retryDelay": 120000,

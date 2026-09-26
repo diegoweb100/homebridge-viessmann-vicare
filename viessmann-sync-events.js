@@ -7,12 +7,17 @@
  * 
  * Uses S.6 active=true/false (ignition start/end) as the definitive burner state.
  * Also writes S.39 (heating demand) and S.1 (DHW demand) as context events.
+ *
+ * Since v2.0.75: if MySQL logging is enabled in the plugin config
+ * (logging.mysql.enabled = true in Homebridge config.json) the same events are
+ * also inserted into the MySQL/MariaDB history table (INSERT IGNORE — safe to re-run).
+ * Use --no-mysql to skip, --config <file> to point to a different config.json.
  * 
  * Usage:
- *   node viessmann-sync-events.js --installation 2045571 [--days 7] [--path /var/lib/homebridge]
+ *   node viessmann-sync-events.js --installation YOUR_INSTALLATION_ID [--days 7] [--path /var/lib/homebridge]
  * 
  * Run via cron daily (e.g. 04:00) to backfill the previous day:
- *   0 4 * * * node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-sync-events.js --installation 2045571
+ *   0 4 * * * node /usr/local/lib/node_modules/homebridge-viessmann-vicare/viessmann-sync-events.js --installation YOUR_INSTALLATION_ID
  */
 
 'use strict';
@@ -28,6 +33,8 @@ const HB_PATH       = getArg('--path',         '/var/lib/homebridge');
 const INSTALLATION  = getArg('--installation', '');
 const DAYS          = parseInt(getArg('--days', '7'), 10);
 const DRY_RUN       = args.includes('--dry-run');
+const NO_MYSQL      = args.includes('--no-mysql');
+const CONFIG_FILE   = getArg('--config', path.join(HB_PATH, 'config.json'));
 
 if (!INSTALLATION) {
   console.error('ERROR: --installation <ID> is required');
@@ -214,6 +221,58 @@ function sortCsv() {
   fs.writeFileSync(CSV_FILE, header + '\n' + data.join('\n') + '\n', 'utf8');
 }
 
+// ── MySQL (optional, v2.0.75+) ─────────────────────────────────────────────
+function readMysqlConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    const plat = (cfg.platforms || []).find(p => p.platform === 'ViessmannPlatform');
+    const m = plat && plat.logging && plat.logging.mysql;
+    if (!m || m.enabled !== true) return null;
+    return {
+      host: m.host || 'localhost', port: m.port || 3306,
+      database: m.database || 'homebridge', user: m.user || 'viessmann_rw',
+      password: m.password || '', table: m.table || 'viessmann_history',
+    };
+  } catch (e) {
+    console.log('  MySQL: cannot read config (' + e.message + ') — skipping');
+    return null;
+  }
+}
+
+function isoToMysql(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace('T', ' ').replace('Z', '');   // UTC, DATETIME(3)
+}
+
+async function writeToMysql(rows) {
+  const m = readMysqlConfig();
+  if (!m) { console.log('  MySQL: logging.mysql not enabled — skipping'); return; }
+  let mysql2;
+  try { mysql2 = require('mysql2/promise'); }
+  catch { console.log('  MySQL: mysql2 module not found — skipping'); return; }
+  const conn = await mysql2.createConnection({
+    host: m.host, port: m.port, database: m.database, user: m.user, password: m.password,
+  });
+  try {
+    const values = rows
+      .map(r => [isoToMysql(r.timestamp), 'boiler', r.event_type,
+        r.burner_active === 'true' ? 1 : r.burner_active === 'false' ? 0 : null,
+        Number(INSTALLATION) || null])
+      .filter(v => v[0]);
+    let affected = 0;
+    for (let i = 0; i < values.length; i += 500) {
+      const [res] = await conn.query(
+        'INSERT IGNORE INTO `' + m.table + '` (`ts`,`accessory`,`event_type`,`burner_active`,`installation_id`) VALUES ?',
+        [values.slice(i, i + 500)]);
+      affected += res.affectedRows || 0;
+    }
+    console.log(`  MySQL: ${affected} new event rows inserted into ${m.database}.${m.table} (${values.length - affected} already present)`);
+  } finally {
+    await conn.end();
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`[viessmann-sync-events] installation=${INSTALLATION} days=${DAYS} path=${HB_PATH}${DRY_RUN ? ' DRY-RUN' : ''}`);
@@ -243,15 +302,21 @@ async function main() {
   console.log('  By type:', JSON.stringify(byType));
 
   if (DRY_RUN) {
-    console.log('DRY-RUN: not writing to CSV');
+    console.log('DRY-RUN: not writing to CSV / MySQL');
     toAdd.slice(0, 5).forEach(r =>
       console.log('  ', r.timestamp, r.event_type)
     );
     return;
   }
 
+  // MySQL gets ALL parsed rows (INSERT IGNORE dedups) so older events are back-filled too
+  if (!NO_MYSQL) {
+    try { await writeToMysql(newRows); }
+    catch (e) { console.log('  MySQL: write failed — ' + e.message); }
+  }
+
   if (!toAdd.length) {
-    console.log('Nothing to add.');
+    console.log('Nothing to add to CSV.');
     return;
   }
 

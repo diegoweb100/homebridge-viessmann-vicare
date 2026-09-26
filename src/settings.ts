@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.71';
+export const PLUGIN_VERSION = '2.0.75';
 
 /**
  * Default configuration values
@@ -60,6 +60,21 @@ export const DEFAULT_CONFIG = {
     maxConsecutiveErrors: 5,
     deviceUpdateDelay: 1000,
     userAgent: `homebridge-viessmann-vicare/${PLUGIN_VERSION}`,
+  },
+  logging: {
+    csv: {
+      enabled: true,           // CSV history file — enabled by default (backward compat)
+    },
+    mysql: {
+      enabled: false,          // MySQL/MariaDB history — disabled by default
+      host: 'localhost',
+      port: 3306,
+      database: 'homebridge',
+      user: 'viessmann_rw',
+      password: '',
+      table: 'viessmann_history',
+      autoCreateTable: true,   // CREATE TABLE IF NOT EXISTS + import CSV on first run + auto-migrate new columns
+    },
   },
   reportServerTimeout: 600,       // seconds — default 10 min; RPi3: ~365s/90days ~1460s/365days
   monitoring: {

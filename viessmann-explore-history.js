@@ -6,8 +6,8 @@
  * 'consumption', 'production' to understand available granularity.
  * 
  * Usage:
- *   node viessmann-explore-history.js --installation 2045571
- *   node viessmann-explore-history.js --installation 2045571 --out /tmp/history-explore.json
+ *   node viessmann-explore-history.js --installation YOUR_INSTALLATION_ID
+ *   node viessmann-explore-history.js --installation YOUR_INSTALLATION_ID --out /tmp/history-explore.json
  */
 
 'use strict';

@@ -32,7 +32,7 @@ const HB_PATH = getArg('--path',    process.env.HB_PATH || '/var/lib/homebridge'
 const SCRIPT  = getArg('--script',  path.join(__dirname, 'viessmann-report.js'));
 const DEBUG   = args.includes('--debug') || process.env.DEBUG_REPORT === '1';
 // --timeout <seconds> passed from plugin config (reportServerTimeout, default 300)
-const TIMEOUT_SEC = parseInt(getArg('--timeout', '300'), 10);
+const TIMEOUT_SEC = parseInt(getArg('--timeout', '600'), 10);
 
 // ── Debug logger ───────────────────────────────────────────────────────────
 function dbg(...parts) {
@@ -79,6 +79,20 @@ function detectInstallations() {
   }
 }
 
+function readApiStatus(hbPath) {
+  try {
+    const p = path.join(hbPath, 'viessmann-api-status.json');
+    if (!fs.existsSync(p)) return null;
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    // Only show data younger than 30 minutes
+    if (Date.now() - new Date(d.timestamp).getTime() > 30 * 60 * 1000) return null;
+    return d;
+  } catch (e) {
+    dbg(`readApiStatus error: ${e.message}`);
+    return null;
+  }
+}
+
 function numParam(val, def, min, max) {
   const n = parseFloat(val);
   if (isNaN(n)) return def;
@@ -95,7 +109,7 @@ function safeNum(val) {
 // CSV files (e.g. 90 days = ~26 000 rows). The default 60 s was insufficient.
 // Raised to 300 s (5 minutes) which comfortably handles the largest datasets.
 
-const REPORT_TIMEOUT_MS = Math.min(Math.max(TIMEOUT_SEC, 60), 1800) * 1000; // from --timeout arg (clamped 60–1800s)
+const REPORT_TIMEOUT_MS = Math.min(Math.max(TIMEOUT_SEC, 120), 3600) * 1000; // from --timeout arg (clamped 120–3600s)
 
 function generateReport(params) {
   return new Promise((resolve, reject) => {

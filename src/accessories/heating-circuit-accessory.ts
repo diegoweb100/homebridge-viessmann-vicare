@@ -69,6 +69,8 @@ export class ViessmannHeatingCircuitAccessory {
   };
 
   private historyLogger?: ViessmannHistoryLogger;
+  private curveSlope?: number;
+  private curveShift?: number;
 
   // 🗓️ Schedule-aware refresh
   private heatingSchedule: Record<string, Array<{mode: string; start: string; end: string}>> = {};
@@ -100,7 +102,7 @@ export class ViessmannHeatingCircuitAccessory {
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
 
     // Initialize history logger (FakeGato + CSV)
-    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `HC${circuitNumber}`, installation?.id);
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `HC${circuitNumber}`, installation?.id, gateway?.serial);
 
     // Initialize capabilities and setup characteristics
     this.initializeCapabilities();
@@ -1880,7 +1882,7 @@ private setupTemperatureProgramServices() {
 
     // Extended heating state — three signals in OR, all verified via live API:
     //
-    // Vitodens (Ciriè, confirmed):
+    // Vitodens (confirmed on a real installation):
     //   programs.active stays 'normal', comfort.active stays False
     //   forcedLastFromSchedule.active = True when ON, False when OFF  ← real indicator here
     //
@@ -1977,13 +1979,19 @@ private setupTemperatureProgramServices() {
     }
     this.scheduleNextProgramBoundary();
 
-    // 📊 History logging — FakeGato thermo + CSV
+    // 📊 History logging — FakeGato thermo + CSV/MySQL
     if (this.historyLogger) {
+      // Heating curve slope/shift (model-dependent — may be absent)
+      const curveFeature = features.find(f => f.feature === `heating.circuits.${this.circuitNumber}.heating.curve`);
+      if (curveFeature?.isEnabled) {
+        this.curveSlope = curveFeature.properties?.slope?.value;
+        this.curveShift = curveFeature.properties?.shift?.value;
+      }
       this.historyLogger.addThermoEntry({
         currentTemp: this.states.CurrentTemperature,
         setTemp: this.states.HeatingThresholdTemperature,
       });
-      this.historyLogger.appendCsvRow({
+      this.historyLogger.appendRow({
         timestamp:   new Date().toISOString(),
         accessory:   `hc${this.circuitNumber}`,
         event_type:  'snapshot',
@@ -1992,6 +2000,14 @@ private setupTemperatureProgramServices() {
         flow_temp:   this.states.FlowTemperature,
         program:     this.currentProgram,
         mode:        this.currentMode,
+        hc_operating_mode:       this.currentMode,
+        hc_comfort_temp:         this.programTemperatures.comfort,
+        hc_normal_temp:          this.programTemperatures.normal,
+        hc_reduced_temp:         this.programTemperatures.reduced,
+        hc_slope:                this.curveSlope,
+        hc_shift:                this.curveShift,
+        holiday_mode_active:     this.states.HolidayActive,
+        extended_heating_active: this.states.ExtendedHeatingActive,
       });
     }
   }

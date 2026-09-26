@@ -5,6 +5,7 @@ import {
   ViessmannGateway,
   ViessmannDevice,
 } from '../platform';
+import { ViessmannHistoryLogger } from './history-logger';
 
 /**
  * ViessmannEnergyAccessory
@@ -69,6 +70,9 @@ export class ViessmannEnergyAccessory {
   };
 
   // ── State cache ───────────────────────────────────────────────────────────
+  // ── History logger (CSV + optional MySQL) ──
+  private historyLogger?: ViessmannHistoryLogger;
+
   private states = {
     // Heat pump
     hpActive: false,
@@ -127,6 +131,9 @@ export class ViessmannEnergyAccessory {
       .setCharacteristic(this.platform.Characteristic.Model, modelLabel)
       .setCharacteristic(this.platform.Characteristic.SerialNumber, gateway.serial)
       .setCharacteristic(this.platform.Characteristic.FirmwareRevision, '1.0.0');
+
+    // History logging (CSV + optional MySQL)
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'energy', 'Energy', installation.id, gateway.serial);
 
     // Register update handler
     this.accessory.context.updateHandler = this.handleUpdate.bind(this);
@@ -647,6 +654,27 @@ export class ViessmannEnergyAccessory {
       await this.updateHeatPump(features, get, tag);
     } else {
       await this.updateEnergyDevices(features, get, tag);
+
+      // 📊 History logging — CSV + MySQL snapshot (PV / battery / grid / wallbox)
+      if (this.historyLogger) {
+        this.historyLogger.addEnergyEntry({
+          power: this.states.batteryLevelPercent, // Battery % as FakeGato energy proxy
+        });
+        this.historyLogger.appendRow({
+          timestamp:             new Date().toISOString(),
+          accessory:             'energy',
+          event_type:            'snapshot',
+          pv_production_w:       this.states.pvProductionW,
+          pv_daily_kwh:          this.states.pvDailyYieldKwh,
+          battery_level:         this.states.batteryLevelPercent,
+          battery_charging_w:    this.states.batteryChargingW,
+          battery_discharging_w: this.states.batteryDischargingW,
+          grid_feedin_w:         this.states.gridFeedInW,
+          grid_draw_w:           this.states.gridDrawW,
+          wallbox_charging:      this.states.wallboxChargingActive,
+          wallbox_power_w:       this.states.wallboxChargingPowerW,
+        });
+      }
     }
   }
 

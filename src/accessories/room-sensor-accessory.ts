@@ -36,6 +36,7 @@
 import { PlatformAccessory, Service } from 'homebridge';
 import { ViessmannPlatform } from '../platform';
 import { ViessmannFeature, ViessmannDevice, ViessmannInstallation, ViessmannGateway } from '../viessmann-api-endpoints';
+import { ViessmannHistoryLogger } from './history-logger';
 
 // ── Candidate feature paths for room/zone temperature, in priority order ──────
 // Extend this list as new devices are discovered.
@@ -196,6 +197,7 @@ export function discoverRoomSensorData(
 export class ViessmannRoomSensorAccessory {
   private temperatureService: Service;
   private readonly TAG = '[RoomSensor]';
+  private historyLogger?: ViessmannHistoryLogger;
 
   // Discovery result: saved at init, updated at each refresh
   private discoveryResult: RoomSensorDiscoveryResult;
@@ -212,6 +214,9 @@ export class ViessmannRoomSensorAccessory {
 
     // Run discovery scan
     this.discoveryResult = discoverRoomSensorData(platform, device, features);
+
+    // History logging (CSV + optional MySQL)
+    this.historyLogger = new ViessmannHistoryLogger(platform, accessory, 'thermo', `RoomSensor-${device.id}`, installation.id, gateway.serial);
 
     // AccessoryInformation
     accessory.getService(Svc.AccessoryInformation)!
@@ -278,5 +283,16 @@ export class ViessmannRoomSensorAccessory {
     this.temperatureService.getCharacteristic(Char.CurrentTemperature).updateValue(temp);
     this.temperatureService.getCharacteristic(Char.StatusActive).updateValue(true);
     this.platform.log.debug(`${this.TAG} "${this.accessory.displayName}" — temp: ${temp}°C [${this.discoveryResult.tempLabel}]`);
+
+    // 📊 History logging — FakeGato thermo + CSV/MySQL
+    if (this.historyLogger) {
+      this.historyLogger.addThermoEntry({ currentTemp: temp, setTemp: temp });
+      this.historyLogger.appendRow({
+        timestamp:  new Date().toISOString(),
+        accessory:  `room-${this.discoveryResult.device.id}`,
+        event_type: 'snapshot',
+        room_temp:  temp,
+      });
+    }
   }
 }

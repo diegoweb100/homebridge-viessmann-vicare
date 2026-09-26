@@ -5,9 +5,9 @@
  * with Chart.js graphs (no extra dependencies — Chart.js loaded via CDN).
  *
  * Usage:
- *   node viessmann-report.js --installation 2045571
- *   node viessmann-report.js --installation 2045571 --days 7
- *   node viessmann-report.js --installation 2045571 --days 30 --out /tmp/report.html
+ *   node viessmann-report.js --installation YOUR_INSTALLATION_ID
+ *   node viessmann-report.js --installation YOUR_INSTALLATION_ID --days 7
+ *   node viessmann-report.js --installation YOUR_INSTALLATION_ID --days 30 --out /tmp/report.html
  *
  * --installation <ID>  Installation ID (creates viessmann-history-<ID>.csv)
  * --days <N>           Number of days to include (default: 7)
@@ -747,7 +747,7 @@ const outSuffix = INSTALLATION_ID ? `-${INSTALLATION_ID}` : '';
 const OUT_FILE = getArg('--out', path.join(HB_PATH, `viessmann-report${outSuffix}-${today}.html`));
 
 if (!fs.existsSync(CSV_FILE)) {
-  const hint = INSTALLATION_ID ? '' : '\nTip: use --installation <ID> to specify an installation (e.g. --installation 2045571)';
+  const hint = INSTALLATION_ID ? '' : '\nTip: use --installation <ID> to specify an installation (e.g. --installation YOUR_INSTALLATION_ID)';
   console.error(`ERROR: CSV not found: ${CSV_FILE}${hint}\nStart Homebridge with the plugin to begin collecting data.`);
   process.exit(1);
 }

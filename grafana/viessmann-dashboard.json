@@ -1,0 +1,4926 @@
+{
+  "uid": "viessmann-vicare",
+  "title": "Viessmann ViCare",
+  "description": "homebridge-viessmann-vicare — MySQL history (IT/EN)",
+  "tags": [
+    "viessmann",
+    "homebridge",
+    "heating"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": "monday",
+  "links": [
+    {
+      "title": "homebridge-viessmann-vicare",
+      "type": "link",
+      "url": "https://github.com/diegoweb100/homebridge-viessmann-vicare",
+      "targetBlank": true,
+      "icon": "info"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "lang",
+        "label": "Lingua / Language",
+        "type": "custom",
+        "query": "Italiano : it, English : en",
+        "current": {
+          "text": "Italiano",
+          "value": "it",
+          "selected": true
+        },
+        "options": [
+          {
+            "text": "Italiano",
+            "value": "it",
+            "selected": true
+          },
+          {
+            "text": "English",
+            "value": "en",
+            "selected": false
+          }
+        ],
+        "hide": 0,
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false
+      },
+      {
+        "name": "ds",
+        "label": "Database",
+        "type": "datasource",
+        "query": "mysql",
+        "current": {
+          "text": "Viessmann",
+          "value": "Viessmann"
+        },
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "multi": false,
+        "includeAll": false
+      },
+      {
+        "name": "tz",
+        "label": "Time zone",
+        "type": "constant",
+        "query": "Europe/Rome",
+        "hide": 2
+      },
+      {
+        "name": "kwh_m3",
+        "label": "kWh/m³",
+        "type": "constant",
+        "query": "10.5",
+        "hide": 2
+      },
+      {
+        "name": "t_row_status",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Current status','Stato attuale')",
+        "definition": "SELECT IF('${lang}'='en','Current status','Stato attuale')",
+        "current": {
+          "text": "Stato attuale",
+          "value": "Stato attuale"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_room",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Room temperature','Temperatura ambiente')",
+        "definition": "SELECT IF('${lang}'='en','Room temperature','Temperatura ambiente')",
+        "current": {
+          "text": "Temperatura ambiente",
+          "value": "Temperatura ambiente"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_outside",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Outside temperature','Temperatura esterna')",
+        "definition": "SELECT IF('${lang}'='en','Outside temperature','Temperatura esterna')",
+        "current": {
+          "text": "Temperatura esterna",
+          "value": "Temperatura esterna"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_dhw_now",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Hot water (DHW)','Acqua calda (ACS)')",
+        "definition": "SELECT IF('${lang}'='en','Hot water (DHW)','Acqua calda (ACS)')",
+        "current": {
+          "text": "Acqua calda (ACS)",
+          "value": "Acqua calda (ACS)"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_cur",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Current','Attuale')",
+        "definition": "SELECT IF('${lang}'='en','Current','Attuale')",
+        "current": {
+          "text": "Attuale",
+          "value": "Attuale"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_tgt",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Target','Obiettivo')",
+        "definition": "SELECT IF('${lang}'='en','Target','Obiettivo')",
+        "current": {
+          "text": "Obiettivo",
+          "value": "Obiettivo"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_pressure",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','System pressure','Pressione impianto')",
+        "definition": "SELECT IF('${lang}'='en','System pressure','Pressione impianto')",
+        "current": {
+          "text": "Pressione impianto",
+          "value": "Pressione impianto"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_pressure_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating circuit water pressure. Optimal 1.0–2.5 bar (cold). Below 0.8 bar refill the system. Logged since plugin v2.0.75.','Pressione acqua del circuito di riscaldamento. Ottimale 1,0–2,5 bar (a freddo). Sotto 0,8 bar ricaricare l''impianto. Dato registrato dalla v2.0.75 del plugin.')",
+        "definition": "SELECT IF('${lang}'='en','Heating circuit water pressure. Optimal 1.0–2.5 bar (cold). Below 0.8 bar refill the system. Logged since plugin v2.0.75.','Pressione acqua del circuito di riscaldamento. Ottimale 1,0–2,5 bar (a freddo). Sotto 0,8 bar ricaricare l''impianto. Dato registrato dalla v2.0.75 del plugin.')",
+        "current": {
+          "text": "Pressione acqua del circuito di riscaldamento. Ottimale 1,0–2,5 bar (a freddo). Sotto 0,8 bar ricaricare l'impianto. Dato registrato dalla v2.0.75 del plugin.",
+          "value": "Pressione acqua del circuito di riscaldamento. Ottimale 1,0–2,5 bar (a freddo). Sotto 0,8 bar ricaricare l'impianto. Dato registrato dalla v2.0.75 del plugin."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_burner",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner','Bruciatore')",
+        "definition": "SELECT IF('${lang}'='en','Burner','Bruciatore')",
+        "current": {
+          "text": "Bruciatore",
+          "value": "Bruciatore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_modulation",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Modulation','Modulazione')",
+        "definition": "SELECT IF('${lang}'='en','Modulation','Modulazione')",
+        "current": {
+          "text": "Modulazione",
+          "value": "Modulazione"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_age",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Last data','Ultimo dato')",
+        "definition": "SELECT IF('${lang}'='en','Last data','Ultimo dato')",
+        "current": {
+          "text": "Ultimo dato",
+          "value": "Ultimo dato"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_age_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Seconds since the last recorded reading. Normal: less than the plugin refresh interval (e.g. 15 min). Red = plugin/API stalled.','Secondi trascorsi dall''ultima lettura registrata. Normale: meno dell''intervallo di aggiornamento del plugin (es. 15 min). Rosso = plugin/API ferma.')",
+        "definition": "SELECT IF('${lang}'='en','Seconds since the last recorded reading. Normal: less than the plugin refresh interval (e.g. 15 min). Red = plugin/API stalled.','Secondi trascorsi dall''ultima lettura registrata. Normale: meno dell''intervallo di aggiornamento del plugin (es. 15 min). Rosso = plugin/API ferma.')",
+        "current": {
+          "text": "Secondi trascorsi dall'ultima lettura registrata. Normale: meno dell'intervallo di aggiornamento del plugin (es. 15 min). Rosso = plugin/API ferma.",
+          "value": "Secondi trascorsi dall'ultima lettura registrata. Normale: meno dell'intervallo di aggiornamento del plugin (es. 15 min). Rosso = plugin/API ferma."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hc_prog",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating program','Programma riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating program','Programma riscaldamento')",
+        "current": {
+          "text": "Programma riscaldamento",
+          "value": "Programma riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hc_mode",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Circuit mode','Modalità circuito')",
+        "definition": "SELECT IF('${lang}'='en','Circuit mode','Modalità circuito')",
+        "current": {
+          "text": "Modalità circuito",
+          "value": "Modalità circuito"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_dhw_mode",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','DHW mode','Modalità ACS')",
+        "definition": "SELECT IF('${lang}'='en','DHW mode','Modalità ACS')",
+        "current": {
+          "text": "Modalità ACS",
+          "value": "Modalità ACS"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_starts_today",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Starts today','Accensioni oggi')",
+        "definition": "SELECT IF('${lang}'='en','Starts today','Accensioni oggi')",
+        "current": {
+          "text": "Accensioni oggi",
+          "value": "Accensioni oggi"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_starts_today_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner starts since midnight (from the lifetime counter). Many starts with few hours = short cycling.','Accensioni del bruciatore da mezzanotte (dal contatore totale). Molte accensioni con poche ore = funzionamento a cicli brevi.')",
+        "definition": "SELECT IF('${lang}'='en','Burner starts since midnight (from the lifetime counter). Many starts with few hours = short cycling.','Accensioni del bruciatore da mezzanotte (dal contatore totale). Molte accensioni con poche ore = funzionamento a cicli brevi.')",
+        "current": {
+          "text": "Accensioni del bruciatore da mezzanotte (dal contatore totale). Molte accensioni con poche ore = funzionamento a cicli brevi.",
+          "value": "Accensioni del bruciatore da mezzanotte (dal contatore totale). Molte accensioni con poche ore = funzionamento a cicli brevi."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hours_today",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner hours today','Ore bruciatore oggi')",
+        "definition": "SELECT IF('${lang}'='en','Burner hours today','Ore bruciatore oggi')",
+        "current": {
+          "text": "Ore bruciatore oggi",
+          "value": "Ore bruciatore oggi"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gas_year",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Gas this year','Gas anno corrente')",
+        "definition": "SELECT IF('${lang}'='en','Gas this year','Gas anno corrente')",
+        "current": {
+          "text": "Gas anno corrente",
+          "value": "Gas anno corrente"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gas_year_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Gas used since 1 January (heating + DHW), boiler yearly counter. Logged since v2.0.75.','Consumo gas dal 1° gennaio (riscaldamento + ACS), contatore annuale della caldaia. Registrato dalla v2.0.75.')",
+        "definition": "SELECT IF('${lang}'='en','Gas used since 1 January (heating + DHW), boiler yearly counter. Logged since v2.0.75.','Consumo gas dal 1° gennaio (riscaldamento + ACS), contatore annuale della caldaia. Registrato dalla v2.0.75.')",
+        "current": {
+          "text": "Consumo gas dal 1° gennaio (riscaldamento + ACS), contatore annuale della caldaia. Registrato dalla v2.0.75.",
+          "value": "Consumo gas dal 1° gennaio (riscaldamento + ACS), contatore annuale della caldaia. Registrato dalla v2.0.75."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_status",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Status code','Codice stato')",
+        "definition": "SELECT IF('${lang}'='en','Status code','Codice stato')",
+        "current": {
+          "text": "Codice stato",
+          "value": "Codice stato"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_status_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Latest boiler message: S.xx = status (e.g. S.6 ignition), F.xx = fault (red). Since v2.0.75.','Ultimo messaggio della caldaia: S.xx = stato (es. S.6 accensione), F.xx = guasto (rosso). Dalla v2.0.75.')",
+        "definition": "SELECT IF('${lang}'='en','Latest boiler message: S.xx = status (e.g. S.6 ignition), F.xx = fault (red). Since v2.0.75.','Ultimo messaggio della caldaia: S.xx = stato (es. S.6 accensione), F.xx = guasto (rosso). Dalla v2.0.75.')",
+        "current": {
+          "text": "Ultimo messaggio della caldaia: S.xx = stato (es. S.6 accensione), F.xx = guasto (rosso). Dalla v2.0.75.",
+          "value": "Ultimo messaggio della caldaia: S.xx = stato (es. S.6 accensione), F.xx = guasto (rosso). Dalla v2.0.75."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_wifi",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Boiler Wi-Fi','Wi-Fi caldaia')",
+        "definition": "SELECT IF('${lang}'='en','Boiler Wi-Fi','Wi-Fi caldaia')",
+        "current": {
+          "text": "Wi-Fi caldaia",
+          "value": "Wi-Fi caldaia"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_row_temp",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Temperatures','Temperature')",
+        "definition": "SELECT IF('${lang}'='en','Temperatures','Temperature')",
+        "current": {
+          "text": "Temperature",
+          "value": "Temperature"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_temps",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Room and outside temperature','Temperature ambiente ed esterna')",
+        "definition": "SELECT IF('${lang}'='en','Room and outside temperature','Temperature ambiente ed esterna')",
+        "current": {
+          "text": "Temperature ambiente ed esterna",
+          "value": "Temperature ambiente ed esterna"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_water",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Supply water temperatures','Temperature acqua di mandata')",
+        "definition": "SELECT IF('${lang}'='en','Supply water temperatures','Temperature acqua di mandata')",
+        "current": {
+          "text": "Temperature acqua di mandata",
+          "value": "Temperature acqua di mandata"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_water_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating circuit flow and boiler water temperature. In summer the flow follows domestic hot water production.','Mandata del circuito di riscaldamento e temperatura acqua in caldaia. In estate la mandata segue la produzione di ACS.')",
+        "definition": "SELECT IF('${lang}'='en','Heating circuit flow and boiler water temperature. In summer the flow follows domestic hot water production.','Mandata del circuito di riscaldamento e temperatura acqua in caldaia. In estate la mandata segue la produzione di ACS.')",
+        "current": {
+          "text": "Mandata del circuito di riscaldamento e temperatura acqua in caldaia. In estate la mandata segue la produzione di ACS.",
+          "value": "Mandata del circuito di riscaldamento e temperatura acqua in caldaia. In estate la mandata segue la produzione di ACS."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_dhw",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Domestic hot water (DHW)','Acqua calda sanitaria (ACS)')",
+        "definition": "SELECT IF('${lang}'='en','Domestic hot water (DHW)','Acqua calda sanitaria (ACS)')",
+        "current": {
+          "text": "Acqua calda sanitaria (ACS)",
+          "value": "Acqua calda sanitaria (ACS)"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_prog_temps",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Program set temperatures','Temperature impostate per programma')",
+        "definition": "SELECT IF('${lang}'='en','Program set temperatures','Temperature impostate per programma')",
+        "current": {
+          "text": "Temperature impostate per programma",
+          "value": "Temperature impostate per programma"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_row_burner",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner','Bruciatore')",
+        "definition": "SELECT IF('${lang}'='en','Burner','Bruciatore')",
+        "current": {
+          "text": "Bruciatore",
+          "value": "Bruciatore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_burner_tl",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner state','Stato bruciatore')",
+        "definition": "SELECT IF('${lang}'='en','Burner state','Stato bruciatore')",
+        "current": {
+          "text": "Stato bruciatore",
+          "value": "Stato bruciatore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_burner_tl_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Red = burner on. Includes precise ignition events when viessmann-sync-events.js writes to MySQL (v2.0.75).','Rosso = bruciatore acceso. Include gli eventi precisi di accensione se viessmann-sync-events.js scrive su MySQL (v2.0.75).')",
+        "definition": "SELECT IF('${lang}'='en','Red = burner on. Includes precise ignition events when viessmann-sync-events.js writes to MySQL (v2.0.75).','Rosso = bruciatore acceso. Include gli eventi precisi di accensione se viessmann-sync-events.js scrive su MySQL (v2.0.75).')",
+        "current": {
+          "text": "Rosso = bruciatore acceso. Include gli eventi precisi di accensione se viessmann-sync-events.js scrive su MySQL (v2.0.75).",
+          "value": "Rosso = bruciatore acceso. Include gli eventi precisi di accensione se viessmann-sync-events.js scrive su MySQL (v2.0.75)."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_mod_ts",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Burner modulation','Modulazione bruciatore')",
+        "definition": "SELECT IF('${lang}'='en','Burner modulation','Modulazione bruciatore')",
+        "current": {
+          "text": "Modulazione bruciatore",
+          "value": "Modulazione bruciatore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_starts",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Starts','Accensioni')",
+        "definition": "SELECT IF('${lang}'='en','Starts','Accensioni')",
+        "current": {
+          "text": "Accensioni",
+          "value": "Accensioni"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hours",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Hours','Ore')",
+        "definition": "SELECT IF('${lang}'='en','Hours','Ore')",
+        "current": {
+          "text": "Ore",
+          "value": "Ore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_cycles",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Daily burner starts and running hours','Accensioni e ore di funzionamento al giorno')",
+        "definition": "SELECT IF('${lang}'='en','Daily burner starts and running hours','Accensioni e ore di funzionamento al giorno')",
+        "current": {
+          "text": "Accensioni e ore di funzionamento al giorno",
+          "value": "Accensioni e ore di funzionamento al giorno"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_cycles_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Computed from the boiler lifetime counters (local days). High starts/hours ratio = short cycling: check heating curve or minimum output.','Calcolate dal contatore totale della caldaia (giorni locali). Rapporto alto accensioni/ore = cicli brevi: valutare curva o potenza minima.')",
+        "definition": "SELECT IF('${lang}'='en','Computed from the boiler lifetime counters (local days). High starts/hours ratio = short cycling: check heating curve or minimum output.','Calcolate dal contatore totale della caldaia (giorni locali). Rapporto alto accensioni/ore = cicli brevi: valutare curva o potenza minima.')",
+        "current": {
+          "text": "Calcolate dal contatore totale della caldaia (giorni locali). Rapporto alto accensioni/ore = cicli brevi: valutare curva o potenza minima.",
+          "value": "Calcolate dal contatore totale della caldaia (giorni locali). Rapporto alto accensioni/ore = cicli brevi: valutare curva o potenza minima."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_row_energy",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Consumption and energy','Consumi ed energia')",
+        "definition": "SELECT IF('${lang}'='en','Consumption and energy','Consumi ed energia')",
+        "current": {
+          "text": "Consumi ed energia",
+          "value": "Consumi ed energia"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gas_day",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Daily gas','Gas al giorno')",
+        "definition": "SELECT IF('${lang}'='en','Daily gas','Gas al giorno')",
+        "current": {
+          "text": "Gas al giorno",
+          "value": "Gas al giorno"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gh",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "current": {
+          "text": "Riscaldamento",
+          "value": "Riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gw",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "definition": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "current": {
+          "text": "Acqua calda",
+          "value": "Acqua calda"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gas_day_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Day-over-day difference of the boiler monthly counters. The boiler updates its counters with a few hours delay: a single day may shift, totals stay correct.','Differenza giornaliera dei contatori mensili della caldaia. La caldaia aggiorna i contatori con ritardo di qualche ora: il singolo giorno può slittare, i totali restano corretti.')",
+        "definition": "SELECT IF('${lang}'='en','Day-over-day difference of the boiler monthly counters. The boiler updates its counters with a few hours delay: a single day may shift, totals stay correct.','Differenza giornaliera dei contatori mensili della caldaia. La caldaia aggiorna i contatori con ritardo di qualche ora: il singolo giorno può slittare, i totali restano corretti.')",
+        "current": {
+          "text": "Differenza giornaliera dei contatori mensili della caldaia. La caldaia aggiorna i contatori con ritardo di qualche ora: il singolo giorno può slittare, i totali restano corretti.",
+          "value": "Differenza giornaliera dei contatori mensili della caldaia. La caldaia aggiorna i contatori con ritardo di qualche ora: il singolo giorno può slittare, i totali restano corretti."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_gas_month",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Monthly gas','Gas al mese')",
+        "definition": "SELECT IF('${lang}'='en','Monthly gas','Gas al mese')",
+        "current": {
+          "text": "Gas al mese",
+          "value": "Gas al mese"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_heat_month",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Monthly heat produced','Calore prodotto al mese')",
+        "definition": "SELECT IF('${lang}'='en','Monthly heat produced','Calore prodotto al mese')",
+        "current": {
+          "text": "Calore prodotto al mese",
+          "value": "Calore prodotto al mese"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hh",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "current": {
+          "text": "Riscaldamento",
+          "value": "Riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hw",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "definition": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "current": {
+          "text": "Acqua calda",
+          "value": "Acqua calda"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_power_month",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Monthly boiler electricity','Elettricità caldaia al mese')",
+        "definition": "SELECT IF('${lang}'='en','Monthly boiler electricity','Elettricità caldaia al mese')",
+        "current": {
+          "text": "Elettricità caldaia al mese",
+          "value": "Elettricità caldaia al mese"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_eh",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating','Riscaldamento')",
+        "current": {
+          "text": "Riscaldamento",
+          "value": "Riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_ew",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "definition": "SELECT IF('${lang}'='en','Hot water','Acqua calda')",
+        "current": {
+          "text": "Acqua calda",
+          "value": "Acqua calda"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_power_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Boiler electricity use (pump, electronics, fan). Logged since v2.0.75.','Consumo elettrico della caldaia (pompa, elettronica, ventilatore). Registrato dalla v2.0.75.')",
+        "definition": "SELECT IF('${lang}'='en','Boiler electricity use (pump, electronics, fan). Logged since v2.0.75.','Consumo elettrico della caldaia (pompa, elettronica, ventilatore). Registrato dalla v2.0.75.')",
+        "current": {
+          "text": "Consumo elettrico della caldaia (pompa, elettronica, ventilatore). Registrato dalla v2.0.75.",
+          "value": "Consumo elettrico della caldaia (pompa, elettronica, ventilatore). Registrato dalla v2.0.75."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_eff",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Estimated efficiency (year)','Rendimento stimato (anno)')",
+        "definition": "SELECT IF('${lang}'='en','Estimated efficiency (year)','Rendimento stimato (anno)')",
+        "current": {
+          "text": "Rendimento stimato (anno)",
+          "value": "Rendimento stimato (anno)"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_eff_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Calorific value from variable kwh_m3 (default 10.5 kWh/m³). Above 100% = inaccurate boiler estimate. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.')",
+        "definition": "SELECT IF('${lang}'='en','Heat produced / gas energy (current year). Calorific value from variable kwh_m3 (default 10.5 kWh/m³). Above 100% = inaccurate boiler estimate. Since v2.0.75.','Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.')",
+        "current": {
+          "text": "Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75.",
+          "value": "Calore prodotto / energia del gas (anno corrente). Potere calorifico da variabile kwh_m3 (default 10,5 kWh/m³). Oltre 100% = stima della caldaia imprecisa. Dalla v2.0.75."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_year_tot",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Current year totals','Totali anno corrente')",
+        "definition": "SELECT IF('${lang}'='en','Current year totals','Totali anno corrente')",
+        "current": {
+          "text": "Totali anno corrente",
+          "value": "Totali anno corrente"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_heat",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heat','Calore')",
+        "definition": "SELECT IF('${lang}'='en','Heat','Calore')",
+        "current": {
+          "text": "Calore",
+          "value": "Calore"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_row_settings",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Settings and diagnostics','Impostazioni e diagnostica')",
+        "definition": "SELECT IF('${lang}'='en','Settings and diagnostics','Impostazioni e diagnostica')",
+        "current": {
+          "text": "Impostazioni e diagnostica",
+          "value": "Impostazioni e diagnostica"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_hc_tl",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating program and mode','Programma e modalità riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating program and mode','Programma e modalità riscaldamento')",
+        "current": {
+          "text": "Programma e modalità riscaldamento",
+          "value": "Programma e modalità riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_holiday",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Holiday','Vacanza')",
+        "definition": "SELECT IF('${lang}'='en','Holiday','Vacanza')",
+        "current": {
+          "text": "Vacanza",
+          "value": "Vacanza"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_ext",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Extended comfort','Comfort esteso')",
+        "definition": "SELECT IF('${lang}'='en','Extended comfort','Comfort esteso')",
+        "current": {
+          "text": "Comfort esteso",
+          "value": "Comfort esteso"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_flags_tl",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','DHW, holiday and extended comfort','ACS, vacanza e comfort esteso')",
+        "definition": "SELECT IF('${lang}'='en','DHW, holiday and extended comfort','ACS, vacanza e comfort esteso')",
+        "current": {
+          "text": "ACS, vacanza e comfort esteso",
+          "value": "ACS, vacanza e comfort esteso"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_pressure_ts",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','System pressure','Pressione impianto')",
+        "definition": "SELECT IF('${lang}'='en','System pressure','Pressione impianto')",
+        "current": {
+          "text": "Pressione impianto",
+          "value": "Pressione impianto"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_pressure_ts_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
+        "definition": "SELECT IF('${lang}'='en','A slow steady drop indicates a leak or an expansion vessel that needs recharging.','Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.')",
+        "current": {
+          "text": "Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare.",
+          "value": "Un calo lento e costante indica una perdita o il vaso di espansione da ricaricare."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Heating curve','Curva di riscaldamento')",
+        "definition": "SELECT IF('${lang}'='en','Heating curve','Curva di riscaldamento')",
+        "current": {
+          "text": "Curva di riscaldamento",
+          "value": "Curva di riscaldamento"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_curve_d",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Slope and shift of the weather-compensated heating curve. A slope that is too high raises flow temperature and burner starts.','Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.')",
+        "definition": "SELECT IF('${lang}'='en','Slope and shift of the weather-compensated heating curve. A slope that is too high raises flow temperature and burner starts.','Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.')",
+        "current": {
+          "text": "Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni.",
+          "value": "Pendenza e spostamento (parallelo) della curva climatica. Una pendenza troppo alta aumenta la temperatura di mandata e le accensioni."
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      },
+      {
+        "name": "t_wifi_ts",
+        "type": "query",
+        "datasource": {
+          "type": "mysql",
+          "uid": "${ds}"
+        },
+        "hide": 2,
+        "refresh": 1,
+        "query": "SELECT IF('${lang}'='en','Boiler Wi-Fi signal','Segnale Wi-Fi caldaia')",
+        "definition": "SELECT IF('${lang}'='en','Boiler Wi-Fi signal','Segnale Wi-Fi caldaia')",
+        "current": {
+          "text": "Segnale Wi-Fi caldaia",
+          "value": "Segnale Wi-Fi caldaia"
+        },
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": true
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "${t_row_status}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "${t_room}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, room_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND room_temp IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 18
+              },
+              {
+                "color": "orange",
+                "value": 24
+              },
+              {
+                "color": "red",
+                "value": 27
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "${t_outside}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, outside_temp AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND outside_temp IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 10
+              },
+              {
+                "color": "orange",
+                "value": 28
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "${t_dhw_now}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 6,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, dhw_temp AS `${t_cur}`, dhw_target AS `${t_tgt}` FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND dhw_temp IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 35
+              },
+              {
+                "color": "green",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 65
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "${t_pressure}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 10,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, water_pressure_bar AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND water_pressure_bar IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pressurebar",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "green",
+                "value": 1.0
+              },
+              {
+                "color": "orange",
+                "value": 2.5
+              },
+              {
+                "color": "red",
+                "value": 3.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "description": "${t_pressure_d}"
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "${t_burner}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 13,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(burner_active=1,IF('${lang}'='en','ON','ACCESO'),IF('${lang}'='en','OFF','SPENTO')) AS value FROM viessmann_history WHERE accessory='boiler' AND burner_active IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "ACCESO": {
+                  "color": "red",
+                  "index": 0
+                },
+                "ON": {
+                  "color": "red",
+                  "index": 1
+                },
+                "SPENTO": {
+                  "color": "text",
+                  "index": 2
+                },
+                "OFF": {
+                  "color": "text",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "${t_modulation}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, modulation AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND modulation IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 70
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "${t_age}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',UTC_TIMESTAMP()) - TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS value FROM viessmann_history WHERE event_type='snapshot' ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1500
+              },
+              {
+                "color": "red",
+                "value": 3600
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "description": "${t_age_d}"
+    },
+    {
+      "type": "stat",
+      "id": 9,
+      "title": "${t_hc_prog}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE program WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'normal' THEN IF('${lang}'='en','Normal','Normale') WHEN 'reduced' THEN IF('${lang}'='en','Reduced','Ridotto') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'holiday' THEN IF('${lang}'='en','Holiday','Vacanza') WHEN 'holidayAtHome' THEN IF('${lang}'='en','Holiday at home','Vacanza a casa') WHEN 'summerEco' THEN IF('${lang}'='en','Summer eco','Eco estivo') WHEN 'fixed' THEN IF('${lang}'='en','Fixed','Fisso') WHEN 'forcedLastFromSchedule' THEN IF('${lang}'='en','Forced','Forzato') WHEN 'normalEnergySaving' THEN IF('${lang}'='en','Normal (saving)','Normale (risparmio)') WHEN 'reducedEnergySaving' THEN IF('${lang}'='en','Reduced (saving)','Ridotto (risparmio)') WHEN 'comfortEnergySaving' THEN IF('${lang}'='en','Comfort (saving)','Comfort (risparmio)') ELSE program END AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND program IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Standby": {
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Normale": {
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Normal": {
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Reduced": {
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Ridotto": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Comfort": {
+                  "color": "orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Eco": {
+                  "color": "purple",
+                  "index": 6
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Holiday": {
+                  "color": "yellow",
+                  "index": 7
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Vacanza": {
+                  "color": "yellow",
+                  "index": 8
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 10,
+      "title": "${t_hc_mode}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE mode WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'heating' THEN IF('${lang}'='en','Heating','Riscaldamento') WHEN 'dhw' THEN IF('${lang}'='en','DHW only','Solo ACS') WHEN 'dhwAndHeating' THEN IF('${lang}'='en','DHW + Heating','ACS + Riscaldamento') WHEN 'heatingCooling' THEN IF('${lang}'='en','Heating/Cooling','Risc. + Raffr.') WHEN 'forcedReduced' THEN IF('${lang}'='en','Forced reduced','Ridotto forzato') WHEN 'forcedNormal' THEN IF('${lang}'='en','Forced normal','Normale forzato') ELSE mode END AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND mode IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Standby": {
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Riscaldamento": {
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Heating": {
+                  "color": "red",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Solo ACS": {
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "DHW only": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "ACS + Riscaldamento": {
+                  "color": "orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "DHW + Heating": {
+                  "color": "orange",
+                  "index": 6
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 11,
+      "title": "${t_dhw_mode}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 8,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE mode WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'off' THEN IF('${lang}'='en','Off','Spenta') WHEN 'efficient' THEN IF('${lang}'='en','Efficient','Efficiente') WHEN 'efficientWithMinComfort' THEN IF('${lang}'='en','Efficient+','Efficiente+') WHEN 'balanced' THEN IF('${lang}'='en','Balanced','Bilanciata') ELSE mode END AS value FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND mode IN ('eco','comfort','off','efficient','efficientWithMinComfort','balanced') ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Eco": {
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Comfort": {
+                  "color": "orange",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Off": {
+                  "color": "text",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Spenta": {
+                  "color": "text",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficient": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficiente": {
+                  "color": "blue",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficient+": {
+                  "color": "blue",
+                  "index": 6
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficiente+": {
+                  "color": "blue",
+                  "index": 7
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "${t_starts_today}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 11,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, MAX(burner_starts) - (SELECT burner_starts FROM viessmann_history WHERE accessory='boiler' AND burner_starts > 0 AND ts < CONVERT_TZ(DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','${tz}')),'${tz}','+00:00') ORDER BY ts DESC LIMIT 1) AS value FROM viessmann_history WHERE accessory='boiler' AND burner_starts > 0 AND DATE(CONVERT_TZ(ts,'+00:00','${tz}')) = DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','${tz}'))"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "description": "${t_starts_today_d}"
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "${t_hours_today}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 14,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, MAX(burner_hours) - (SELECT burner_hours FROM viessmann_history WHERE accessory='boiler' AND burner_hours > 0 AND ts < CONVERT_TZ(DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','${tz}')),'${tz}','+00:00') ORDER BY ts DESC LIMIT 1) AS value FROM viessmann_history WHERE accessory='boiler' AND burner_hours > 0 AND DATE(CONVERT_TZ(ts,'+00:00','${tz}')) = DATE(CONVERT_TZ(UTC_TIMESTAMP(),'+00:00','${tz}'))"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "${t_gas_year}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 17,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, gas_heating_year_m3 + gas_dhw_year_m3 AS value FROM viessmann_history WHERE accessory='boiler' AND gas_heating_year_m3 IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m³",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "description": "${t_gas_year_d}"
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "${t_status}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 2,
+        "x": 20,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, status_code AS value FROM viessmann_history WHERE accessory='boiler' AND status_code IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "regex",
+              "options": {
+                "pattern": "^F.*",
+                "result": {
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "regex",
+              "options": {
+                "pattern": "^[SI].*",
+                "result": {
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "description": "${t_status_d}"
+    },
+    {
+      "type": "stat",
+      "id": 16,
+      "title": "${t_wifi}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 2,
+        "x": 22,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, wifi_rssi AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND wifi_rssi IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": -80
+              },
+              {
+                "color": "green",
+                "value": -67
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "noValue": "—"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "id": 17,
+      "title": "${t_row_temp}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 18,
+      "title": "${t_temps}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Room','Ambiente') AS metric, room_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND room_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Room target','Obiettivo ambiente') AS metric, target_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND target_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Outside','Esterna') AS metric, outside_temp AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND outside_temp IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Room"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ambiente"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Obiettivo ambiente"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Room target"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Esterna"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outside"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Obiettivo ambiente"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Room target"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 19,
+      "title": "${t_water}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Circuit flow','Mandata circuito') AS metric, flow_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND flow_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Boiler water','Acqua caldaia') AS metric, boiler_water_temp AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND boiler_water_temp IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Circuit flow"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mandata circuito"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Boiler water"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Acqua caldaia"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_water_d}"
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "${t_dhw}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','DHW temperature','Temperatura ACS') AS metric, dhw_temp AS value FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND dhw_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','DHW target','Obiettivo ACS') AS metric, dhw_target AS value FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND dhw_target IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DHW temperature"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Temperatura ACS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DHW target"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Obiettivo ACS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Obiettivo ACS"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DHW target"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "stepAfter"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 21,
+      "title": "${t_prog_temps}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Comfort','Comfort') AS metric, hc_comfort_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_comfort_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Normal','Normale') AS metric, hc_normal_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_normal_temp IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Reduced','Ridotta') AS metric, hc_reduced_temp AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_reduced_temp IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Comfort"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Normale"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Normal"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ridotta"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reduced"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "id": 22,
+      "title": "${t_row_burner}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "panels": []
+    },
+    {
+      "type": "state-timeline",
+      "id": 23,
+      "title": "${t_burner_tl}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(burner_active=1,IF('${lang}'='en','On','Acceso'),IF('${lang}'='en','Off','Spento')) AS `${t_burner}` FROM viessmann_history WHERE accessory='boiler' AND burner_active IS NOT NULL AND event_type IN ('snapshot','burner_on','burner_off') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "left",
+        "rowHeight": 0.8,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Acceso": {
+                  "color": "red",
+                  "index": 0
+                },
+                "On": {
+                  "color": "red",
+                  "index": 1
+                },
+                "Spento": {
+                  "color": "transparent",
+                  "index": 2
+                },
+                "Off": {
+                  "color": "transparent",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "custom": {
+            "fillOpacity": 75,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "description": "${t_burner_tl_d}"
+    },
+    {
+      "type": "timeseries",
+      "id": 24,
+      "title": "${t_mod_ts}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Modulation','Modulazione') AS metric, modulation AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND modulation IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "min": 0,
+          "max": 100
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Modulazione"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Modulation"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 25,
+      "title": "${t_cycles}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(day,'${tz}','+00:00')) AS time, v - pv AS `${t_starts}` FROM (SELECT day, v, LAG(v) OVER (ORDER BY day) AS pv, LAG(day) OVER (ORDER BY day) AS pday FROM (SELECT DATE(CONVERT_TZ(ts,'+00:00','${tz}')) AS day, MAX(burner_starts) AS v FROM viessmann_history WHERE accessory='boiler' AND burner_starts > 0 AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 1 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND GROUP BY DATE(CONVERT_TZ(ts,'+00:00','${tz}'))) d) x WHERE pv IS NOT NULL AND v >= pv AND DATEDIFF(day,pday)=1 ORDER BY day"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(day,'${tz}','+00:00')) AS time, v - pv AS `${t_hours}` FROM (SELECT day, v, LAG(v) OVER (ORDER BY day) AS pv, LAG(day) OVER (ORDER BY day) AS pday FROM (SELECT DATE(CONVERT_TZ(ts,'+00:00','${tz}')) AS day, MAX(burner_hours) AS v FROM viessmann_history WHERE accessory='boiler' AND burner_hours > 0 AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 1 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND GROUP BY DATE(CONVERT_TZ(ts,'+00:00','${tz}'))) d) x WHERE pv IS NOT NULL AND v >= pv AND DATEDIFF(day,pday)=1 ORDER BY day"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "h"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_cycles_d}"
+    },
+    {
+      "type": "row",
+      "id": 26,
+      "title": "${t_row_energy}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 27,
+      "title": "${t_gas_day}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(day,'${tz}','+00:00')) AS time, CASE WHEN MONTH(day)<>MONTH(pday) THEN gh WHEN pr_gh IS NULL AND raw_gh > 0 THEN NULL ELSE GREATEST(gh-p_gh,0) END AS `${t_gh}`, CASE WHEN MONTH(day)<>MONTH(pday) THEN gw WHEN pr_gw IS NULL AND raw_gw > 0 THEN NULL ELSE GREATEST(gw-p_gw,0) END AS `${t_gw}` FROM (SELECT day, gh, raw_gh, LAG(gh) OVER (ORDER BY day) AS p_gh, LAG(raw_gh) OVER (ORDER BY day) AS pr_gh, gw, raw_gw, LAG(gw) OVER (ORDER BY day) AS p_gw, LAG(raw_gw) OVER (ORDER BY day) AS pr_gw, LAG(day) OVER (ORDER BY day) AS pday FROM (SELECT day, gh, raw_gh, gw, raw_gw FROM (SELECT DATE(CONVERT_TZ(ts,'+00:00','${tz}')) AS day, COALESCE(gas_heating_month_m3,0) AS gh, gas_heating_month_m3 AS raw_gh, COALESCE(gas_dhw_month_m3,0) AS gw, gas_dhw_month_m3 AS raw_gw, ROW_NUMBER() OVER (PARTITION BY DATE(CONVERT_TZ(ts,'+00:00','${tz}')) ORDER BY ts DESC) AS rn FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND burner_starts IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 2 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) r WHERE rn=1) l) x WHERE pday IS NOT NULL AND DATEDIFF(day,pday)=1 AND day >= DATE(CONVERT_TZ('1970-01-01' + INTERVAL $__unixEpochFrom() SECOND,'+00:00','${tz}')) ORDER BY day"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m³",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Riscaldamento|Heating"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Acqua calda|Hot water"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_gas_day_d}"
+    },
+    {
+      "type": "timeseries",
+      "id": 28,
+      "title": "${t_gas_month}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(CONCAT(ym,'-01'),'${tz}','+00:00')) AS time, `${t_gh}`, `${t_gw}` FROM (SELECT DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') AS ym, COALESCE(gas_heating_month_m3,0) AS `${t_gh}`, COALESCE(gas_dhw_month_m3,0) AS `${t_gw}`, ROW_NUMBER() OVER (PARTITION BY DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') ORDER BY ts DESC) AS rn FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND burner_starts IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 31 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) m WHERE rn=1 ORDER BY ym"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m³",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Riscaldamento|Heating"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Acqua calda|Hot water"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 29,
+      "title": "${t_heat_month}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 48
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(CONCAT(ym,'-01'),'${tz}','+00:00')) AS time, `${t_hh}`, `${t_hw}` FROM (SELECT DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') AS ym, COALESCE(heat_heating_month_kwh,0) AS `${t_hh}`, COALESCE(heat_dhw_month_kwh,0) AS `${t_hw}`, ROW_NUMBER() OVER (PARTITION BY DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') ORDER BY ts DESC) AS rn FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND burner_starts IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 31 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) m WHERE rn=1 ORDER BY ym"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Riscaldamento|Heating"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Acqua calda|Hot water"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 30,
+      "title": "${t_power_month}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 48
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',CONVERT_TZ(CONCAT(ym,'-01'),'${tz}','+00:00')) AS time, `${t_eh}`, `${t_ew}` FROM (SELECT DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') AS ym, COALESCE(power_heating_month_kwh,0) AS `${t_eh}`, COALESCE(power_dhw_month_kwh,0) AS `${t_ew}`, ROW_NUMBER() OVER (PARTITION BY DATE_FORMAT(CONVERT_TZ(ts,'+00:00','${tz}'),'%Y-%m') ORDER BY ts DESC) AS rn FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND burner_starts IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND - INTERVAL 31 DAY AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND) m WHERE rn=1 ORDER BY ym"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "kwatth",
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1,
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Riscaldamento|Heating"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "Acqua calda|Hot water"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_power_d}"
+    },
+    {
+      "type": "stat",
+      "id": 31,
+      "title": "${t_eff}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 16,
+        "y": 48
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, 100 * (heat_heating_year_kwh + heat_dhw_year_kwh) / ((gas_heating_year_m3 + gas_dhw_year_m3) * ${kwh_m3}) AS value FROM viessmann_history WHERE accessory='boiler' AND heat_heating_year_kwh IS NOT NULL AND gas_heating_year_m3 > 0 ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "green",
+                "value": 88
+              },
+              {
+                "color": "purple",
+                "value": 110
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "description": "${t_eff_d}"
+    },
+    {
+      "type": "stat",
+      "id": 32,
+      "title": "${t_year_tot}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 20,
+        "y": 48
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT UNIX_TIMESTAMP() AS time, gas_heating_year_m3 AS `${t_gh} (m³)`, gas_dhw_year_m3 AS `${t_gw} (m³)`, heat_heating_year_kwh + heat_dhw_year_kwh AS `${t_heat} (kWh)` FROM viessmann_history WHERE accessory='boiler' AND gas_heating_year_m3 IS NOT NULL ORDER BY ts DESC LIMIT 1"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "noValue": "—"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "id": 33,
+      "title": "${t_row_settings}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "panels": []
+    },
+    {
+      "type": "state-timeline",
+      "id": 34,
+      "title": "${t_hc_tl}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE program WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'normal' THEN IF('${lang}'='en','Normal','Normale') WHEN 'reduced' THEN IF('${lang}'='en','Reduced','Ridotto') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'holiday' THEN IF('${lang}'='en','Holiday','Vacanza') WHEN 'holidayAtHome' THEN IF('${lang}'='en','Holiday at home','Vacanza a casa') WHEN 'summerEco' THEN IF('${lang}'='en','Summer eco','Eco estivo') WHEN 'fixed' THEN IF('${lang}'='en','Fixed','Fisso') WHEN 'forcedLastFromSchedule' THEN IF('${lang}'='en','Forced','Forzato') WHEN 'normalEnergySaving' THEN IF('${lang}'='en','Normal (saving)','Normale (risparmio)') WHEN 'reducedEnergySaving' THEN IF('${lang}'='en','Reduced (saving)','Ridotto (risparmio)') WHEN 'comfortEnergySaving' THEN IF('${lang}'='en','Comfort (saving)','Comfort (risparmio)') ELSE program END AS `${t_hc_prog}`, CASE mode WHEN 'standby' THEN IF('${lang}'='en','Standby','Standby') WHEN 'heating' THEN IF('${lang}'='en','Heating','Riscaldamento') WHEN 'dhw' THEN IF('${lang}'='en','DHW only','Solo ACS') WHEN 'dhwAndHeating' THEN IF('${lang}'='en','DHW + Heating','ACS + Riscaldamento') WHEN 'heatingCooling' THEN IF('${lang}'='en','Heating/Cooling','Risc. + Raffr.') WHEN 'forcedReduced' THEN IF('${lang}'='en','Forced reduced','Ridotto forzato') WHEN 'forcedNormal' THEN IF('${lang}'='en','Forced normal','Normale forzato') ELSE mode END AS `${t_hc_mode}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND program IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "left",
+        "rowHeight": 0.8,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Standby": {
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Normale": {
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Normal": {
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Reduced": {
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Ridotto": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Comfort": {
+                  "color": "orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Eco": {
+                  "color": "purple",
+                  "index": 6
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Holiday": {
+                  "color": "yellow",
+                  "index": 7
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Vacanza": {
+                  "color": "yellow",
+                  "index": 8
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Standby": {
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Riscaldamento": {
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Heating": {
+                  "color": "red",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Solo ACS": {
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "DHW only": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "ACS + Riscaldamento": {
+                  "color": "orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "DHW + Heating": {
+                  "color": "orange",
+                  "index": 6
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "custom": {
+            "fillOpacity": 75,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "state-timeline",
+      "id": 35,
+      "title": "${t_flags_tl}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, CASE mode WHEN 'eco' THEN IF('${lang}'='en','Eco','Eco') WHEN 'comfort' THEN IF('${lang}'='en','Comfort','Comfort') WHEN 'off' THEN IF('${lang}'='en','Off','Spenta') WHEN 'efficient' THEN IF('${lang}'='en','Efficient','Efficiente') WHEN 'efficientWithMinComfort' THEN IF('${lang}'='en','Efficient+','Efficiente+') WHEN 'balanced' THEN IF('${lang}'='en','Balanced','Bilanciata') ELSE mode END AS `${t_dhw_mode}` FROM viessmann_history WHERE accessory='dhw' AND event_type='snapshot' AND mode IN ('eco','comfort','off','efficient','efficientWithMinComfort','balanced') AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "table",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF(holiday_mode_active=1,IF('${lang}'='en','Active','Attiva'),'—') AS `${t_holiday}`, IF(extended_heating_active=1,IF('${lang}'='en','Active','Attivo'),'—') AS `${t_ext}` FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND holiday_mode_active IS NOT NULL AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND ORDER BY ts"
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "left",
+        "rowHeight": 0.8,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "Eco": {
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Comfort": {
+                  "color": "orange",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Off": {
+                  "color": "text",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Spenta": {
+                  "color": "text",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficient": {
+                  "color": "blue",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficiente": {
+                  "color": "blue",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficient+": {
+                  "color": "blue",
+                  "index": 6
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Efficiente+": {
+                  "color": "blue",
+                  "index": 7
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "Attiva": {
+                  "color": "yellow",
+                  "index": 90
+                },
+                "Attivo": {
+                  "color": "orange",
+                  "index": 91
+                },
+                "Active": {
+                  "color": "yellow",
+                  "index": 92
+                },
+                "—": {
+                  "color": "transparent",
+                  "index": 93
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "custom": {
+            "fillOpacity": 75,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 36,
+      "title": "${t_pressure_ts}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 63
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Pressure','Pressione') AS metric, water_pressure_bar AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND water_pressure_bar IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pressurebar",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 2,
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pressione"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pressure"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "${t_pressure_ts_d}"
+    },
+    {
+      "type": "timeseries",
+      "id": 37,
+      "title": "${t_curve}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 63
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Slope','Pendenza') AS metric, hc_slope AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_slope IS NOT NULL UNION ALL SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','Shift','Spostamento') AS metric, hc_shift AS value FROM viessmann_history WHERE accessory='hc0' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND hc_shift IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "description": "${t_curve_d}"
+    },
+    {
+      "type": "timeseries",
+      "id": 38,
+      "title": "${t_wifi_ts}",
+      "datasource": {
+        "type": "mysql",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 63
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "mysql",
+            "uid": "${ds}"
+          },
+          "rawQuery": true,
+          "editorMode": "code",
+          "format": "time_series",
+          "rawSql": "SELECT TIMESTAMPDIFF(SECOND,'1970-01-01 00:00:00',ts) AS time, IF('${lang}'='en','RSSI','RSSI') AS metric, wifi_rssi AS value FROM viessmann_history WHERE accessory='boiler' AND event_type='snapshot' AND ts BETWEEN '1970-01-01' + INTERVAL $__unixEpochFrom() SECOND AND '1970-01-01' + INTERVAL $__unixEpochTo() SECOND AND wifi_rssi IS NOT NULL ORDER BY time"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dBm",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": 3600000,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisBorderShow": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "noValue": "—"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

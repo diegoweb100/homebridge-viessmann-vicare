@@ -22,7 +22,7 @@ import { ViessmannHeatingCircuitAccessory } from './accessories/heating-circuit-
 import { ViessmannEnergyAccessory } from './accessories/energy-accessory';
 import { ViessmannRoomSensorAccessory, discoverRoomSensorData } from './accessories/room-sensor-accessory';
 import * as fs from 'fs';
-import { PLUGIN_NAME, BURNER_UPDATE_CONFIG } from './settings';
+import { PLUGIN_NAME, PLUGIN_VERSION, BURNER_UPDATE_CONFIG } from './settings';
 
 export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -106,7 +106,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
             }
           }
 
-          const reportTimeout = (this.config as any).reportServerTimeout ?? 300;
+          const reportTimeout = (this.config as any).reportServerTimeout ?? 600;
           const serverArgs = ['--port', String(reportPort), '--path', reportServerPath, '--timeout', String(reportTimeout)];
           if (this.config.debug) serverArgs.push('--debug');
 
@@ -217,19 +217,23 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
           // Find and update affected accessories
           await this.updateAccessoriesWithBurnerStatus(installationId, gatewaySerial, deviceId, burnerStatus, reason);
           
+          this.burnerUpdateStats.totalUpdates++;
           this.burnerUpdateStats.successfulUpdates++;
           this.burnerUpdateStats.lastUpdateTime = Date.now();
           this.pendingBurnerUpdates.delete(updateKey);
           
         } catch (error) {
           this.log.error(`Failed to process burner update for device ${deviceId}:`, error);
+          this.burnerUpdateStats.totalUpdates++;
           this.burnerUpdateStats.failedUpdates++;
           this.pendingBurnerUpdates.delete(updateKey);
         }
       }, BURNER_UPDATE_CONFIG.debounce.enabled ? BURNER_UPDATE_CONFIG.debounce.windowMs : 0);
 
       this.pendingBurnerUpdates.set(updateKey, timeoutId);
-      this.burnerUpdateStats.totalUpdates++;
+      // NOTE: totalUpdates is incremented only when an update is actually processed
+      // (inside the timeout). Debounced/cancelled updates are counted in debounceSkips,
+      // so the success rate is no longer artificially halved.
       
     } catch (error) {
       this.log.error(`Error handling burner status update for device ${deviceId}:`, error);
@@ -1165,7 +1169,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
         dailyUsagePct:      Math.min(100, parseFloat(
           (metrics.totalRequests / DAILY_LIMIT * 100).toFixed(1)
         )),
-        pluginVersion:      '2.0.71',
+        pluginVersion:      PLUGIN_VERSION,
         refreshInterval:    this.config.refreshInterval || 120000,
       };
 
