@@ -12,6 +12,7 @@ import {
 
 import * as path from 'path';
 import { ViessmannAPI, ViessmannPlatformConfig } from './viessmann-api';
+import { CurveTuner } from './curve-tuner';
 // Export types from viessmann-api-endpoints for accessories
 export { ViessmannInstallation, ViessmannFeature, ViessmannGateway, ViessmannDevice, BurnerStatus } from './viessmann-api-endpoints';
 export { ViessmannPlatformConfig } from './viessmann-api';
@@ -30,6 +31,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
 
   public readonly accessories: PlatformAccessory[] = [];
+  public curveTuner?: CurveTuner;
   public readonly viessmannAPI!: ViessmannAPI;
   private configValid = false;
 
@@ -37,10 +39,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   private refreshTimer?: NodeJS.Timeout;
   private healthMonitoringTimer?: NodeJS.Timeout;
   // Report server child process supervision
-  private reportServerChild?: any;
-  private reportServerRestarts = 0;
-  private reportServerStopping = false;
-  private reportServerRestartTimer?: NodeJS.Timeout;
   private isUpdating = false;
   private consecutiveErrors = 0;
   private maxConsecutiveErrors = 5;
@@ -75,6 +73,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     try {
       (this as any).viessmannAPI = new ViessmannAPI(this.log, this.config, path.join(this.api.user.storagePath(), 'viessmann-tokens.json'));
       this.configValid = true;
+      this.mountDashboard();
     } catch (error) {
       this.log.error('❌ Failed to initialize Viessmann API:', error instanceof Error ? error.message : String(error));
       this.log.error('📖 Please check your configuration and restart Homebridge.');
@@ -94,50 +93,15 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       // Initialize health monitoring
       this.startHealthMonitoring();
 
-      // Start report web server if configured
-      const reportPort = this.config.reportServerPort ?? 0;
-      if (reportPort > 0) {
-        try {
-          const reportServerPath = this.config.reportServerPath
-            ?? this.api.user.storagePath();
-          const reportScript = require('path').join(__dirname, '..', 'viessmann-report-server.js');
-
-          // Detect actual LAN IP so the logged URL is reachable from any device on the network
-          const { networkInterfaces } = require('os');
-          const nets = networkInterfaces();
-          let lanIP = 'localhost';
-          outer: for (const name of Object.keys(nets)) {
-            for (const iface of (nets[name] || [])) {
-              if (iface.family === 'IPv4' && !iface.internal) { lanIP = iface.address; break outer; }
-            }
-          }
-
-          const reportTimeout = (this.config as any).reportServerTimeout ?? 600;
-          const serverArgs = ['--port', String(reportPort), '--path', reportServerPath, '--timeout', String(reportTimeout)];
-          if (this.config.debug) serverArgs.push('--debug');
-
-          // Supervised child process (2.0.76):
-          // - spawn (not execFile): execFile buffers stdout (1 MB max) and ignores
-          //   `stdio`, so with --debug the server was silently killed after a while
-          // - output forwarded to the Homebridge log, exit/errors logged
-          // - automatic restart with back-off (e.g. port still busy after a restart)
-          // - child terminated on Homebridge shutdown (no orphan holding the port)
-          this.startReportServer(reportScript, serverArgs, reportPort);
-
-          this.log.info('═'.repeat(60));
-          this.log.info('📊 Viessmann Report Server');
-          this.log.info(`   Open from any device: http://${lanIP}:${reportPort}`);
-          this.log.info('═'.repeat(60));
-          this.log.debug(`  Data path: ${reportServerPath}`);
-          this.log.debug(`  Script:    ${reportScript}`);
-        } catch (e) {
-          this.log.warn(`Could not start report server: ${(e as Error).message}`);
-        }
+      // Before 2.0.81 reports had their own server (reportServerPort, e.g. 3001): they are now
+      // part of the dashboard on the login port, so only one port is used.
+      if ((this.config.reportServerPort ?? 0) > 0) {
+        this.log.info(`ℹ️ reportServerPort (${this.config.reportServerPort}) is no longer used: reports are in the dashboard ${this.viessmannAPI.getDashboardUrl()}`);
       }
     });
 
     this.api.on(APIEvent.SHUTDOWN, () => {
-      this.stopReportServer();
+      this.curveTuner?.stop();
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
       }
@@ -194,60 +158,6 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     this.viessmannAPI.setBurnerUpdateCallback(this.handleBurnerStatusUpdate.bind(this));
     
     this.log.debug('🔥 Burner update system initialized');
-  }
-
-  // 📊 Start the report web server as a supervised child process
-  private startReportServer(script: string, args: string[], port: number): void {
-    const { spawn } = require('child_process');
-    const child = spawn(process.execPath, [script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    this.reportServerChild = child;
-    const startedAt = Date.now();
-
-    const forward = (level: 'debug' | 'warn') => (buf: Buffer) => {
-      for (const line of buf.toString().split('\n')) {
-        const l = line.trim();
-        if (!l) continue;
-        if (level === 'warn' || /error|EADDRINUSE|failed/i.test(l)) {
-          this.log.warn(`[ReportServer] ${l.replace(/^\[ReportServer\]\s*/, '')}`);
-        } else {
-          this.log.debug(`[ReportServer] ${l.replace(/^\[ReportServer\]\s*/, '')}`);
-        }
-      }
-    };
-    child.stdout?.on('data', forward('debug'));
-    child.stderr?.on('data', forward('warn'));
-
-    child.on('error', (err: Error) => {
-      this.log.warn(`📊 Report server failed to start: ${err.message}`);
-    });
-
-    child.on('exit', (code: number | null, signal: string | null) => {
-      this.reportServerChild = undefined;
-      if (this.reportServerStopping) return;
-      // A run longer than 10 minutes resets the back-off counter
-      if (Date.now() - startedAt > 10 * 60 * 1000) this.reportServerRestarts = 0;
-      this.reportServerRestarts++;
-      if (this.reportServerRestarts > 5) {
-        this.log.error(`📊 Report server on port ${port} keeps stopping (code=${code} signal=${signal}) — giving up. ` +
-          'Check that the port is free and restart Homebridge.');
-        return;
-      }
-      const delay = Math.min(5000 * Math.pow(2, this.reportServerRestarts - 1), 120000);
-      this.log.warn(`📊 Report server stopped (code=${code} signal=${signal}) — restarting in ${delay / 1000}s ` +
-        `(attempt ${this.reportServerRestarts}/5)`);
-      this.reportServerRestartTimer = setTimeout(() => this.startReportServer(script, args, port), delay);
-    });
-  }
-
-  // 📊 Stop the report server (Homebridge shutdown)
-  private stopReportServer(): void {
-    this.reportServerStopping = true;
-    if (this.reportServerRestartTimer) clearTimeout(this.reportServerRestartTimer);
-    try {
-      this.reportServerChild?.kill('SIGTERM');
-    } catch {
-      // already gone
-    }
   }
 
   // 🆕 NEW: Handle burner status updates from API
@@ -603,6 +513,33 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
     };
   }
 
+  /**
+   * Mounts the web dashboard (login, reports, flue gas analyses, status) on the OAuth port.
+   * Data files live in reportServerPath (default: the Homebridge storage path).
+   */
+  private mountDashboard() {
+    try {
+      const dataDir = (this.config as any).reportServerPath ?? this.api.user.storagePath();
+      this.curveTuner = new CurveTuner(this, dataDir, (this.config as any).features?.curveAutoTune === true);
+      const { createDashboard } = require(path.join(__dirname, '..', 'viessmann-dashboard.js'));
+      const dash = createDashboard({
+        curve: { status: () => this.curveTuner!.status(), restore: (inst: string, hc: number) => this.curveTuner!.restore(inst, hc) },
+        hbPath: dataDir,
+        reportScript: path.join(__dirname, '..', 'viessmann-report.js'),
+        timeoutSec: (this.config as any).reportServerTimeout ?? 600,
+        retentionDays: (this.config as any).reportRetentionDays ?? 30,
+        pluginVersion: PLUGIN_VERSION,
+        log: this.log,
+      });
+      // Analyses written in config.json by hand (optional) are added once to the dashboard data
+      const imported = dash.importFromConfig((this.config as any).combustion);
+      if (imported) this.log.info(`🔥 ${imported} flue gas analys${imported === 1 ? 'is' : 'es'} imported from config.json into the dashboard`);
+      this.viessmannAPI.setDashboard(dash);
+    } catch (e: any) {
+      this.log.warn(`Viessmann dashboard not available: ${e?.message || e}`);
+    }
+  }
+
   configureAccessory(accessory: PlatformAccessory) {
     this.log.info('Loading accessory from cache:', accessory.displayName);
     this.accessories.push(accessory);
@@ -915,6 +852,9 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
       if (!match) continue;
       
       const circuitNumber = parseInt(match[1]);
+      if (features.some(f => f.feature === `heating.circuits.${circuitNumber}.heating.curve` && f.commands?.setCurve)) {
+        this.curveTuner?.register({ installationId: installation.id, gatewaySerial: gateway.serial, deviceId: device.id, circuit: circuitNumber });
+      }
       const uuid = this.api.hap.uuid.generate(`${installation.id}-${gateway.serial}-${device.id}-circuit-${circuitNumber}`);
       
       // 🆕 AGGIUNTO: Supporto customNames per Heating Circuit

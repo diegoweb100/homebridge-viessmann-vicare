@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Viessmann History Report Generator — v3 (homebridge-viessmann-vicare 2.0.80+)
+ * Viessmann History Report Generator — v3 (homebridge-viessmann-vicare 2.0.81+)
  *
  * Reads viessmann-history-<ID>.csv (written by the plugin) and produces a single,
  * self-contained HTML report for technicians AND for people who know nothing about boilers:
@@ -27,11 +27,14 @@
  *   --lat / --lon        location for weather data (default: read from ViCare)
  *   --hddBase <n>        degree-day base temperature (°C, default 16)
  *
+ * Flue gas analyses: viessmann-combustion.json in --path (written by the dashboard, see
+ * viessmann-dashboard.js) adds the "Flue gas analysis" section, advice and due dates.
+ *
  * Data rules (see CHANGELOG 2.0.80):
  *   - Only "snapshot" rows describe the system state; burner_on rows are S.6 ignition events.
  *   - Snapshot values can be stale (cloud value repeated). Burner hours/starts come from counters.
  *   - Daily gas is derived from the MONTHLY counters (the daily ones reset hours late).
- *   - The boiler outdoor sensor can be biased; real temperatures come from Open-Meteo.
+ *   - The boiler outdoor sensor measures its own spot (sun, wall); the area weather estimate comes from Open-Meteo.
  *   - Device message timestamps are local time labelled "Z".
  */
 
@@ -166,6 +169,10 @@ const gasDay = {};
   }
 })();
 const periodDays = []; for (let d = localDay(startT); d <= localDay(NOW); d = addDays(d, 1)) periodDays.push(d);
+// Daily charts show at least 14 days, so a short report still has context
+const CHART_DAYS = Math.max(DAYS, 14);
+const chartDays = []; { const first = localDay(firstDataT); for (let d = addDays(localDay(NOW), -(CHART_DAYS - 1)); d <= localDay(NOW); d = addDays(d, 1)) if (d >= first) chartDays.push(d); }
+const chartCtx = DAYS < 14 && chartDays.length > periodDays.length;
 const gasP = periodDays.reduce((a, d) => { const g = gasDay[d]; if (g) { a.h += g.h; a.w += g.w; } return a; }, { h: 0, w: 0 });
 gasP.tot = gasP.h + gasP.w;
 const monthly = {};
@@ -217,7 +224,7 @@ function getLocation() {
   return null;
 }
 const loc = getLocation();
-let temps = {}, forecastDays = 0;
+let temps = {}, forecastDays = 0, zoneMinMax = {};
 if (loc) {
   const cacheFile = path.join(HB_PATH, `viessmann-weather-${loc.lat}_${loc.lon}.json`);
   const cache = readJson(cacheFile) || {};
@@ -235,6 +242,22 @@ if (loc) {
   try { const j = httpJson(`https://api.open-meteo.com/v1/forecast?${q}&past_days=10&forecast_days=16`); (j.daily?.time || []).forEach((t, i) => { const v = j.daily.temperature_2m_mean[i]; if (v !== null && v !== undefined) recent[t] = v; }); }
   catch (e) { process.stderr.write(`[weather] forecast: ${e.message}\n`); }
   temps = { ...cache, ...recent };
+  // Daily min/max of the area weather, to compare the sensor by day (max) and by night (min)
+  try {
+    const mmFile = path.join(HB_PATH, `viessmann-weather-minmax-${loc.lat}_${loc.lon}.json`);
+    const mm = readJson(mmFile) || {};
+    const qm = `latitude=${loc.lat}&longitude=${loc.lon}&daily=temperature_2m_min,temperature_2m_max&timezone=auto`;
+    const mStart = addDays(today, -95), mEnd = addDays(today, -7);
+    let miss = null; for (let d = mStart; d <= mEnd; d = addDays(d, 1)) if (mm[d] === undefined) { miss = d; break; }
+    if (miss) {
+      const j = httpJson(`https://archive-api.open-meteo.com/v1/archive?${qm}&start_date=${miss}&end_date=${mEnd}`);
+      (j.daily?.time || []).forEach((t, i) => { const a = j.daily.temperature_2m_min[i], b = j.daily.temperature_2m_max[i]; if (a !== null && b !== null) mm[t] = [a, b]; });
+      try { fs.writeFileSync(mmFile, JSON.stringify(mm)); } catch (_) {}
+    }
+    const jr = httpJson(`https://api.open-meteo.com/v1/forecast?${qm}&past_days=10&forecast_days=1`);
+    (jr.daily?.time || []).forEach((t, i) => { const a = jr.daily.temperature_2m_min[i], b = jr.daily.temperature_2m_max[i]; if (a !== null && b !== null && t < today) mm[t] = [a, b]; });
+    zoneMinMax = mm;
+  } catch (e) { process.stderr.write(`[weather] min/max: ${e.message}\n`); }
   for (let i = 1; i <= 30; i++) if (recent[addDays(today, i)] !== undefined) forecastDays++;
 }
 const hasWeather = Object.keys(temps).length > 30;
@@ -298,6 +321,21 @@ let sensorBias = null, biasDays = 0;
 if (hasWeather) {
   const diffs = Object.entries(sensorDay).filter(([d, v]) => d >= localDay(NOW - 90 * 86400000) && temps[d] !== undefined && v.length >= 24).map(([d, v]) => mean(v) - temps[d]);
   if (diffs.length >= 5) { sensorBias = mean(diffs); biasDays = diffs.length; }
+}
+// Same comparison split into night (daily minimum) and day (daily maximum), last 90 days
+let biasNight = null, biasDay = null; const biasRows = [];
+{
+  const from = localDay(NOW - 90 * 86400000), today = localDay(NOW);
+  const dn = [], dd = [];
+  for (const [d, v] of Object.entries(sensorDay)) {
+    const z = zoneMinMax[d];
+    if (!z || d < from || d >= today || v.length < 24) continue;
+    const smin = Math.min(...v), smax = Math.max(...v);
+    dn.push(smin - z[0]); dd.push(smax - z[1]);
+    biasRows.push({ d, smin, smax, zmin: z[0], zmax: z[1] });
+  }
+  if (dn.length >= 5) { biasNight = mean(dn); biasDay = mean(dd); }
+  biasRows.sort((a, b) => a.d < b.d ? 1 : -1);
 }
 const realP = periodDays.map(d => temps[d]).filter(v => v !== undefined);
 const sensP = P.boiler.map(r => num(r.outside_temp)).filter(v => v !== null);
@@ -366,8 +404,12 @@ if (cnt.length >= 2) {
   const lastOfDay = {};
   for (const r of snaps.boiler) if (num(r.burner_starts) > 0) lastOfDay[localDay(r.t)] = num(r.burner_starts);
   const dKeys = Object.keys(lastOfDay).sort();
-  const perDay = {};
-  for (let i = 1; i < dKeys.length; i++) if (addDays(dKeys[i - 1], 1) === dKeys[i] && dKeys[i] >= localDay(startT)) perDay[dKeys[i]] = Math.max(0, lastOfDay[dKeys[i]] - lastOfDay[dKeys[i - 1]]);
+  const perDay = {}, chartMap = {};
+  for (let i = 1; i < dKeys.length; i++) if (addDays(dKeys[i - 1], 1) === dKeys[i]) {
+    const v = Math.max(0, lastOfDay[dKeys[i]] - lastOfDay[dKeys[i - 1]]);
+    if (dKeys[i] >= localDay(startT)) perDay[dKeys[i]] = v;
+    if (dKeys[i] >= chartDays[0]) chartMap[dKeys[i]] = v;
+  }
   const heatStarts = Object.entries(perDay).filter(([d]) => heatDaysSet.has(d)).map(([, v]) => v);
   if (seasonHeat) {
     const all = [];
@@ -380,7 +422,7 @@ if (cnt.length >= 2) {
     runtimePct: 100 * hours / (spanDays * 24),
     cycleMin: hours >= 10 && starts > 0 ? hours * 60 / starts : null,
     avgKw: hours >= 10 ? gasP.tot * KWH_PER_M3 / hours : null,
-    dayMap: perDay, heatStartsPerDay: heatStarts.length ? mean(heatStarts) : null, warmStartsPerDay: warmStarts.length ? mean(warmStarts) : null,
+    dayMap: perDay, chartMap, heatStartsPerDay: heatStarts.length ? mean(heatStarts) : null, warmStartsPerDay: warmStarts.length ? mean(warmStarts) : null,
     lifeStarts: num(l.burner_starts), lifeHours: num(l.burner_hours),
   };
 }
@@ -452,17 +494,83 @@ const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return (h |
 const normalHoursWeek = sched?.entries ? WEEK.reduce((s, d) => s + (sched.entries[d] || []).filter(e => e.mode !== 'reduced').reduce((a, e) => a + Math.max(0, (hm(e.end) || 24) - hm(e.start)), 0), 0) : null;
 
 // ─── Energy & rooms ─────────────────────────────────────────────────────────
-const energy = P.energy.length ? {
-  pv: mean(P.energy.map(r => num(r.pv_production_w)).filter(v => v !== null)),
-  pvMax: Math.max(0, ...P.energy.map(r => num(r.pv_production_w)).filter(v => v !== null)),
-  batt: mean(P.energy.map(r => num(r.battery_level)).filter(v => v !== null)),
-  wall: mean(P.energy.map(r => num(r.wallbox_power_w)).filter(v => v !== null)),
-} : null;
+// Energy devices (VitoCharge / PV / battery / wallbox). Each device writes only the columns it
+// really has, so every value is read from the rows that carry it. Power (W) is turned into energy
+// (kWh) by integrating between consecutive samples; gaps over 45 min are skipped.
+const E_GAP = 45 * 60000;
+const eSeries = (key) => P.energy.map(r => ({ t: r.t, v: num(r[key]) })).filter(p => p.v !== null).sort((a, b) => a.t - b.t);
+const eInteg = (key) => {
+  const pts = eSeries(key); if (pts.length < 2) return null;
+  const perDay = {}; let tot = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dt = pts[i].t - pts[i - 1].t; if (dt <= 0 || dt > E_GAP) continue;
+    const kwh = (pts[i].v + pts[i - 1].v) / 2 * dt / 3.6e9;
+    tot += kwh; const d = localDay(pts[i].t); perDay[d] = (perDay[d] || 0) + kwh;
+  }
+  return { tot, perDay, max: Math.max(...pts.map(p => p.v)), mean: mean(pts.map(p => p.v)) };
+};
+const energy = (() => {
+  if (!P.energy.length) return null;
+  const pv = eInteg('pv_production_w');
+  // PV daily counter from the device is more accurate than integrating: use its daily maximum
+  const pvCnt = {}; for (const r of P.energy) { const v = num(r.pv_daily_kwh); if (v !== null && v >= 0) { const d = localDay(r.t); pvCnt[d] = Math.max(pvCnt[d] || 0, v); } }
+  if (pv && Object.keys(pvCnt).length) { for (const [d, v] of Object.entries(pvCnt)) if (v > 0) pv.perDay[d] = v; pv.tot = Object.values(pv.perDay).reduce((a, b) => a + b, 0); }
+  const draw = eInteg('grid_draw_w'), feed = eInteg('grid_feedin_w');
+  const chg = eInteg('battery_charging_w'), dis = eInteg('battery_discharging_w');
+  const wall = eInteg('wallbox_power_w');
+  const battS = eSeries('battery_level');
+  const hasPV = !!pv && pv.max > 0, hasGrid = !!(draw || feed), hasBatt = battS.length > 0, hasWall = !!wall && (wall.max > 0 || P.energy.some(r => r.wallbox_charging === 'true'));
+  if (!hasPV && !hasGrid && !hasBatt && !hasWall) return null;
+  const k = (x) => x ? x.tot : 0;
+  // House consumption = everything the house used, EV charging included
+  const house = hasGrid ? Math.max(0, k(pv) + k(draw) + k(dis) - k(feed) - k(chg)) : null;
+  const houseDay = {};
+  if (hasGrid) for (const d of periodDays) { const g = (x) => x?.perDay[d] || 0; const v = g(pv) + g(draw) + g(dis) - g(feed) - g(chg); if (g(pv) || g(draw) || g(feed)) houseDay[d] = Math.max(0, v); }
+  const selfUse = hasPV && hasGrid && k(pv) > 0.5 ? Math.max(0, Math.min(1, (k(pv) - k(feed)) / k(pv))) : null;
+  const autarky = house !== null && house > 0.5 ? Math.max(0, Math.min(1, (house - k(draw)) / house)) : null;
+  let sessions = 0; { let prev = false; for (const r of P.energy) { if (r.wallbox_charging === '' || r.wallbox_charging === undefined) continue; const on = r.wallbox_charging === 'true'; if (on && !prev) sessions++; prev = on; } }
+  const days = Math.max(1, Object.keys(Object.assign({}, pv?.perDay, draw?.perDay, feed?.perDay, wall?.perDay)).length);
+  return {
+    hasPV, hasGrid, hasBatt, hasWall, days,
+    pvKwh: hasPV ? k(pv) : null, pvMax: hasPV ? pv.max : null, pvDay: pv?.perDay || {},
+    drawKwh: hasGrid ? k(draw) : null, feedKwh: hasGrid ? k(feed) : null, drawDay: draw?.perDay || {}, feedDay: feed?.perDay || {},
+    house, houseDay, selfUse, autarky,
+    battAvg: hasBatt ? mean(battS.map(p => p.v)) : null, battMin: hasBatt ? Math.min(...battS.map(p => p.v)) : null,
+    battFullShare: hasBatt ? battS.filter(p => p.v >= 98).length / battS.length : null,
+    chgKwh: chg ? k(chg) : null, disKwh: dis ? k(dis) : null,
+    wallKwh: hasWall ? k(wall) : null, wallMax: hasWall ? wall.max : null, sessions,
+  };
+})();
 const rooms = Object.entries(roomRows).map(([k, a]) => { const p = a.filter(inP); return { k, avg: mean(p.map(r => num(r.room_temp)).filter(v => v !== null)), n: p.length }; }).filter(r => r.n);
 
 // ─── Assistant: scores, advice, positives ───────────────────────────────────
 const heatYearGas = fc?.yrH ?? (api?.gasH?.year ?? null);
 const advice = [], positives = [];
+
+// Solar / battery / wallbox advice (only for installations that have them)
+if (energy && energy.hasPV && energy.hasGrid && energy.pvKwh > 1) {
+  const feedDay = energy.feedKwh / energy.days, su = energy.selfUse;
+  if (su !== null && su < 0.6 && feedDay > 2) {
+    advice.push({ prio: su < 0.4 ? 'medium' : 'low', season: false, icon: 'bolt', who: tr('Tu', 'You'), diff: tr('Facile', 'Easy'),
+      title: tr(`Mandi in rete ${nf(feedDay)} kWh di sole al giorno`, `You send ${nf(feedDay)} kWh of solar power to the grid every day`),
+      why: tr(`Usi direttamente solo il <b>${Math.round(su * 100)} %</b> di quello che producono i pannelli; il resto va in rete, pagato molto meno di quanto costa riprenderlo la sera.${energy.hasBatt && energy.battFullShare > 0.3 ? ' La batteria è piena per buona parte del tempo, quindi non riesce ad assorbire altro.' : ''}`,
+        `You use only <b>${Math.round(su * 100)} %</b> of what the panels produce; the rest goes to the grid, paid much less than buying it back in the evening.${energy.hasBatt && energy.battFullShare > 0.3 ? ' The battery is full much of the time, so it cannot take more.' : ''}`),
+      steps: [
+        tr('Fai partire lavatrice, lavastoviglie e asciugatrice nelle ore di sole (circa 11–15), anche con il timer.', 'Run the washing machine, dishwasher and dryer in the sunny hours (about 11–15), using their timers.'),
+        energy.hasWall ? tr('Nella wallbox attiva la ricarica con l’eccedenza del fotovoltaico, così l’auto si carica con il sole.', 'In the wallbox, turn on charging from PV surplus, so the car charges from the sun.') : tr('Se hai un’auto elettrica, caricala di giorno.', 'If you have an electric car, charge it during the day.'),
+        tr('In Casa puoi creare un’automazione: “quando Immissione in rete supera 2000 W → accendi …” (sensore <i>Grid Feed-in</i>).', 'In Apple Home you can build an automation: “when Grid Feed-in rises above 2000 W → turn on …”.'),
+      ],
+      save: null });
+  } else if (su !== null && su >= 0.7) positives.push(tr(`Usi direttamente il ${Math.round(su * 100)} % dell’energia dei pannelli.`, `You use ${Math.round(su * 100)} % of the solar energy directly.`));
+  if (energy.autarky !== null && energy.autarky >= 0.6) positives.push(tr(`Il ${Math.round(energy.autarky * 100)} % dell’elettricità di casa arriva dal tuo impianto, non dalla rete.`, `${Math.round(energy.autarky * 100)} % of the home’s electricity comes from your own system, not the grid.`));
+}
+if (energy && energy.hasBatt && energy.battMin !== null && energy.battMin >= 30 && energy.battFullShare !== null && energy.battFullShare < 0.05 && energy.hasPV && energy.pvKwh > 5) {
+  advice.push({ prio: 'low', season: false, icon: 'bolt', who: tr('Tecnico / app ViCare', 'Installer / ViCare app'), diff: tr('Controllo', 'Check'),
+    title: tr(`La batteria non scende mai sotto il ${Math.round(energy.battMin)} %`, `The battery never goes below ${Math.round(energy.battMin)} %`),
+    why: tr('Una parte della batteria resta sempre ferma: di solito è la riserva per il blackout (backup) impostata troppo alta.', 'Part of the battery is never used: usually the blackout (backup) reserve is set too high.'),
+    steps: [tr('Controlla nell’app ViCare o con il tecnico la riserva di backup e abbassala se non ti serve così alta.', 'Check the backup reserve in ViCare or with the installer and lower it if you do not need it that high.')],
+    save: null });
+}
 const saving = (m3) => m3 !== null && isFinite(m3) && m3 > 0 ? { m3, eur: m3 * GAS_PRICE } : null;
 const scores = { comfort: null, efficiency: 100, boiler: 100, dhw: null, reliability: 100 };
 
@@ -501,9 +609,9 @@ if (sensorBias !== null) {
     scores.efficiency -= Math.min(20, Math.round(Math.abs(sensorBias) * 5));
     advice.push({
       prio: Math.abs(sensorBias) > 3 ? 'high' : 'medium', icon: 'sensor', who: tr('Tecnico o fai-da-te', 'Installer or DIY'), diff: tr('Media', 'Medium'),
-      title: sensorBias > 0 ? tr(`La sonda esterna segna ${nf(sensorBias)} °C in più del reale`, `The outdoor sensor reads ${nf(sensorBias)} °C too warm`) : tr(`La sonda esterna segna ${nf(-sensorBias)} °C in meno del reale`, `The outdoor sensor reads ${nf(-sensorBias)} °C too cold`),
-      why: tr(`Ho confrontato per ${biasDays} giorni la sonda della caldaia con la temperatura reale della tua zona (Open-Meteo). ${sensorBias > 0 ? 'La sonda “crede” che fuori faccia più caldo, quindi la caldaia manda acqua meno calda ai termosifoni. Probabilmente per compensare è stato alzato lo spostamento della curva: il risultato è che nelle giornate di sole o vicino a fonti di calore la regolazione sbaglia.' : 'La sonda “crede” che fuori faccia più freddo, quindi la caldaia scalda più del necessario.'} Tipiche cause: sonda al sole, sopra una finestra, vicino allo scarico fumi o su un muro caldo.`,
-        `For ${biasDays} days I compared the boiler sensor with the real local temperature (Open-Meteo). ${sensorBias > 0 ? 'The sensor “thinks” it is warmer outside, so the boiler sends cooler water to the radiators. The curve shift has probably been raised to compensate: on sunny days or near heat sources the control then goes wrong.' : 'The sensor “thinks” it is colder outside, so the boiler heats more than needed.'} Typical causes: sensor in the sun, above a window, near the flue or on a warm wall.`),
+      title: sensorBias > 0 ? tr(`La sonda esterna segna ${nf(sensorBias)} °C in più del meteo di zona`, `The outdoor sensor reads ${nf(sensorBias)} °C above the area weather`) : tr(`La sonda esterna segna ${nf(-sensorBias)} °C in meno del meteo di zona`, `The outdoor sensor reads ${nf(-sensorBias)} °C below the area weather`),
+      why: tr(`Per ${biasDays} giorni ho confrontato la sonda esterna della caldaia con il <b>meteo di zona</b> (stima Open-Meteo per le coordinate dell’impianto). La sonda misura davvero, ma solo il punto in cui è montata; il meteo di zona descrive l’aria in campo aperto intorno a casa. Una differenza costante indica che quel punto è influenzato da sole, muro o riparo.${biasNight !== null ? ` Di notte (minime) la sonda segna <b>${sgn(biasNight)} °C</b>, di giorno (massime) <b>${sgn(biasDay)} °C</b>${biasNight > biasDay + 1 ? ': la differenza è maggiore di notte, tipico di un muro che rilascia il calore accumulato di giorno' : biasDay > biasNight + 1 ? ': la differenza è maggiore di giorno, tipico di una sonda al sole' : ''}.` : ''} ${sensorBias > 0 ? 'La caldaia “crede” che fuori faccia più caldo, quindi manda acqua meno calda ai termosifoni; probabilmente per compensare è stato alzato lo spostamento della curva, ma l’errore cambia con sole e ora del giorno.' : 'La caldaia “crede” che fuori faccia più freddo, quindi scalda più del necessario.'}`,
+        `For ${biasDays} days I compared the boiler outdoor sensor with the <b>area weather</b> (Open-Meteo estimate for the installation coordinates). The sensor really measures, but only the spot where it is mounted; the area weather describes the open-air temperature around the house. A steady difference means that spot is affected by sun, wall or shelter.${biasNight !== null ? ` At night (minima) the sensor reads <b>${sgn(biasNight)} °C</b>, by day (maxima) <b>${sgn(biasDay)} °C</b>${biasNight > biasDay + 1 ? ': the difference is larger at night, typical of a wall releasing the heat stored during the day' : biasDay > biasNight + 1 ? ': the difference is larger by day, typical of a sensor in the sun' : ''}.` : ''} ${sensorBias > 0 ? 'The boiler “thinks” it is warmer outside, so it sends cooler water to the radiators; the curve shift has probably been raised to compensate, but the error changes with sun and time of day.' : 'The boiler “thinks” it is colder outside, so it heats more than needed.'}`),
       steps: [
         tr('Controlla dove è montata la sonda: deve stare su un muro a nord o nord-ovest, a 2–2,5 m d’altezza, all’ombra, lontano da finestre, balconi e scarichi.', 'Check where the sensor is mounted: north or north-west wall, 2–2.5 m high, shaded, away from windows, balconies and flues.'),
         tr('Se va spostata, chiedi al tecnico (è un cavo a bassa tensione).', 'If it must be moved, ask your installer (it is a low-voltage cable).'),
@@ -595,6 +703,99 @@ if (!PRICE_SET) advice.push({ prio: 'info', icon: 'euro', who: tr('Tu', 'You'), 
   why: tr(`I costi sono calcolati con un prezzo indicativo di ${nf(GAS_PRICE, 2)} €/m³. Il prezzo giusto è il totale della bolletta (tasse incluse, esclusa la quota fissa) diviso per i m³ o Smc consumati.`, `Costs use an indicative price of €${nf(GAS_PRICE, 2)}/m³. The right price is the bill total (taxes included, fixed charge excluded) divided by the m³ used.`),
   steps: [tr('Inseriscilo nel campo “Prezzo gas” della pagina del report e rigenera.', 'Enter it in the “Gas price” field of the report page and generate again.')], save: null });
 
+// ─── Flue gas analyses (installer checks) ───────────────────────────────────
+// viessmann-combustion.json is written by the dashboard (viessmann-dashboard.js) or by hand.
+// Limits: Italy DPR 74/2013 (minimum combustion efficiency, CO air-free ≤ 1000 ppm per UNI 10389-1);
+// check interval from the settings (default 4 years, gas 10–100 kW).
+const COMB = (() => {
+  for (const f of [path.join(HB_PATH, `viessmann-combustion${sfx}.json`), path.join(HB_PATH, 'viessmann-combustion.json')]) {
+    try {
+      if (!fs.existsSync(f)) continue;
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      const tests = (Array.isArray(j.tests) ? j.tests : []).filter(t => /^\d{4}-\d{2}-\d{2}/.test(String(t.date || '')))
+        .map(t => ({ ...t, date: String(t.date).slice(0, 10) })).sort((a, b) => a.date.localeCompare(b.date));
+      if (tests.length) return { ...j, tests };
+    } catch { /* unreadable file: section skipped */ }
+  }
+  return null;
+})();
+const combEval = (() => {
+  if (!COMB) return null;
+  const kw = num0(COMB.nominalPowerKW) ?? (BOILER_KW || null);
+  const effMin = kw === null ? 92 : kw <= 18 ? 91 : kw <= 59.5 ? 92 : kw <= 188 ? 93 : 94;   // condensing, installed after 8/10/2005
+  const evalOne = (t) => {
+    const v = (k) => num0(t[k]);
+    const o2 = v('o2'), co = v('co');
+    const uco = v('coUndiluted') ?? (co !== null && o2 !== null && o2 < 20 ? co * 20.9 / (20.9 - o2) : null);
+    const c = [];
+    const add = (k, label, val, unit, lvl, ref, expl) => { if (val !== null) c.push({ k, label, val, unit, lvl, ref, expl }); };
+    add('co2', 'CO₂', v('co2'), '%', v('co2') === null ? 'info' : v('co2') >= 7.5 && v('co2') <= 10 ? 'good' : 'warn', tr('tipico 7,5–10 % (metano)', 'typical 7.5–10 % (natural gas)'),
+      tr('Quanto “pieno” brucia il gas. Troppo bassa = troppa aria; troppo alta = poca aria e rischio di CO. Il valore giusto è sul manuale della caldaia.', 'How “fully” the gas burns. Too low = too much air; too high = too little air and risk of CO. The right value is in the boiler manual.'));
+    add('o2', 'O₂', o2, '%', 'info', tr('ossigeno residuo', 'residual oxygen'),
+      tr('Ossigeno rimasto nei fumi: indica quanta aria in più entra nella fiamma. Va letto insieme alla CO₂.', 'Oxygen left in the flue gas: shows how much extra air goes into the flame. Read it together with CO₂.'));
+    add('lambda', 'λ', v('lambda'), '', v('lambda') === null ? 'info' : v('lambda') >= 1.1 && v('lambda') <= 1.6 ? 'good' : 'warn', tr('tipico 1,1–1,6', 'typical 1.1–1.6'),
+      tr('Eccesso d’aria: 1 = aria giusta al millimetro, 1,3 = 30 % di aria in più. Le caldaie a condensazione lavorano tra 1,1 e 1,6.', 'Excess air: 1 = exactly enough air, 1.3 = 30 % extra air. Condensing boilers run between 1.1 and 1.6.'));
+    add('uco', tr('CO non diluito', 'CO air-free'), uco, ' ppm', uco === null ? 'info' : uco < 200 ? 'good' : uco < 1000 ? 'warn' : 'bad', tr('limite di legge 1000 ppm', 'legal limit 1000 ppm'),
+      tr('Monossido di carbonio riportato a fumi senza aria: è il valore con il limite di legge. Basso = combustione pulita; se sale negli anni lo scambiatore o il bruciatore si stanno sporcando.', 'Carbon monoxide referred to air-free flue gas: this is the value with the legal limit. Low = clean combustion; if it rises over the years the heat exchanger or burner is getting dirty.'));
+    add('eff', tr('Rendimento', 'Efficiency'), v('efficiency'), ' %', v('efficiency') === null ? 'info' : v('efficiency') >= effMin ? 'good' : 'bad', tr(`minimo di legge ${effMin} %`, `legal minimum ${effMin} %`),
+      tr('Quanta energia del gas finisce nell’acqua. Oltre 100 % è normale per le caldaie a condensazione: si calcola sul potere calorifico inferiore e il vapore dei fumi restituisce calore in più.', 'How much of the gas energy ends up in the water. Above 100 % is normal for condensing boilers: it is based on the net calorific value and the flue steam gives back extra heat.'));
+    const tf = v('flueTemp'), dp = v('dewPoint');
+    add('tf', tr('Temperatura fumi', 'Flue gas temperature'), tf, ' °C', tf === null ? 'info' : (dp !== null ? tf <= dp + 3 : tf <= 55) ? 'good' : tf <= 65 ? 'warn' : 'bad',
+      dp !== null ? tr(`punto di rugiada ${nf(dp)} °C`, `dew point ${nf(dp)} °C`) : tr('condensa sotto circa 55 °C', 'condenses below about 55 °C'),
+      tr('Più i fumi escono freddi, più calore resta in casa. Sotto il punto di rugiada il vapore condensa e la caldaia recupera calore extra.', 'The colder the flue gas, the more heat stays in the house. Below the dew point the steam condenses and the boiler recovers extra heat.'));
+    add('qs', tr('Perdite al camino', 'Flue losses'), v('losses'), ' %', v('losses') === null ? 'info' : v('losses') <= 3 ? 'good' : v('losses') <= 6 ? 'warn' : 'bad', tr('ottimo sotto 3 %', 'excellent below 3 %'),
+      tr('Parte del calore che se ne va dal camino con i fumi.', 'Share of the heat that leaves through the flue.'));
+    add('nox', 'NOx', v('nox'), ' mg/kWh', v('nox') === null ? 'info' : v('nox') <= 56 ? 'good' : 'warn', tr('classe 6: ≤ 56 mg/kWh', 'class 6: ≤ 56 mg/kWh'),
+      tr('Ossidi di azoto: inquinano l’aria. Le caldaie a condensazione moderne sono in classe 6.', 'Nitrogen oxides: they pollute the air. Modern condensing boilers are class 6.'));
+    const worst = c.some(x => x.lvl === 'bad') ? 'bad' : c.some(x => x.lvl === 'warn') ? 'warn' : 'good';
+    return { t, uco, checks: c, worst };
+  };
+  const all = COMB.tests.map(evalOne);
+  const last = all[all.length - 1], prev = all.length > 1 ? all[all.length - 2] : null;
+  const addM = (ds, months) => { const d = new Date(ds + 'T12:00:00'); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
+  const daysTo = (ds) => Math.round((new Date(ds + 'T12:00:00') - new Date(todayIso + 'T12:00:00')) / 86400000);
+  const years = Math.max(1, num0(COMB.efficiencyCheckYears) ?? 4), months = Math.max(1, num0(COMB.maintenanceMonths) ?? 12);
+  const nextCheck = addM(last.t.date, 12 * years);
+  const maintBase = [last.t.date, String(COMB.lastMaintenance || '').slice(0, 10)].filter(x => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort().pop();
+  const nextMaint = addM(maintBase, months);
+  // Trend between the last two analyses
+  const trend = [];
+  if (prev) {
+    const d = (k) => { const a = num0(prev.t[k]), b = num0(last.t[k]); return a !== null && b !== null ? b - a : null; };
+    if (prev.uco !== null && last.uco !== null && last.uco - prev.uco > 30 && last.uco > prev.uco * 1.5) trend.push(tr(`il CO è salito da ${ni(prev.uco)} a ${ni(last.uco)} ppm`, `CO rose from ${ni(prev.uco)} to ${ni(last.uco)} ppm`));
+    if ((d('flueTemp') ?? 0) >= 8) trend.push(tr(`i fumi escono ${nf(d('flueTemp'))} °C più caldi`, `the flue gas is ${nf(d('flueTemp'))} °C hotter`));
+    if ((d('efficiency') ?? 0) <= -2) trend.push(tr(`il rendimento è sceso di ${nf(-d('efficiency'))} punti`, `efficiency dropped by ${nf(-d('efficiency'))} points`));
+  }
+  const gasSince = Object.keys(gasDay).filter(dd => dd >= last.t.date).reduce((a, dd) => a + gasDay[dd].h + gasDay[dd].w, 0);
+  return { all, last, prev, effMin, kw, years, months, nextCheck, nextMaint, dCheck: daysTo(nextCheck), dMaint: daysTo(nextMaint), trend, gasSince };
+})();
+if (combEval) {
+  const L = combEval.last, when = fmtDate(L.t.date);
+  const bad = L.checks.filter(x => x.lvl === 'bad'), warn = L.checks.filter(x => x.lvl === 'warn');
+  if (bad.length) {
+    scores.reliability -= 30;
+    advice.push({ prio: 'high', icon: 'flame', who: tr('Tecnico / manutentore', 'Installer / service company'), diff: tr('Intervento tecnico', 'Service visit'),
+      title: tr(`Analisi fumi del ${when}: ${bad.map(x => x.label).join(', ')} fuori limite`, `Flue gas analysis of ${when}: ${bad.map(x => x.label).join(', ')} out of limits`),
+      why: bad.map(x => `<b>${x.label}</b> ${nf(x.val, x.unit === ' ppm' ? 0 : 1)}${x.unit} — ${x.ref}`).join(' · '),
+      steps: [tr('Chiedi al tecnico di pulire e regolare il bruciatore e di ripetere la prova.', 'Ask the installer to clean and adjust the burner and repeat the test.'), tr('Con valori fuori legge l’impianto non supera il controllo di efficienza.', 'With values outside the law the system fails the efficiency check.')], save: null });
+  } else if (warn.length) {
+    scores.reliability -= 10;
+    advice.push({ prio: 'low', icon: 'flame', who: tr('Tecnico / manutentore', 'Installer / service company'), diff: tr('Alla prossima visita', 'At the next visit'),
+      title: tr(`Analisi fumi del ${when}: da tenere d’occhio ${warn.map(x => x.label).join(', ')}`, `Flue gas analysis of ${when}: keep an eye on ${warn.map(x => x.label).join(', ')}`),
+      why: warn.map(x => `<b>${x.label}</b> ${nf(x.val, x.unit === ' ppm' ? 0 : 1)}${x.unit} (${x.ref})`).join(' · ') + '. ' + tr('Nei limiti di legge, ma fuori dai valori tipici.', 'Within the legal limits, but outside typical values.'),
+      steps: [tr('Alla prossima manutenzione chiedi di verificare la regolazione della combustione.', 'At the next service ask to check the combustion setting.')], save: null });
+  } else positives.push(tr(`Analisi fumi del ${when}: tutti i valori nei limiti e nella norma.`, `Flue gas analysis of ${when}: all values within limits and typical.`));
+  if (combEval.trend.length) advice.push({ prio: 'medium', icon: 'chart', who: tr('Tecnico / manutentore', 'Installer / service company'), diff: tr('Alla prossima visita', 'At the next visit'),
+    title: tr('La combustione peggiora rispetto all’analisi precedente', 'Combustion is worse than in the previous analysis'),
+    why: combEval.trend.join(' · ') + '. ' + tr('È il segnale tipico di scambiatore o bruciatore che si sporcano.', 'It is the typical sign of a heat exchanger or burner getting dirty.'),
+    steps: [tr('Chiedi la pulizia dello scambiatore lato fumi e del sifone condensa.', 'Ask for the flue-side heat exchanger and the condensate trap to be cleaned.')], save: null });
+  const due = (d, what, whenD) => d < 0
+    ? advice.push({ prio: 'medium', icon: 'calendar', who: tr('Tu → tecnico', 'You → installer'), diff: tr('Prenota', 'Book it'), title: tr(`${what}: scadenza superata (${fmtDate(whenD)})`, `${what}: overdue since ${fmtDate(whenD)}`), why: tr('Il controllo è obbligatorio e serve a mantenere sicurezza e rendimento.', 'The check is mandatory and keeps the boiler safe and efficient.'), steps: [tr('Prenota il tecnico e poi aggiungi i nuovi valori nella dashboard del plugin.', 'Book the installer, then add the new values in the plugin dashboard.')], save: null })
+    : d <= 60 ? advice.push({ prio: 'info', icon: 'calendar', who: tr('Tu → tecnico', 'You → installer'), diff: tr('Prenota', 'Book it'), title: tr(`${what}: scadenza il ${fmtDate(whenD)} (tra ${d} giorni)`, `${what} due by ${fmtDate(whenD)} (${d} days)`), why: tr('Si avvicina la scadenza.', 'The due date is getting close.'), steps: [tr('Prenota il tecnico.', 'Book the installer.')], save: null }) : null;
+  due(combEval.dCheck, tr('Controllo di efficienza (analisi fumi)', 'Efficiency check (flue gas analysis)'), combEval.nextCheck);
+  due(combEval.dMaint, tr('Manutenzione caldaia', 'Boiler maintenance'), combEval.nextMaint);
+}
+
 scores.efficiency = clamp(scores.efficiency, 0, 100); scores.boiler = clamp(scores.boiler, 0, 100); scores.reliability = clamp(scores.reliability, 0, 100);
 const scoreList = Object.values(scores).filter(v => v !== null);
 const PRIO = { high: 0, medium: 1, low: 2, info: 3 };
@@ -618,14 +819,24 @@ const chart = {
     real: periodDays.filter(d => temps[d] !== undefined).map(d => ({ x: new Date(d + 'T12:00:00').getTime(), y: temps[d] })),
     ign: ignHourly,
   },
-  gas: { labels: periodDays, h: periodDays.map(d => +(gasDay[d]?.h ?? 0).toFixed(2)), w: periodDays.map(d => +(gasDay[d]?.w ?? 0).toFixed(2)), t: periodDays.map(d => temps[d] ?? null) },
+  gas: { labels: chartDays, h: chartDays.map(d => +(gasDay[d]?.h ?? 0).toFixed(2)), w: chartDays.map(d => +(gasDay[d]?.w ?? 0).toFixed(2)), t: chartDays.map(d => temps[d] ?? null) },
+  temp: { labels: chartDays, zone: chartDays.map(d => temps[d] !== undefined ? +temps[d].toFixed(1) : null), sensor: chartDays.map(d => sensorDay[d]?.length ? +mean(sensorDay[d]).toFixed(1) : null) },
   dd: { pts: ddPts, line: ddLine },
   dhw: { t: thin(hourly(P.dhw.filter(r => r.mode !== 'off'), 'dhw_temp')), s: thin(hourly(P.dhw, 'dhw_target')) },
-  starts: burner ? { labels: Object.keys(burner.dayMap), v: Object.values(burner.dayMap), t: Object.keys(burner.dayMap).map(d => temps[d] ?? null) } : null,
+  starts: burner ? { labels: Object.keys(burner.chartMap), v: Object.values(burner.chartMap), t: Object.keys(burner.chartMap).map(d => temps[d] ?? null) } : null,
   startsOut,
   mod: modVals.length >= 20 ? modSeries : null,
   curve: curveLine ? { line: curveLine, pts: heat?.curvePts || [] } : null,
-  energy: P.energy.length >= 2 ? { pv: thin(hourly(P.energy, 'pv_production_w')), batt: thin(hourly(P.energy, 'battery_level')) } : null,
+  energy: energy && (energy.hasPV || energy.hasGrid || energy.hasWall) ? (() => {
+    const ser = (key) => { const h = hourly(P.energy, key); return h.some(p => p.y) ? thin(h) : null; };
+    const houseRows = P.energy.filter(r => num(r.grid_draw_w) !== null).map(r => ({ t: r.t, h: Math.max(0, (num(r.pv_production_w) || 0) + (num(r.grid_draw_w) || 0) + (num(r.battery_discharging_w) || 0) - (num(r.grid_feedin_w) || 0) - (num(r.battery_charging_w) || 0)) }));
+    return { pv: ser('pv_production_w'), house: houseRows.length ? thin(hourly(houseRows, 'h')) : null, draw: ser('grid_draw_w'), feed: ser('grid_feedin_w'), wall: ser('wallbox_power_w') };
+  })() : null,
+  batt: energy && energy.hasBatt ? thin(hourly(P.energy, 'battery_level')) : null,
+  eDay: energy && (energy.hasPV || energy.hasGrid) ? (() => {
+    const r2 = (o) => chartDays.map(d => o[d] !== undefined ? +o[d].toFixed(2) : null);
+    return { labels: chartDays, pv: energy.hasPV ? r2(energy.pvDay) : null, draw: energy.hasGrid ? r2(energy.drawDay) : null, feed: energy.hasGrid ? r2(energy.feedDay) : null, house: energy.hasGrid ? r2(energy.houseDay) : null };
+  })() : null,
 };
 
 // ─── HTML building blocks ───────────────────────────────────────────────────
@@ -678,7 +889,7 @@ const schem = (() => {
   <linearGradient id="gFlame" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#ff6a00"/><stop offset="1" stop-color="#ffd000"/></linearGradient></defs>
   <g><circle cx="90" cy="70" r="30" fill="#ffc83d" opacity=".9"/><g stroke="#ffc83d" stroke-width="4" stroke-linecap="round" opacity=".7"><path d="M90 26v-12M90 126v-12M46 70h-12M146 70h-12M59 39l-8-8M121 101l8 8M59 101l-8 8M121 39l8-8"/></g>
   <rect x="60" y="150" width="14" height="90" rx="7" class="s-tube"/><circle cx="67" cy="248" r="16" fill="#3b82f6"/><rect x="63" y="${(240 - th).toFixed(0)}" width="8" height="${th.toFixed(0)}" rx="4" fill="#3b82f6"/>
-  ${avgReal !== null ? t(95, 175, `${nf(avgReal)} °C`, tr('fuori (reale)', 'outside (real)')) : ''}
+  ${avgReal !== null ? t(95, 175, `${nf(avgReal)} °C`, tr('fuori (meteo di zona)', 'outside (area weather)')) : ''}
   ${avgSens !== null ? t(95, avgReal !== null ? 225 : 175, `${nf(avgSens)} °C`, tr('sonda caldaia', 'boiler sensor'), sensorBias !== null && Math.abs(sensorBias) > 1.5 ? 's-warn' : '') : ''}</g>
   <path d="M250 150 L470 40 L690 150 V310 H250 Z" fill="url(#gHouse)" class="s-line"/>
   <path d="M235 158 L470 30 L705 158" fill="none" class="s-roof"/>
@@ -728,7 +939,8 @@ const summaryCards = [
        : { lvl: 'info', ic: 'house', t: tr('Riscaldamento', 'Heating'), v: tr('spento', 'off'), s: tr('nessun gas per riscaldare nel periodo', 'no heating gas in the period') },
   burner ? { lvl: lvlOf(scores.boiler), ic: 'flame', t: tr('Caldaia', 'Boiler'), v: `${ni(burner.perDay)} ${tr('acc./g', 'starts/d')}`, s: `${ni(burner.hours)} ${tr('ore di fiamma', 'burner hours')}` } : null,
   dhw ? { lvl: lvlOf(scores.dhw), ic: 'tap', t: tr('Acqua calda', 'Hot water'), v: `${nf(dhw.instant || dhw.neverReached ? dhw.peak : dhw.avg)} °C`, s: tr(`obiettivo ${nf(dhw.target, 0)} °C`, `target ${nf(dhw.target, 0)} °C`) } : null,
-  sensorBias !== null ? { lvl: Math.abs(sensorBias) > 3 ? 'bad' : Math.abs(sensorBias) > 1.5 ? 'warn' : 'good', ic: 'sensor', t: tr('Sonda esterna', 'Outdoor sensor'), v: `${sgn(sensorBias)} °C`, s: tr('rispetto al meteo reale', 'vs real weather') } : null,
+  sensorBias !== null ? { lvl: Math.abs(sensorBias) > 3 ? 'bad' : Math.abs(sensorBias) > 1.5 ? 'warn' : 'good', ic: 'sensor', t: tr('Sonda esterna', 'Outdoor sensor'), v: `${sgn(sensorBias)} °C`, s: tr('rispetto al meteo di zona', 'vs area weather') } : null,
+  combEval ? { lvl: combEval.last.worst, ic: 'flame', t: tr('Analisi fumi', 'Flue gas analysis'), v: fmtDate(combEval.last.t.date), s: combEval.last.worst === 'good' ? tr('tutto nella norma', 'all normal') : combEval.last.worst === 'warn' ? tr('da tenere d’occhio', 'keep an eye on it') : tr('fuori limite', 'out of limits') } : null,
   { lvl: faultsP.length ? 'bad' : 'good', ic: 'warn', t: tr('Guasti', 'Faults'), v: String(faultsP.length), s: faultsP.length ? [...new Set(faultsP.map(m => m.code))].join(', ') : tr('nessuno', 'none') },
   fc ? { lvl: 'info', ic: 'chart', t: tr('Prossimi 30 giorni', 'Next 30 days'), v: `${ni(fc.m30)} m³`, s: `≈ ${eur(fc.m30 * GAS_PRICE)}` } : null,
 ].filter(Boolean);
@@ -746,7 +958,7 @@ const houseClass = (() => {
 })();
 
 const S_OVERVIEW = section('overview', 'chart', tr('Andamento del periodo', 'Period overview'),
-  tr('Tutto in un grafico: temperatura della casa, dell’acqua ai termosifoni, esterna (reale e sonda) e accensioni della caldaia. Clicca sulla legenda per mostrare o nascondere una linea; trascina per ingrandire, doppio clic per tornare indietro.', 'Everything in one chart: house, radiator water and outdoor temperature (real and sensor), plus boiler starts. Click the legend to show or hide a line; drag to zoom, double-click to reset.'),
+  tr('Tutto in un grafico: temperatura della casa, dell’acqua ai termosifoni, esterna (meteo di zona e sonda) e accensioni della caldaia. Clicca sulla legenda per mostrare o nascondere una linea; trascina per ingrandire, doppio clic per tornare indietro.', 'Everything in one chart: house, radiator water and outdoor temperature (area weather and sensor), plus boiler starts. Click the legend to show or hide a line; drag to zoom, double-click to reset.'),
   `${chartBox('cOverview', tr('Temperature (media oraria) e accensioni', 'Temperatures (hourly average) and starts'), IGN_DAILY ? tr('Le barre arancioni sono le accensioni registrate per giorno (scala a destra).', 'Orange bars are recorded starts per day (right scale).') : tr('Le barre arancioni sono le accensioni per ora (scala a destra).', 'Orange bars are starts per hour (right scale).'), 'tall')}
    ${schedSvg ? `${sub(tr('Programma settimanale del riscaldamento', 'Weekly heating schedule'))}<p class="note">${tr('Arancione = temperatura Normale, grigio = Ridotta', 'Orange = Normal temperature, grey = Reduced')}${normalSet !== null ? ` (${nf(normalSet, 0)} / ${nf(reducedSet, 0)} °C)` : ''}.</p>${schedSvg}` : ''}`);
 
@@ -759,10 +971,11 @@ const S_GAS = section('gas', 'gas', tr('Gas e costi', 'Gas and costs'),
   ${kpi(tr('Costo stimato', 'Estimated cost'), ni(gasP.tot * GAS_PRICE), ' €', tr(`Gas × ${nf(GAS_PRICE, 2)} €/m³ (tasse incluse). La quota fissa della bolletta non è compresa.`, `Gas × €${nf(GAS_PRICE, 2)}/m³ (taxes included). Fixed bill charges are not included.`))}
   ${kpi(tr('Media al giorno', 'Average per day'), nf(gasP.tot / coveredDays, 2), ' m³', tr('Gas totale diviso per i giorni del periodo.', 'Total gas divided by the days in the period.'))}
   </div>
-  ${chartBox('cGas', tr('Gas al giorno e temperatura esterna reale', 'Gas per day and real outdoor temperature'), tr('Barre rosse = riscaldamento, blu = acqua calda; la linea è la temperatura media esterna: più fa freddo, più salgono le barre rosse.', 'Red bars = heating, blue = hot water; the line is the mean outdoor temperature: the colder it is, the higher the red bars.'))}
+  ${chartBox('cGas', tr('Gas al giorno', 'Gas per day'), tr(`Barre arancioni = riscaldamento, blu = acqua calda.${chartCtx ? ' Sono mostrati gli ultimi 14 giorni per dare contesto.' : ''} Passa sopra una barra per vedere anche la temperatura esterna del giorno.`, `Orange bars = heating, blue = hot water.${chartCtx ? ' The last 14 days are shown for context.' : ''} Hover a bar to also see that day’s outdoor temperature.`))}
+  ${chartBox('cTemp', tr('Temperatura esterna media al giorno', 'Average outdoor temperature per day'), tr('Blu = meteo di zona (stima), arancione = sonda della caldaia. Più fa freddo, più gas serve per scaldare.', 'Blue = area weather (estimate), orange = boiler sensor. The colder it gets, the more gas heating needs.'), 'small')}
   ${Object.keys(monthly).length ? `${sub(tr('Riepilogo mensile', 'Monthly summary'))}<div class="tw"><table><tr><th>${tr('Mese', 'Month')}</th><th>${tr('Riscald. m³', 'Heating m³')}</th><th>${tr('Acqua calda m³', 'Hot water m³')}</th><th>${tr('Totale m³', 'Total m³')}</th><th>${tr('Costo', 'Cost')}</th><th></th></tr>${monthRows}</table></div>` : ''}
   ${fc ? `${sub(tr('Previsione dei consumi', 'Consumption forecast'))}
-  <p class="note">${tr('Stima basata sul meteo reale della tua zona (Open-Meteo) e su quanto gas usa la tua casa per ogni grado di freddo', 'Estimate based on the real weather in your area (Open-Meteo) and on how much gas your home uses for each degree of cold')}${fc.calibrated ? tr(', calibrata sui contatori annui della caldaia', ', calibrated on the boiler yearly counters') : ''}.</p>
+  <p class="note">${tr('Stima basata sul meteo della tua zona (Open-Meteo) e su quanto gas usa la tua casa per ogni grado di freddo', 'Estimate based on the weather in your area (Open-Meteo) and on how much gas your home uses for each degree of cold')}${fc.calibrated ? tr(', calibrata sui contatori annui della caldaia', ', calibrated on the boiler yearly counters') : ''}.</p>
   <div class="kpis">
   ${kpi(tr('Prossimi 30 giorni', 'Next 30 days'), ni(fc.m30), ' m³', forecastDays ? tr(`Usa le previsioni meteo dei prossimi ${forecastDays} giorni, poi le temperature dello stesso periodo dell’anno scorso.`, `Uses the forecast for the next ${forecastDays} days, then last year’s temperatures for the same period.`) : tr('Usa le temperature dello stesso periodo dell’anno scorso (previsioni non raggiungibili).', 'Uses last year’s temperatures for the same period (forecast not reachable).'), null, `≈ ${eur(fc.m30 * GAS_PRICE)}`)}
   ${kpi(tr('Stima annua', 'Yearly estimate'), fc.yr !== null ? ni(fc.yr) : naVal(tr('servono dati meteo', 'needs weather data')), fc.yr !== null ? ' m³' : '', tr('Consumo in un anno con il meteo degli ultimi 12 mesi.', 'Consumption over a year with the weather of the last 12 months.'), null, fc.yr !== null ? `≈ ${eur(fc.yr * GAS_PRICE)}` : '')}
@@ -771,6 +984,17 @@ const S_GAS = section('gas', 'gas', tr('Gas e costi', 'Gas and costs'),
   </div>
   ${ddPts.length >= 5 ? chartBox('cDD', tr('Gas al giorno in funzione della temperatura esterna', 'Daily gas versus outdoor temperature'), tr('Ogni punto è un giorno. La linea è il modello usato per la previsione: sopra i 16 °C resta solo l’acqua calda.', 'Each dot is a day. The line is the model used for the forecast: above 16 °C only hot water remains.')) : ''}
   ${!hasWeather ? `<p class="note warnline">${loc ? tr('Dati meteo non raggiungibili: la previsione non tiene conto del freddo in arrivo.', 'Weather data not reachable: the forecast ignores the coming cold.') : tr('Posizione dell’impianto sconosciuta: aggiungi --lat e --lon per usare il meteo.', 'Installation location unknown: add --lat and --lon to use the weather.')}</p>` : ''}` : ''}`);
+
+const S_SENSOR = (sensorBias === null && !biasRows.length) ? '' : section('sensor', 'sensor', tr('Sonda esterna e meteo di zona', 'Outdoor sensor and area weather'),
+  tr('La caldaia regola il riscaldamento con la sua sonda esterna. Qui la confronto con il <b>meteo di zona</b>: una stima Open-Meteo della temperatura dell’aria in campo aperto alle coordinate dell’impianto (prese da ViCare). La sonda misura davvero ma solo il punto in cui è montata: sole, muro caldo o riparo la influenzano. Se la differenza è grande e costante, conviene controllare dove è montata.', 'The boiler controls the heating with its outdoor sensor. Here it is compared with the <b>area weather</b>: an Open-Meteo estimate of the open-air temperature at the installation coordinates (taken from ViCare). The sensor really measures, but only the spot where it is mounted: sun, a warm wall or shelter affect it. If the difference is large and steady, check where it is mounted.'),
+  `<div class="kpis">
+  ${sensorBias !== null ? kpi(tr('Differenza media', 'Average difference'), sgn(sensorBias), ' °C', tr(`Media giornaliera della sonda meno il meteo di zona, ultimi ${biasDays} giorni.`, `Daily sensor mean minus area weather, last ${biasDays} days.`), Math.abs(sensorBias) > 3 ? 'bad' : Math.abs(sensorBias) > 1.5 ? 'warn' : 'good') : ''}
+  ${biasNight !== null ? kpi(tr('Di notte (minime)', 'At night (minima)'), sgn(biasNight), ' °C', tr('Minima della sonda meno minima di zona. Se è molto più alta di giorno, il muro rilascia di notte il calore accumulato.', 'Sensor minimum minus area minimum. If much higher than by day, the wall releases stored heat at night.'), Math.abs(biasNight) > 3 ? 'bad' : Math.abs(biasNight) > 1.5 ? 'warn' : 'good') : ''}
+  ${biasDay !== null ? kpi(tr('Di giorno (massime)', 'By day (maxima)'), sgn(biasDay), ' °C', tr('Massima della sonda meno massima di zona. Se è alta, la sonda prende il sole.', 'Sensor maximum minus area maximum. If high, the sensor gets direct sun.'), Math.abs(biasDay) > 3 ? 'bad' : Math.abs(biasDay) > 1.5 ? 'warn' : 'good') : ''}
+  </div>
+  ${biasRows.length ? `${sub(tr('Ultimi giorni', 'Last days'))}<div class="tw"><table><tr><th>${tr('Giorno', 'Day')}</th><th>${tr('Minima sonda', 'Sensor min')}</th><th>${tr('Minima zona', 'Area min')}</th><th>Δ</th><th>${tr('Massima sonda', 'Sensor max')}</th><th>${tr('Massima zona', 'Area max')}</th><th>Δ</th></tr>
+  ${biasRows.slice(0, 14).map(r => `<tr><td>${fmtDate(r.d)}</td><td>${nf(r.smin)}</td><td>${nf(r.zmin)}</td><td><b>${sgn(r.smin - r.zmin)}</b></td><td>${nf(r.smax)}</td><td>${nf(r.zmax)}</td><td><b>${sgn(r.smax - r.zmax)}</b></td></tr>`).join('')}</table></div>` : ''}
+  <p class="note">${tr('Montaggio consigliato da Viessmann: parete nord o nord-ovest, a 2–2,5 m d’altezza, all’ombra, lontano da finestre, porte, balconi, bocchette e scarico fumi.', 'Viessmann recommends: north or north-west wall, 2–2.5 m high, in the shade, away from windows, doors, balconies, vents and the flue.')}</p>`);
 
 const S_HEAT = section('heating', 'radiator', tr('Riscaldamento', 'Heating'),
   tr('Come ha lavorato il riscaldamento. Sono considerati solo i giorni in cui la caldaia ha davvero bruciato gas per scaldare casa.', 'How heating worked. Only days on which the boiler really burned gas to heat the house are considered.'),
@@ -800,7 +1024,7 @@ const S_BURNER = section('boiler', 'flame', tr('Caldaia e bruciatore', 'Boiler a
   ${kpi(tr('Modulazione', 'Modulation'), modVals.length >= 20 ? ni(mean(modVals)) : naVal(tr(`pochi dati (${modVals.length})`, `little data (${modVals.length})`)), modVals.length >= 20 ? '%' : '', tr('Percentuale di potenza usata dal bruciatore. Il cloud Viessmann la aggiorna raramente: valore indicativo.', 'Share of burner power in use. The Viessmann cloud updates it rarely: indicative value.'), null, modVals.length >= 20 ? `min ${ni(Math.min(...modVals))}% · max ${ni(Math.max(...modVals))}%` : '')}
   ${kpi(tr('Dall’installazione', 'Since installation'), ni(burner.lifeStarts), tr(' accensioni', ' starts'), tr(`${ni(burner.lifeHours)} ore di fiamma in totale (${nf(burner.lifeHours ? burner.lifeStarts / burner.lifeHours : null, 1)} accensioni per ora di fiamma).`, `${ni(burner.lifeHours)} burner hours in total (${nf(burner.lifeHours ? burner.lifeStarts / burner.lifeHours : null, 1)} starts per burner hour).`))}
   </div>
-  ${chartBox('cStarts', tr('Accensioni al giorno', 'Starts per day'), tr('La linea blu è la temperatura esterna reale: con il freddo le accensioni aumentano.', 'The blue line is the real outdoor temperature: starts rise with the cold.'))}
+  ${chartBox('cStarts', tr('Accensioni al giorno', 'Starts per day'), tr(`Accensioni del bruciatore per giorno.${chartCtx ? ' Sono mostrati gli ultimi 14 giorni per dare contesto.' : ''} Passa sopra una barra per vedere la temperatura esterna del giorno: con il freddo le accensioni aumentano.`, `Burner starts per day.${chartCtx ? ' The last 14 days are shown for context.' : ''} Hover a bar to see that day’s outdoor temperature: starts rise with the cold.`))}
   ${startsOut.length >= 10 ? chartBox('cStartsOut', tr('Accensioni al giorno in funzione della temperatura esterna', 'Starts per day versus outdoor temperature'), tr('Ogni punto è un giorno.', 'Each dot is a day.'), 'small') : ''}
   ${ignitions.length ? `${sub(tr('Quando si accende la caldaia', 'When the boiler starts'))}<p class="note">${tr(`Accensioni registrate (${ni(ignitions.length)}) per giorno della settimana e ora. Più il colore è intenso, più accensioni.`, `Recorded starts (${ni(ignitions.length)}) by weekday and hour. The darker the colour, the more starts.`)}</p>
   <div class="hmap">${heatmap.map((row, i) => `<div class="hr"><span class="hd">${WEEK_L[i]}</span>${row.map((v, h) => `<span class="hc" style="--a:${v ? (0.12 + 0.88 * v / heatmapMax).toFixed(2) : 0}" title="${WEEK_L[i]} ${String(h).padStart(2, '0')}:00 — ${v}"></span>`).join('')}</div>`).join('')}<div class="hr hx"><span class="hd"></span>${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 ? '' : String(h).padStart(2, '0')}</span>`).join('')}</div></div>` : ''}
@@ -823,7 +1047,7 @@ const S_HOUSE = fc && fc.b !== null ? section('house', 'house', tr('La casa', 'T
   tr('Quanto calore perde la casa quando fuori fa freddo, calcolato dai consumi reali e dal meteo. Serve a capire se la caldaia è ben dimensionata e quanto renderebbe migliorare l’isolamento.', 'How much heat the house loses when it is cold outside, calculated from real consumption and weather. It shows whether the boiler is well sized and how much better insulation would pay off.'),
   `<div class="kpis">
   ${kpi(tr('Dispersione termica', 'Heat loss'), ni(fc.Hkw * 1000), ' W/°C', tr('Potenza persa per ogni grado di differenza tra dentro e fuori. Più è bassa, meglio è isolata la casa.', 'Power lost for each degree between inside and outside. The lower, the better insulated.'), houseClass?.[0], houseClass?.[1])}
-  ${kpi(tr(`Potenza necessaria a ${nf(DESIGN_TEMP, 0)} °C`, `Heat needed at ${nf(DESIGN_TEMP, 0)} °C`), nf(fc.need), ' kW', DESIGN_AUTO ? tr(`Potenza che serve nei giorni più freddi della tua zona (${nf(DESIGN_TEMP, 0)} °C di media, ricavati dal meteo reale degli ultimi 12 mesi).`, `Power needed on the coldest days in your area (${nf(DESIGN_TEMP, 0)} °C mean, from the real weather of the last 12 months).`) : tr('Potenza che serve nella giornata più fredda di progetto.', 'Power needed on the coldest design day.'), BOILER_KW ? (BOILER_KW > fc.need * 3 ? 'warn' : 'good') : null, BOILER_KW ? tr(`caldaia: ${nf(BOILER_KW, 0)} kW`, `boiler: ${nf(BOILER_KW, 0)} kW`) : tr('inserisci i kW della caldaia per il confronto', 'enter the boiler kW to compare'))}
+  ${kpi(tr(`Potenza necessaria a ${nf(DESIGN_TEMP, 0)} °C`, `Heat needed at ${nf(DESIGN_TEMP, 0)} °C`), nf(fc.need), ' kW', DESIGN_AUTO ? tr(`Potenza che serve nei giorni più freddi della tua zona (${nf(DESIGN_TEMP, 0)} °C di media, ricavati dal meteo di zona degli ultimi 12 mesi).`, `Power needed on the coldest days in your area (${nf(DESIGN_TEMP, 0)} °C mean, from the area weather of the last 12 months).`) : tr('Potenza che serve nella giornata più fredda di progetto.', 'Power needed on the coldest design day.'), BOILER_KW ? (BOILER_KW > fc.need * 3 ? 'warn' : 'good') : null, BOILER_KW ? tr(`caldaia: ${nf(BOILER_KW, 0)} kW`, `boiler: ${nf(BOILER_KW, 0)} kW`) : tr('inserisci i kW della caldaia per il confronto', 'enter the boiler kW to compare'))}
   ${kpi(tr('Riscaldamento in un anno', 'Heating per year'), fc.yrH !== null ? ni(fc.yrH) : '—', ' m³', tr('Gas per il solo riscaldamento con il meteo degli ultimi 12 mesi.', 'Heating-only gas with the weather of the last 12 months.'), null, fc.yrH !== null ? `≈ ${ni(fc.yrH * KWH_PER_M3)} kWh` : '')}
   ${fc.r2 !== null ? kpi(tr('Precisione del modello', 'Model accuracy'), ni(fc.r2 * 100), '%', tr('Quanto i consumi giornalieri seguono la temperatura esterna (R²). Sopra 70% il modello è affidabile.', 'How closely daily consumption follows the outdoor temperature (R²). Above 70% the model is reliable.'), fc.r2 >= 0.7 ? 'good' : 'warn') : ''}
   </div>`) : '';
@@ -834,9 +1058,55 @@ const S_API = api ? section('api', 'bolt', tr('Contatori ufficiali Viessmann', '
   ${[[tr('Gas riscaldamento (m³)', 'Heating gas (m³)'), api.gasH], [tr('Gas acqua calda (m³)', 'Hot water gas (m³)'), api.gasW], [tr('Calore riscaldamento (kWh)*', 'Heating heat (kWh)*'), api.heatH], [tr('Calore acqua calda (kWh)*', 'Hot water heat (kWh)*'), api.heatW], [tr('Elettricità riscaldamento (kWh)', 'Heating electricity (kWh)'), api.elH], [tr('Elettricità acqua calda (kWh)', 'Hot water electricity (kWh)'), api.elW]].map(([l, b]) => `<tr><td>${l}</td><td>${nf(b.d7)}</td><td>${nf(b.month)}</td><td>${nf(b.lastMonth)}</td><td><b>${nf(b.year)}</b></td></tr>`).join('')}
   </table></div><p class="note">${tr('* Il calore prodotto è una stima che la caldaia calcola dal gas: non è una misura, quindi non si può usare per calcolare il rendimento. Per questo il report non mostra il “rendimento termico”.', '* Heat produced is an estimate the boiler computes from gas: it is not a measurement, so it cannot be used to compute efficiency. That is why the report does not show “thermal efficiency”.')}</p>`) : '';
 
-const S_ENERGY = energy ? section('energy', 'bolt', tr('Fotovoltaico, batteria e wallbox', 'Solar, battery and wallbox'), '',
-  `<div class="kpis">${kpi(tr('Produzione FV media', 'Average PV output'), ni(energy.pv), ' W', '')}${kpi(tr('Picco FV', 'PV peak'), ni(energy.pvMax), ' W', '')}${energy.batt !== null ? kpi(tr('Batteria media', 'Average battery'), ni(energy.batt), '%', '') : ''}${energy.wall !== null ? kpi(tr('Wallbox media', 'Average wallbox'), ni(energy.wall), ' W', '') : ''}</div>${chart.energy ? chartBox('cEnergy', tr('Fotovoltaico e batteria', 'PV and battery'), '', 'small') : ''}`) : '';
+const S_ENERGY = !energy ? '' : (() => {
+  const E = energy, pct = (x) => x === null ? '—' : Math.round(x * 100);
+  const k = [];
+  if (E.hasPV) {
+    k.push(kpi(tr('Prodotta dai pannelli', 'Produced by the panels'), nf(E.pvKwh), ' kWh', tr(`In media ${nf(E.pvKwh / E.days)} kWh al giorno.`, `On average ${nf(E.pvKwh / E.days)} kWh per day.`)));
+    k.push(kpi(tr('Picco fotovoltaico', 'Solar peak'), ni(E.pvMax), ' W', tr('La potenza più alta vista nel periodo.', 'The highest power seen in the period.')));
+  }
+  if (E.hasGrid) {
+    if (E.house !== null) k.push(kpi(tr('Consumo della casa', 'Home consumption'), nf(E.house), ' kWh', tr('Tutta l’elettricità usata in casa, auto compresa.', 'All the electricity used at home, car included.')));
+    k.push(kpi(tr('Presa dalla rete', 'Taken from the grid'), nf(E.drawKwh), ' kWh', tr(`Quella che paghi in bolletta: circa ${ni(E.drawKwh * EL_PRICE)} € a ${nf(EL_PRICE, 2)} €/kWh.`, `What you pay for on the bill: about €${ni(E.drawKwh * EL_PRICE)} at €${nf(EL_PRICE, 2)}/kWh.`)));
+    k.push(kpi(tr('Immessa in rete', 'Fed into the grid'), nf(E.feedKwh), ' kWh', tr('Sole non usato, ceduto al gestore.', 'Unused solar power, sold to the grid.')));
+    if (E.selfUse !== null) k.push(kpi(tr('Autoconsumo', 'Self-consumption'), pct(E.selfUse), ' %', tr('Quanta energia dei pannelli usi direttamente (casa + batteria). Più alto è, meglio è.', 'How much of the solar energy you use yourself (home + battery). Higher is better.'), E.selfUse >= 0.7 ? 'good' : E.selfUse >= 0.4 ? 'warn' : 'bad'));
+    if (E.autarky !== null) k.push(kpi(tr('Autosufficienza', 'Self-sufficiency'), pct(E.autarky), ' %', tr('Quanta dell’elettricità di casa arriva dal tuo impianto invece che dalla rete.', 'How much of the home’s electricity comes from your system instead of the grid.'), E.autarky >= 0.6 ? 'good' : E.autarky >= 0.3 ? 'warn' : 'bad'));
+  }
+  if (E.hasBatt) {
+    k.push(kpi(tr('Batteria: carica media', 'Battery: average charge'), ni(E.battAvg), ' %', tr(`Minimo nel periodo: ${ni(E.battMin)} %.`, `Lowest in the period: ${ni(E.battMin)} %.`)));
+    if (E.chgKwh !== null || E.disKwh !== null) k.push(kpi(tr('Batteria: caricata / scaricata', 'Battery: charged / discharged'), `${nf(E.chgKwh)} / ${nf(E.disKwh)}`, ' kWh', tr('La differenza sono le perdite di conversione (normali 5–15 %).', 'The difference is conversion loss (5–15 % is normal).')));
+  }
+  if (E.hasWall) {
+    k.push(kpi(tr('Auto: energia caricata', 'Car: energy charged'), nf(E.wallKwh), ' kWh', E.sessions ? tr(`${E.sessions} ricariche, potenza massima ${ni(E.wallMax)} W.`, `${E.sessions} charging sessions, max power ${ni(E.wallMax)} W.`) : ''));
+  }
+  const parts = [E.hasPV ? tr('fotovoltaico', 'solar') : null, E.hasBatt ? tr('batteria', 'battery') : null, E.hasGrid ? tr('scambio con la rete', 'grid exchange') : null, E.hasWall ? tr('wallbox', 'wallbox') : null].filter(Boolean).join(', ');
+  return section('energy', 'bolt', tr('Energia elettrica: sole, batteria, rete e auto', 'Electricity: solar, battery, grid and car'),
+    tr(`Dai dispositivi Viessmann collegati (${parts}). I kWh sono calcolati dalle potenze lette ogni pochi minuti, quindi possono differire di qualche percento dal contatore.`, `From the connected Viessmann devices (${parts}). kWh are computed from the power read every few minutes, so they can differ from the meter by a few percent.`),
+    `<div class="kpis">${k.join('')}</div>
+    ${chart.eDay ? chartBox('cEnergyDay', tr('Energia al giorno', 'Energy per day'), tr('Barre: kWh prodotti, presi e immessi ogni giorno. Linea: consumo della casa.', 'Bars: kWh produced, taken and fed in each day. Line: home consumption.')) : ''}
+    ${chart.energy ? chartBox('cEnergy', tr('Potenze durante il giorno', 'Power through the day'), tr('Media oraria in watt. Trascina per ingrandire.', 'Hourly average in watts. Drag to zoom.')) : ''}
+    ${chart.batt ? chartBox('cBatt', tr('Carica della batteria', 'Battery charge'), '', 'small') : ''}`);
+})();
 const S_ROOMS = rooms.length ? section('rooms', 'house', tr('Stanze (termostati smart)', 'Rooms (smart thermostats)'), '', `<div class="kpis">${rooms.map(r => kpi(esc(r.k), nf(r.avg), ' °C', '')).join('')}</div>`) : '';
+
+const S_COMB = !combEval ? '' : (() => {
+  const E = combEval, L = E.last;
+  const cards = L.checks.map(x => kpi(x.label, nf(x.val, x.unit === ' ppm' || x.unit === ' mg/kWh' ? 0 : x.k === 'lambda' || x.k === 'co2' ? 2 : 1), x.unit, x.expl, x.lvl, x.ref)).join('');
+  const dueTxt = (d) => d < 0 ? tr(`scaduto da ${-d} giorni`, `overdue by ${-d} days`) : tr(`tra ${d} giorni`, `in ${d} days`);
+  const hist = E.all.length > 1 ? `${sub(tr('Confronto negli anni', 'Over the years'))}<div class="tw"><table><tr><th>${tr('Data', 'Date')}</th><th>CO₂ %</th><th>O₂ %</th><th>${tr('CO non dil.', 'CO air-free')} ppm</th><th>${tr('Fumi', 'Flue')} °C</th><th>${tr('Rend.', 'Eff.')} %</th><th>NOx</th><th></th></tr>${E.all.slice().reverse().map(e => `<tr><td>${fmtDate(e.t.date)}${e.t.technician ? ` <small class="na">${esc(e.t.technician)}</small>` : ''}</td><td>${nf(num0(e.t.co2), 2)}</td><td>${nf(num0(e.t.o2))}</td><td>${ni(e.uco)}</td><td>${nf(num0(e.t.flueTemp))}</td><td>${nf(num0(e.t.efficiency))}</td><td>${ni(num0(e.t.nox))}</td><td>${badge(e.worst)}</td></tr>`).join('')}</table></div>` : '';
+  return section('combustion', 'flame', tr('Analisi fumi', 'Flue gas analysis'),
+    tr('La prova che il tecnico fa con l’analizzatore nel camino: dice se la caldaia brucia pulito, quanto rende e se rispetta i limiti di legge. La caldaia non trasmette questi valori: li inserisci tu nella dashboard del plugin (sezione “Analisi fumi”) copiandoli dallo scontrino.', 'The test the installer does with an analyser in the flue: it tells whether the boiler burns cleanly, how efficient it is and whether it meets the legal limits. The boiler does not report these values: you enter them in the plugin dashboard (“Flue gas analyses”), copying them from the printout.'),
+    `<p class="note">${icon('calendar')} ${tr('Ultima analisi', 'Last analysis')}: <b>${fmtDate(L.t.date)}</b>${L.t.technician ? ` · ${esc(L.t.technician)}` : ''}${L.t.notes ? ` · ${esc(L.t.notes)}` : ''}</p>
+    <div class="kpis">${cards}</div>
+    ${sub(tr('Scadenze', 'Due dates'))}<div class="kpis">
+    ${kpi(tr('Controllo di efficienza', 'Efficiency check'), fmtDate(E.nextCheck), '', tr(`Obbligatorio ogni ${E.years} anni (impostabile nella dashboard). In Italia per le caldaie a gas da 10 a 100 kW sono 4 anni; alcune regioni hanno regole diverse.`, `Mandatory every ${E.years} years (set in the dashboard). In Italy, gas boilers 10–100 kW: 4 years; some regions differ.`), E.dCheck < 0 ? 'bad' : E.dCheck <= 60 ? 'warn' : 'good', dueTxt(E.dCheck))}
+    ${kpi(tr('Manutenzione', 'Maintenance'), fmtDate(E.nextMaint), '', tr(`Ogni ${E.months} mesi, come indicato dall’installatore o dal manuale (Viessmann: ogni anno).`, `Every ${E.months} months, as set by the installer or the manual (Viessmann: yearly).`), E.dMaint < 0 ? 'bad' : E.dMaint <= 60 ? 'warn' : 'good', dueTxt(E.dMaint))}
+    ${E.gasSince > 0 ? kpi(tr('Gas dall’ultima analisi', 'Gas since the last analysis'), nf(E.gasSince), ' m³', tr('Gas bruciato dalla data della prova (dai contatori della caldaia).', 'Gas burned since the test date (boiler counters).')) : ''}
+    </div>
+    ${E.trend.length ? `<p class="note">${badge('warn')} ${E.trend.join(' · ')}</p>` : ''}
+    ${hist}
+    <p class="note">${tr(`Limiti usati: rendimento minimo ${E.effMin} % (caldaie a condensazione installate dopo l’8/10/2005${E.kw ? `, ${nf(E.kw, 0)} kW` : ', potenza non indicata'}), CO non diluito ≤ 1000 ppm (DPR 74/2013, UNI 10389-1). Le fasce “tipiche” di CO₂ e λ sono indicative: il valore esatto è sul manuale della caldaia.`, `Limits used: minimum efficiency ${E.effMin} % (condensing boilers installed after 8/10/2005${E.kw ? `, ${nf(E.kw, 0)} kW` : ', power not set'}), CO air-free ≤ 1000 ppm (Italy DPR 74/2013, UNI 10389-1). The “typical” CO₂ and λ ranges are indicative: the exact value is in the boiler manual.`)}</p>`);
+})();
 
 const msgType = (c) => /^F\./.test(c) ? 'f' : /^I\./.test(c) ? 'i' : 's';
 const S_MSG = section('messages', 'msg', tr('Messaggi della caldaia', 'Boiler messages'),
@@ -849,17 +1119,25 @@ const GLOSS = [
   [tr('Grado-giorno', 'Degree-day'), tr('Misura del freddo: se un giorno la media è 6 °C, con base 16 °C vale 10 gradi-giorno. Più gradi-giorno = più gas.', 'A measure of cold: a day with a 6 °C mean counts 10 degree-days with a 16 °C base. More degree-days = more gas.')],
   [tr('Mandata', 'Flow temperature'), tr('Temperatura dell’acqua che la caldaia manda ai termosifoni o al pavimento.', 'Temperature of the water the boiler sends to radiators or underfloor heating.')],
   [tr('Curva climatica', 'Heating curve'), tr('Regola che decide la mandata in base al freddo esterno. Pendenza = quanto sale quando fa più freddo; spostamento = alza o abbassa tutta la curva.', 'Rule that sets the flow temperature from the outdoor cold. Slope = how fast it rises as it gets colder; shift = moves the whole curve up or down.')],
+  [tr('Meteo di zona', 'Area weather'), tr('Stima Open-Meteo della temperatura dell’aria in campo aperto, a 2 m da terra, per le coordinate dell’impianto registrate in ViCare. Non è una previsione: per i giorni passati combina osservazioni di stazioni e satelliti. Non vede la tua casa, per questo serve a capire quanto la sonda è influenzata dal punto in cui è montata.', 'Open-Meteo estimate of the open-air temperature, 2 m above ground, at the installation coordinates stored in ViCare. It is not a forecast: for past days it combines station and satellite observations. It does not see your house, which is why it shows how much the sensor is affected by where it is mounted.')],
   [tr('Sonda esterna', 'Outdoor sensor'), tr('Termometro della caldaia montato fuori casa: se è al sole o al caldo, la caldaia scalda male.', 'The boiler thermometer mounted outside: if it is in the sun or warm, the boiler heats badly.')],
   [tr('Condensazione', 'Condensing'), tr('Le caldaie moderne recuperano il calore del vapore nei fumi quando l’acqua di ritorno è sotto i 50–55 °C: rendono di più.', 'Modern boilers recover heat from the flue steam when return water is below 50–55 °C: they are more efficient.')],
   [tr('Modulazione', 'Modulation'), tr('La caldaia può bruciare a potenza ridotta invece di accendersi e spegnersi.', 'The boiler can burn at reduced power instead of switching on and off.')],
   [tr('Ciclo breve', 'Short cycling'), tr('Accensione di pochi minuti seguita da spegnimento: spreca gas e usura la caldaia.', 'A run of a few minutes followed by a stop: wastes gas and wears the boiler.')],
   [tr('Programmi', 'Programs'), tr('Normale = temperatura di giorno, Ridotta = notte o assenza, Comfort = temperatura extra (party o riscaldamento prolungato).', 'Normal = daytime temperature, Reduced = night or away, Comfort = extra temperature (party or extended heating).')],
   [tr('Dispersione termica', 'Heat loss'), tr('Watt che la casa perde per ogni grado di differenza tra dentro e fuori.', 'Watts the house loses for each degree between inside and outside.')],
+  [tr('Analisi fumi', 'Flue gas analysis'), tr('Prova fatta dal tecnico con un analizzatore infilato nel camino: misura CO₂, O₂, CO, temperatura dei fumi e rendimento.', 'Test done by the installer with an analyser in the flue: it measures CO₂, O₂, CO, flue temperature and efficiency.')],
+  [tr('CO non diluito', 'CO air-free'), tr('Il monossido di carbonio ricalcolato come se nei fumi non ci fosse aria in più: così si confronta con il limite di legge (1000 ppm).', 'Carbon monoxide recalculated as if there were no extra air in the flue gas, so it can be compared with the legal limit (1000 ppm).')],
+  [tr('Punto di rugiada', 'Dew point'), tr('Temperatura sotto la quale il vapore dei fumi diventa acqua: è lì che la caldaia a condensazione recupera calore in più.', 'Temperature below which the flue steam turns into water: that is where a condensing boiler recovers extra heat.')],
   [tr('ACS', 'DHW'), tr('Acqua Calda Sanitaria: l’acqua di doccia e rubinetti.', 'Domestic Hot Water: shower and tap water.')],
+  ...(energy && energy.hasGrid ? [
+    [tr('Autoconsumo', 'Self-consumption'), tr('La parte dell’energia dei pannelli che usi tu (in casa o per caricare la batteria) invece di mandarla in rete.', 'The part of the solar energy you use yourself (at home or to charge the battery) instead of sending it to the grid.')],
+    [tr('Autosufficienza', 'Self-sufficiency'), tr('La parte dell’elettricità di casa coperta dal tuo impianto (pannelli + batteria). Il resto lo prendi dalla rete.', 'The part of the home’s electricity covered by your own system (panels + battery). The rest comes from the grid.')],
+  ] : []),
 ];
 const S_GLOSS = section('glossary', 'book', tr('Glossario', 'Glossary'), tr('Le parole tecniche usate nel report, spiegate in modo semplice.', 'The technical words used in this report, explained simply.'), `<dl class="gl">${GLOSS.map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('')}</dl>`);
 
-const NAV = [['summary', tr('Riepilogo', 'Summary')], ['advice', tr('Consigli', 'Advice')], ['overview', tr('Andamento', 'Overview')], ['gas', tr('Gas', 'Gas')], ['heating', tr('Riscaldamento', 'Heating')], ['boiler', tr('Caldaia', 'Boiler')], dhw ? ['dhw', tr('Acqua calda', 'Hot water')] : null, S_HOUSE ? ['house', tr('Casa', 'House')] : null, api ? ['api', 'API'] : null, ['messages', tr('Messaggi', 'Messages')], ['glossary', tr('Glossario', 'Glossary')]].filter(Boolean);
+const NAV = [['summary', tr('Riepilogo', 'Summary')], ['advice', tr('Consigli', 'Advice')], ['overview', tr('Andamento', 'Overview')], ['gas', tr('Gas', 'Gas')], ['heating', tr('Riscaldamento', 'Heating')], S_SENSOR ? ['sensor', tr('Sonda esterna', 'Outdoor sensor')] : null, ['boiler', tr('Caldaia', 'Boiler')], combEval ? ['combustion', tr('Analisi fumi', 'Flue gas')] : null, dhw ? ['dhw', tr('Acqua calda', 'Hot water')] : null, S_HOUSE ? ['house', tr('Casa', 'House')] : null, api ? ['api', 'API'] : null, S_ENERGY ? ['energy', tr('Energia', 'Energy')] : null, S_ROOMS ? ['rooms', tr('Stanze', 'Rooms')] : null, ['messages', tr('Messaggi', 'Messages')], ['glossary', tr('Glossario', 'Glossary')]].filter(Boolean);
 
 const scoreLabels = { comfort: tr('Comfort', 'Comfort'), efficiency: tr('Efficienza', 'Efficiency'), boiler: tr('Caldaia', 'Boiler'), dhw: tr('Acqua calda', 'Hot water'), reliability: tr('Affidabilità', 'Reliability') };
 const verdict = overall >= 80 ? tr('L’impianto lavora bene.', 'The system works well.') : overall >= 60 ? tr('L’impianto funziona, ma ci sono margini di miglioramento.', 'The system works, but there is room for improvement.') : tr('Ci sono alcune cose da sistemare.', 'A few things need fixing.');
@@ -873,86 +1151,86 @@ const html = `<!DOCTYPE html>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-<style>
+<style>:root{--u:clamp(1px,calc(0.05vw + 0.3px),1.7px)}
 :root{--bg:#eef1f7;--card:#fff;--ink:#141a2b;--mute:#5b6478;--line:#e3e7ef;--soft:#f6f8fc;--good:#12a150;--warn:#e58a00;--bad:#d92d20;--info:#5b6b85;--acc:#e2001a;--acc2:#ff5a36;--blue:#2f6fed;
---s-house1:#fff7ef;--s-house2:#ffe9d6;--s-ink:#20283b;--s-mute:#5b6478;--shadow:0 1px 2px rgba(16,24,40,.05),0 8px 24px -12px rgba(16,24,40,.15)}
-@media (prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#141b2e;--ink:#e9edf6;--mute:#9aa4ba;--line:#26304a;--soft:#1a2238;--s-house1:#2a2230;--s-house2:#1f1a26;--s-ink:#e9edf6;--s-mute:#9aa4ba;--shadow:0 1px 2px rgba(0,0,0,.3)}}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:16px/1.55 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
-.ic{width:22px;height:22px;flex:none}
-.hero{background:radial-gradient(1200px 400px at 85% -10%,#ff5a36 0,transparent 60%),linear-gradient(135deg,#1b0f2e 0%,#3a0d25 45%,#b3001b 100%);color:#fff;padding:34px 20px 38px}
-.hero .in{max-width:1180px;margin:0 auto;display:flex;gap:28px;align-items:center;flex-wrap:wrap}
-.hero h1{margin:0;font-size:clamp(26px,4vw,38px);letter-spacing:-.02em;line-height:1.15}
-.hero .meta{opacity:.85;font-size:14px;margin-top:8px}.hero .verdict{font-size:18px;margin-top:14px;font-weight:600}
-.hero .ht{flex:1 1 420px}.hero .score{display:flex;align-items:center;gap:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:16px 22px}
-.hero .score .slbl{font-size:13px;opacity:.8;text-transform:uppercase;letter-spacing:.08em}.hero .score b{font-size:15px;display:block;margin-top:4px;max-width:220px}
+--s-house1:#fff7ef;--s-house2:#ffe9d6;--s-ink:#20283b;--s-mute:#5b6478;--shadow:0 calc(1*var(--u)) calc(2*var(--u)) rgba(16,24,40,.05),0 calc(8*var(--u)) calc(24*var(--u)) -12px rgba(16,24,40,.15)}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#141b2e;--ink:#e9edf6;--mute:#9aa4ba;--line:#26304a;--soft:#1a2238;--s-house1:#2a2230;--s-house2:#1f1a26;--s-ink:#e9edf6;--s-mute:#9aa4ba;--shadow:0 calc(1*var(--u)) calc(2*var(--u)) rgba(0,0,0,.3)}}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font:calc(16*var(--u))/1.55 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+.ic{width:calc(22*var(--u));height:calc(22*var(--u));flex:none}
+.hero{background:radial-gradient(calc(1200*var(--u)) calc(400*var(--u)) at 85% -10%,#ff5a36 0,transparent 60%),linear-gradient(135deg,#1b0f2e 0%,#3a0d25 45%,#b3001b 100%);color:#fff;padding:calc(34*var(--u)) calc(20*var(--u)) calc(38*var(--u))}
+.hero .in{width:100%;max-width:calc(2000*var(--u));margin:0 auto;padding-left:clamp(12px,2.5vw,64px);padding-right:clamp(12px,2.5vw,64px);display:flex;gap:calc(28*var(--u));align-items:center;flex-wrap:wrap}
+.hero h1{margin:0;font-size:clamp(calc(26*var(--u)),4vw,calc(38*var(--u)));letter-spacing:-.02em;line-height:1.15}
+.hero .meta{opacity:.85;font-size:calc(14*var(--u));margin-top:calc(8*var(--u))}.hero .verdict{font-size:calc(18*var(--u));margin-top:calc(14*var(--u));font-weight:600}
+.hero .ht{flex:1 1 calc(420*var(--u))}.hero .score{display:flex;align-items:center;gap:calc(18*var(--u));background:rgba(255,255,255,.08);border:calc(1*var(--u)) solid rgba(255,255,255,.18);border-radius:calc(20*var(--u));padding:calc(16*var(--u)) calc(22*var(--u))}
+.hero .score .slbl{font-size:calc(13*var(--u));opacity:.8;text-transform:uppercase;letter-spacing:.08em}.hero .score b{font-size:calc(15*var(--u));display:block;margin-top:calc(4*var(--u));max-width:calc(220*var(--u))}
 .hero .ring .rt{stroke:rgba(255,255,255,.18)}.hero .ring .rn{fill:#fff}
-nav{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--line);box-shadow:0 4px 16px -12px rgba(0,0,0,.3)}
-nav .in{max-width:1180px;margin:0 auto;display:flex;gap:6px;overflow-x:auto;padding:10px 16px;scrollbar-width:none}
-nav a{white-space:nowrap;text-decoration:none;color:var(--mute);font-size:14px;font-weight:600;padding:6px 12px;border-radius:99px}nav a:hover{background:var(--soft);color:var(--ink)}
-main{max-width:1180px;margin:0 auto;padding:0 16px 40px;position:relative}
-section,.panel{background:var(--card);border-radius:20px;padding:24px;margin:18px 0;box-shadow:var(--shadow);border:1px solid var(--line);scroll-margin-top:70px}
-.sh{display:flex;gap:14px;align-items:flex-start;margin-bottom:16px}.si{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;flex:none}.si .ic{width:24px;height:24px}
-h2{margin:0;font-size:22px;letter-spacing:-.01em}h3{font-size:17px;margin:26px 0 10px}h4{margin:2px 0 0;font-size:17px;line-height:1.35}
-.intro{color:var(--mute);margin:4px 0 0;max-width:900px}.note{color:var(--mute);font-size:14px;margin:8px 0}.warnline{color:var(--warn)}
-.schem{width:100%;height:auto;display:block;margin-top:6px}
-.s-big{font-size:22px;font-weight:800;fill:var(--s-ink)}.s-sm{font-size:13px;fill:var(--s-mute)}.s-warn{fill:var(--warn)}
+nav{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:calc(1*var(--u)) solid var(--line);box-shadow:0 calc(4*var(--u)) calc(16*var(--u)) -12px rgba(0,0,0,.3)}
+nav .in{width:100%;max-width:calc(2000*var(--u));margin:0 auto;padding-left:clamp(12px,2.5vw,64px);padding-right:clamp(12px,2.5vw,64px);display:flex;gap:calc(6*var(--u));overflow-x:auto;padding:calc(10*var(--u)) clamp(12px,2.5vw,64px);scrollbar-width:none}
+nav a{white-space:nowrap;text-decoration:none;color:var(--mute);font-size:calc(14*var(--u));font-weight:600;padding:calc(6*var(--u)) calc(12*var(--u));border-radius:calc(99*var(--u))}nav a:hover{background:var(--soft);color:var(--ink)}
+main{width:100%;max-width:calc(2000*var(--u));margin:0 auto;padding-left:clamp(12px,2.5vw,64px);padding-right:clamp(12px,2.5vw,64px);padding:0 clamp(12px,2.5vw,64px) calc(40*var(--u));position:relative}
+section,.panel{background:var(--card);border-radius:calc(20*var(--u));padding:calc(24*var(--u));margin:calc(18*var(--u)) 0;box-shadow:var(--shadow);border:calc(1*var(--u)) solid var(--line);scroll-margin-top:calc(70*var(--u))}
+.sh{display:flex;gap:calc(14*var(--u));align-items:flex-start;margin-bottom:calc(16*var(--u))}.si{width:calc(44*var(--u));height:calc(44*var(--u));border-radius:calc(12*var(--u));display:grid;place-items:center;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;flex:none}.si .ic{width:calc(24*var(--u));height:calc(24*var(--u))}
+h2{margin:0;font-size:calc(22*var(--u));letter-spacing:-.01em}h3{font-size:calc(17*var(--u));margin:calc(26*var(--u)) 0 calc(10*var(--u))}h4{margin:calc(2*var(--u)) 0 0;font-size:calc(17*var(--u));line-height:1.35}
+.intro{color:var(--mute);margin:calc(4*var(--u)) 0 0;max-width:calc(900*var(--u))}.note{color:var(--mute);font-size:calc(14*var(--u));margin:calc(8*var(--u)) 0}.warnline{color:var(--warn)}
+.schem{width:100%;height:auto;display:block;margin-top:calc(6*var(--u))}.schem{max-width:calc(1100*var(--u));margin-left:auto;margin-right:auto;display:block}
+.s-big{font-size:calc(22*var(--u));font-weight:800;fill:var(--s-ink)}.s-sm{font-size:calc(13*var(--u));fill:var(--s-mute)}.s-warn{fill:var(--warn)}
 .s-line{stroke:var(--line);stroke-width:2}.s-roof{stroke:var(--acc);stroke-width:10;stroke-linecap:round;stroke-linejoin:round}
 .s-tube{fill:var(--soft);stroke:var(--line);stroke-width:2}.s-rad{fill:#fff;stroke:#c9d2e3;stroke-width:3}.s-radl{stroke:#c9d2e3;stroke-width:3}
 .s-heat path{fill:none;stroke:#ff7a45;stroke-width:3;stroke-linecap:round;opacity:0;animation:rise 2.4s infinite}
-@keyframes rise{0%{opacity:0;transform:translateY(8px)}40%{opacity:.8}100%{opacity:0;transform:translateY(-10px)}}
-.s-boiler{fill:#fff;stroke:#c9d2e3;stroke-width:3}.s-disp{fill:#0f172a}.s-dtxt{fill:#5eead4;font:700 13px ui-monospace,Menlo,monospace}
+@keyframes rise{0%{opacity:0;transform:translateY(calc(8*var(--u)))}40%{opacity:.8}100%{opacity:0;transform:translateY(-10px)}}
+.s-boiler{fill:#fff;stroke:#c9d2e3;stroke-width:3}.s-disp{fill:#0f172a}.s-dtxt{fill:#5eead4;font:700 calc(13*var(--u)) ui-monospace,Menlo,monospace}
 .s-flame{transform-box:fill-box;transform-origin:center bottom;animation:flick 1.6s ease-in-out infinite}@keyframes flick{50%{transform:scale(1.06,.93)}}
 .s-pipe{fill:none;stroke-width:7;stroke-linecap:round;stroke-linejoin:round}.s-pipe.hot{stroke:#ef4444}.s-pipe.cold{stroke:#60a5fa}.s-pipe.gas{stroke:#f5b400;stroke-dasharray:10 6}
-.s-tap path:first-child{fill:#94a3b8}.s-meter{fill:#0f172a}.s-mtxt{fill:#fde68a;font:700 16px ui-monospace,Menlo,monospace}
+.s-tap path:first-child{fill:#94a3b8}.s-meter{fill:#0f172a}.s-mtxt{fill:#fde68a;font:700 calc(16*var(--u)) ui-monospace,Menlo,monospace}
 @media (prefers-color-scheme:dark){.s-rad,.s-boiler{fill:#1f2940;stroke:#3a4666}.s-radl{stroke:#3a4666}}
 @media (prefers-reduced-motion:reduce){.s-heat path,.s-flame{animation:none}.s-heat path{opacity:.6}}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:12px;margin-top:18px}
-.card{border-radius:16px;padding:14px 16px 14px 20px;background:var(--soft);border:1px solid var(--line);position:relative;overflow:hidden}
-.card::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--info)}.card.good::before{background:var(--good)}.card.warn::before{background:var(--warn)}.card.bad::before{background:var(--bad)}
-.card .ct{display:flex;gap:8px;align-items:center;color:var(--mute);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.card .ct .ic{width:18px;height:18px}
-.card .cval{font-size:26px;font-weight:800;margin:6px 0 2px;letter-spacing:-.02em}.card .cs{font-size:13px;color:var(--mute)}
-.rings{display:flex;flex-wrap:wrap;gap:18px;justify-content:space-around;margin-top:20px;padding:16px;border-radius:16px;background:var(--soft)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,calc(172*var(--u))),1fr));gap:calc(12*var(--u));margin-top:calc(18*var(--u))}
+.card{border-radius:calc(16*var(--u));padding:calc(14*var(--u)) calc(16*var(--u)) calc(14*var(--u)) calc(20*var(--u));background:var(--soft);border:calc(1*var(--u)) solid var(--line);position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;inset:0 auto 0 0;width:calc(5*var(--u));background:var(--info)}.card.good::before{background:var(--good)}.card.warn::before{background:var(--warn)}.card.bad::before{background:var(--bad)}
+.card .ct{display:flex;gap:calc(8*var(--u));align-items:center;color:var(--mute);font-size:calc(12*var(--u));font-weight:700;text-transform:uppercase;letter-spacing:.02em}.card .ct .ic{width:calc(18*var(--u));height:calc(18*var(--u))}
+.card .cval{font-size:calc(26*var(--u));font-weight:800;margin:calc(6*var(--u)) 0 calc(2*var(--u));letter-spacing:-.02em}.card .cs{font-size:calc(13*var(--u));color:var(--mute)}
+.rings{display:flex;flex-wrap:wrap;gap:calc(18*var(--u));justify-content:space-around;margin-top:calc(20*var(--u));padding:calc(16*var(--u));border-radius:calc(16*var(--u));background:var(--soft)}
 .ring{text-align:center}.ring .rt{fill:none;stroke:var(--line)}.ring .rv{fill:none;stroke-linecap:round}.ring .rn{font-weight:800;fill:var(--ink)}
-.r-good .rv{stroke:var(--good)}.r-warn .rv{stroke:var(--warn)}.r-bad .rv{stroke:var(--bad)}.r-info .rv{stroke:var(--info)}.rl{font-size:13px;font-weight:700;color:var(--mute);margin-top:4px}
-.bot{display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border-radius:16px;background:linear-gradient(135deg,rgba(47,111,237,.10),rgba(226,0,26,.06));border:1px solid rgba(47,111,237,.25);margin-bottom:16px}
-.bot .ic{width:34px;height:34px;color:var(--blue)}.bot p{margin:0}
-.adv{border:1px solid var(--line);border-radius:18px;margin:14px 0;overflow:hidden;background:var(--card)}
-.adv-h{display:flex;gap:14px;align-items:center;padding:16px 18px;background:var(--soft)}
-.adv-i{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;color:#fff;background:var(--info);flex:none}.adv-i .ic{width:26px;height:26px}
+.r-good .rv{stroke:var(--good)}.r-warn .rv{stroke:var(--warn)}.r-bad .rv{stroke:var(--bad)}.r-info .rv{stroke:var(--info)}.rl{font-size:calc(13*var(--u));font-weight:700;color:var(--mute);margin-top:calc(4*var(--u))}
+.bot{display:flex;gap:calc(14*var(--u));align-items:flex-start;padding:calc(16*var(--u)) calc(18*var(--u));border-radius:calc(16*var(--u));background:linear-gradient(135deg,rgba(47,111,237,.10),rgba(226,0,26,.06));border:calc(1*var(--u)) solid rgba(47,111,237,.25);margin-bottom:calc(16*var(--u))}
+.bot .ic{width:calc(34*var(--u));height:calc(34*var(--u));color:var(--blue)}.bot p{margin:0}
+.adv{border:calc(1*var(--u)) solid var(--line);border-radius:calc(18*var(--u));margin:calc(14*var(--u)) 0;overflow:hidden;background:var(--card)}
+.adv-h{display:flex;gap:calc(14*var(--u));align-items:center;padding:calc(16*var(--u)) calc(18*var(--u));background:var(--soft)}
+.adv-i{width:calc(46*var(--u));height:calc(46*var(--u));border-radius:calc(14*var(--u));display:grid;place-items:center;color:#fff;background:var(--info);flex:none}.adv-i .ic{width:calc(26*var(--u));height:calc(26*var(--u))}
 .p-high .adv-i{background:linear-gradient(135deg,#d92d20,#ff6b3d)}.p-medium .adv-i{background:linear-gradient(135deg,#e58a00,#ffc043)}.p-low .adv-i{background:linear-gradient(135deg,#12a150,#4ade80)}.p-info .adv-i{background:linear-gradient(135deg,#2f6fed,#60a5fa)}
-.adv-s{display:inline-flex;gap:6px;align-items:center;margin-top:6px;font-size:13px;color:var(--blue);background:rgba(47,111,237,.08);padding:4px 10px;border-radius:99px}.adv-s .ic{width:15px;height:15px}.adv-p{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
-.adv-b{display:grid;grid-template-columns:1.1fr 1fr}.adv-b>div{padding:14px 18px}.adv-do{border-left:1px solid var(--line)}
-.adv-b p{margin:0}.adv-b ol{margin:0;padding-left:20px}.adv-b li{margin:6px 0}.lbl{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:6px}
-.adv-f{display:flex;flex-wrap:wrap;gap:10px 22px;padding:12px 18px;border-top:1px solid var(--line);font-size:14px;color:var(--mute)}.adv-f span{display:flex;gap:6px;align-items:center}.adv-f .ic{width:18px;height:18px}.adv-f .save{color:var(--good)}
-.pos{list-style:none;padding:0;margin:8px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px}.pos li{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:rgba(18,161,80,.08);font-size:15px}.pos .ic{color:var(--good);width:20px;height:20px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
-.kpi{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--card)}
-.kl{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);font-weight:700}.kv{font-size:28px;font-weight:800;margin:4px 0 2px;letter-spacing:-.02em;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px}.kv .b{align-self:center}
-.kv small{font-size:15px;font-weight:600;color:var(--mute);margin-left:3px}.ks{font-size:13px;font-weight:600;color:var(--ink);opacity:.8}.kh{font-size:13.5px;color:var(--mute);margin-top:6px;line-height:1.45}
-.na{color:var(--mute);font-size:15px;font-weight:600}
-.b{white-space:nowrap;display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:99px;vertical-align:middle;color:#fff;letter-spacing:.03em;text-transform:uppercase}
+.adv-s{display:inline-flex;gap:calc(6*var(--u));align-items:center;margin-top:calc(6*var(--u));font-size:calc(13*var(--u));color:var(--blue);background:rgba(47,111,237,.08);padding:calc(4*var(--u)) calc(10*var(--u));border-radius:calc(99*var(--u))}.adv-s .ic{width:calc(15*var(--u));height:calc(15*var(--u))}.adv-p{font-size:calc(12*var(--u));font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+.adv-b{display:grid;grid-template-columns:1.1fr 1fr}.adv-b>div{padding:calc(14*var(--u)) calc(18*var(--u))}.adv-do{border-left:calc(1*var(--u)) solid var(--line)}
+.adv-b p{margin:0}.adv-b ol{margin:0;padding-left:calc(20*var(--u))}.adv-b li{margin:calc(6*var(--u)) 0}.lbl{font-size:calc(12*var(--u));font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:calc(6*var(--u))}
+.adv-f{display:flex;flex-wrap:wrap;gap:calc(10*var(--u)) calc(22*var(--u));padding:calc(12*var(--u)) calc(18*var(--u));border-top:calc(1*var(--u)) solid var(--line);font-size:calc(14*var(--u));color:var(--mute)}.adv-f span{display:flex;gap:calc(6*var(--u));align-items:center}.adv-f .ic{width:calc(18*var(--u));height:calc(18*var(--u))}.adv-f .save{color:var(--good)}
+.pos{list-style:none;padding:0;margin:calc(8*var(--u)) 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,calc(280*var(--u))),1fr));gap:calc(8*var(--u))}.pos li{display:flex;gap:calc(10*var(--u));align-items:flex-start;padding:calc(10*var(--u)) calc(12*var(--u));border-radius:calc(12*var(--u));background:rgba(18,161,80,.08);font-size:calc(15*var(--u))}.pos .ic{color:var(--good);width:calc(20*var(--u));height:calc(20*var(--u))}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,calc(210*var(--u))),1fr));gap:calc(12*var(--u))}
+.kpi{border:calc(1*var(--u)) solid var(--line);border-radius:calc(14*var(--u));padding:calc(14*var(--u)) calc(16*var(--u));background:var(--card)}
+.kl{font-size:calc(12*var(--u));text-transform:uppercase;letter-spacing:.05em;color:var(--mute);font-weight:700}.kv{font-size:calc(28*var(--u));font-weight:800;margin:calc(4*var(--u)) 0 calc(2*var(--u));letter-spacing:-.02em;display:flex;flex-wrap:wrap;align-items:baseline;gap:calc(4*var(--u)) calc(6*var(--u))}.kv .b{align-self:center}
+.kv small{font-size:calc(15*var(--u));font-weight:600;color:var(--mute);margin-left:calc(3*var(--u))}.ks{font-size:calc(13*var(--u));font-weight:600;color:var(--ink);opacity:.8}.kh{font-size:calc(13.5*var(--u));color:var(--mute);margin-top:calc(6*var(--u));line-height:1.45}
+.na{color:var(--mute);font-size:calc(15*var(--u));font-weight:600}
+.b{white-space:nowrap;display:inline-block;font-size:calc(11*var(--u));font-weight:800;padding:calc(3*var(--u)) calc(9*var(--u));border-radius:calc(99*var(--u));vertical-align:middle;color:#fff;letter-spacing:.03em;text-transform:uppercase}
 .b-good{background:var(--good)}.b-warn{background:var(--warn)}.b-bad{background:var(--bad)}.b-info{background:var(--info)}
-.chart{margin:20px 0 6px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--card)}
-.chart figcaption{font-weight:700;font-size:15px;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}.how{font-weight:400;font-size:13.5px;color:var(--mute);display:flex;gap:6px;align-items:flex-start}.how .ic{width:16px;height:16px;margin-top:2px}
-.cv{position:relative;height:300px}.chart.tall .cv{height:400px}.chart.small .cv{height:240px}
-.tw{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:15px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
-th{color:var(--mute);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-td.bar{width:28%;min-width:120px}td.bar span{display:inline-block;height:12px;vertical-align:middle}.bh{background:var(--acc);border-radius:6px 0 0 6px}.bw{background:var(--blue);border-radius:0 6px 6px 0}
-.pbars{display:grid;gap:8px;max-width:640px}.pb{display:grid;grid-template-columns:110px 1fr 48px;gap:10px;align-items:center;font-size:14px}
-.pbt{height:12px;border-radius:99px;background:var(--soft);overflow:hidden}.pbf{display:block;height:100%;border-radius:99px;background:var(--info)}
+.chart{margin:calc(20*var(--u)) 0 calc(6*var(--u));padding:calc(14*var(--u));border:calc(1*var(--u)) solid var(--line);border-radius:calc(16*var(--u));background:var(--card)}
+.chart figcaption{font-weight:700;font-size:calc(15*var(--u));display:flex;flex-direction:column;gap:calc(4*var(--u));margin-bottom:calc(8*var(--u))}.how{font-weight:400;font-size:calc(13.5*var(--u));color:var(--mute);display:flex;gap:calc(6*var(--u));align-items:flex-start}.how .ic{width:calc(16*var(--u));height:calc(16*var(--u));margin-top:calc(2*var(--u))}
+.cv{position:relative;height:calc(300*var(--u))}.chart.tall .cv{height:calc(400*var(--u))}.chart.small .cv{height:calc(240*var(--u))}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:calc(15*var(--u))}th,td{padding:calc(9*var(--u)) calc(10*var(--u));border-bottom:calc(1*var(--u)) solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+th{color:var(--mute);font-weight:700;font-size:calc(12*var(--u));text-transform:uppercase;letter-spacing:.04em}
+td.bar{width:28%;min-width:calc(120*var(--u))}td.bar span{display:inline-block;height:calc(12*var(--u));vertical-align:middle}.bh{background:var(--acc);border-radius:calc(6*var(--u)) 0 0 calc(6*var(--u))}.bw{background:var(--blue);border-radius:0 calc(6*var(--u)) calc(6*var(--u)) 0}
+.pbars{display:grid;gap:calc(8*var(--u));max-width:calc(640*var(--u))}.pb{display:grid;grid-template-columns:calc(110*var(--u)) 1fr calc(48*var(--u));gap:calc(10*var(--u));align-items:center;font-size:calc(14*var(--u))}
+.pbt{height:calc(12*var(--u));border-radius:calc(99*var(--u));background:var(--soft);overflow:hidden}.pbf{display:block;height:100%;border-radius:calc(99*var(--u));background:var(--info)}
 .f-normal,.f-comfort{background:var(--acc2)}.f-reduced{background:#94a3b8}.f-eco{background:var(--good)}.f-off{background:#cbd5e1}.pbp{text-align:right;font-weight:700}
-.sched{width:100%;max-width:820px;height:auto}.sc-d,.sc-h{font-size:12px;fill:var(--mute)}.sc-red{fill:var(--soft);stroke:var(--line)}.sc-nor{fill:var(--acc2)}.sc-com{fill:var(--acc)}
-.hmap{display:grid;gap:3px;max-width:820px;overflow-x:auto}.hr{display:grid;grid-template-columns:40px repeat(24,minmax(12px,1fr));gap:3px;align-items:center}
-.hc{height:20px;border-radius:4px;background:rgba(229,90,0,var(--a));outline:1px solid var(--line);outline-offset:-1px}.hd{font-size:12px;color:var(--mute)}.hx span{font-size:11px;color:var(--mute)}
-.empty{display:flex;gap:14px;align-items:center;padding:18px;border-radius:14px;background:var(--soft);color:var(--mute)}.empty .ic{width:34px;height:34px;color:var(--warn)}.empty p{margin:0}
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.chip{font-size:13px;padding:6px 10px;border-radius:99px;background:var(--soft);border:1px solid var(--line)}.chip em{color:var(--mute);font-style:normal}.c-f{border-color:var(--bad);background:rgba(217,45,32,.08)}
-.msgs{display:grid;gap:6px}.msg{display:grid;grid-template-columns:70px 1fr auto;gap:10px;padding:9px 12px;border-radius:10px;background:var(--soft);font-size:14px}.msg .c{font-weight:800}.msg .t{color:var(--mute)}.m-f{background:rgba(217,45,32,.1)}
-.gl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:0}.gl div{padding:12px 14px;border-radius:12px;background:var(--soft)}.gl dt{font-weight:800}.gl dd{margin:4px 0 0;color:var(--mute);font-size:14.5px}
-.clamp{background:rgba(47,111,237,.1);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:14px;margin:0 0 12px}
-footer{text-align:center;color:var(--mute);font-size:13px;padding:10px 16px 30px}
-@media (max-width:760px){.adv-b{grid-template-columns:1fr}.adv-do{border-left:0;border-top:1px solid var(--line)}section,.panel{padding:18px;border-radius:16px}.cv{height:260px}.chart.tall .cv{height:320px}.msg{grid-template-columns:56px 1fr}.msg .t{grid-column:2}}
-@media print{nav{display:none}.hero{-webkit-print-color-adjust:exact;print-color-adjust:exact;padding-bottom:30px}main{margin-top:0}section{break-inside:avoid}}
-</style></head><body>
+.sched{width:100%;max-width:calc(820*var(--u));height:auto}.sc-d,.sc-h{font-size:calc(12*var(--u));fill:var(--mute)}.sc-red{fill:var(--soft);stroke:var(--line)}.sc-nor{fill:var(--acc2)}.sc-com{fill:var(--acc)}
+.hmap{display:grid;gap:calc(3*var(--u));max-width:calc(820*var(--u));overflow-x:auto}.hr{display:grid;grid-template-columns:calc(40*var(--u)) repeat(24,minmax(min(100%,calc(12*var(--u))),1fr));gap:calc(3*var(--u));align-items:center}
+.hc{height:calc(20*var(--u));border-radius:calc(4*var(--u));background:rgba(229,90,0,var(--a));outline:calc(1*var(--u)) solid var(--line);outline-offset:-1px}.hd{font-size:calc(12*var(--u));color:var(--mute)}.hx span{font-size:calc(11*var(--u));color:var(--mute)}
+.empty{display:flex;gap:calc(14*var(--u));align-items:center;padding:calc(18*var(--u));border-radius:calc(14*var(--u));background:var(--soft);color:var(--mute)}.empty .ic{width:calc(34*var(--u));height:calc(34*var(--u));color:var(--warn)}.empty p{margin:0}
+.chips{display:flex;flex-wrap:wrap;gap:calc(8*var(--u));margin-bottom:calc(12*var(--u))}.chip{font-size:calc(13*var(--u));padding:calc(6*var(--u)) calc(10*var(--u));border-radius:calc(99*var(--u));background:var(--soft);border:calc(1*var(--u)) solid var(--line)}.chip em{color:var(--mute);font-style:normal}.c-f{border-color:var(--bad);background:rgba(217,45,32,.08)}
+.msgs{display:grid;gap:calc(6*var(--u))}.msg{display:grid;grid-template-columns:calc(70*var(--u)) 1fr auto;gap:calc(10*var(--u));padding:calc(9*var(--u)) calc(12*var(--u));border-radius:calc(10*var(--u));background:var(--soft);font-size:calc(14*var(--u))}.msg .c{font-weight:800}.msg .t{color:var(--mute)}.m-f{background:rgba(217,45,32,.1)}
+.gl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,calc(280*var(--u))),1fr));gap:calc(12*var(--u));margin:0}.gl div{padding:calc(12*var(--u)) calc(14*var(--u));border-radius:calc(12*var(--u));background:var(--soft)}.gl dt{font-weight:800}.gl dd{margin:calc(4*var(--u)) 0 0;color:var(--mute);font-size:calc(14.5*var(--u))}
+.clamp{background:rgba(47,111,237,.1);color:var(--ink);border-radius:calc(12*var(--u));padding:calc(10*var(--u)) calc(14*var(--u));font-size:calc(14*var(--u));margin:0 0 calc(12*var(--u))}
+footer{text-align:center;color:var(--mute);font-size:calc(13*var(--u));padding:calc(10*var(--u)) calc(16*var(--u)) calc(30*var(--u))}
+@media (max-width:760px){.adv-b{grid-template-columns:1fr}.adv-do{border-left:0;border-top:calc(1*var(--u)) solid var(--line)}section,.panel{padding:calc(18*var(--u));border-radius:calc(16*var(--u))}.cv{height:calc(260*var(--u))}.chart.tall .cv{height:calc(320*var(--u))}.msg{grid-template-columns:calc(56*var(--u)) 1fr}.msg .t{grid-column:2}}
+@media print{nav{display:none}.hero{-webkit-print-color-adjust:exact;print-color-adjust:exact;padding-bottom:calc(30*var(--u))}main{margin-top:0}section{break-inside:avoid}}
+.cards>*,.kpi,.adv,.chip{min-width:0;overflow-wrap:break-word;hyphens:auto}</style></head><body>
 <header class="hero"><div class="in">
  <div class="ht"><h1>${tr('Il tuo impianto di riscaldamento', 'Your heating system')}</h1>
  <div class="meta">${tr('Periodo', 'Period')}: <b>${fmtDate(localDay(startT))} – ${fmtDate(localDay(NOW))}</b> (${coveredDays} ${tr('giorni', 'days')}) · ${ni(sampleCount)} ${tr('letture', 'readings')} · ${tr('generato il', 'generated')} ${new Date().toLocaleString(LOCALE)}</div>
@@ -969,24 +1247,28 @@ footer{text-align:center;color:var(--mute);font-size:13px;padding:10px 16px 30px
  <div class="rings">${Object.entries(scores).filter(([, v]) => v !== null).map(([k, v]) => ring(v, 92, scoreLabels[k], 9)).join('')}</div>
 </div>
 
-<section id="advice"><div class="sh"><div class="si">${icon('bot')}</div><div><h2>${tr('Consigli dell’assistente', 'Assistant advice')}</h2><p class="intro">${tr('Ho analizzato i dati della caldaia, il meteo reale della tua zona e i contatori ufficiali. Ecco cosa ho notato, in ordine di importanza, con cosa fare e quanto puoi risparmiare.', 'I analysed the boiler data, the real weather in your area and the official counters. Here is what I noticed, by importance, with what to do and how much you can save.')}</p></div></div>
+<section id="advice"><div class="sh"><div class="si">${icon('bot')}</div><div><h2>${tr('Consigli dell’assistente', 'Assistant advice')}</h2><p class="intro">${tr('Ho analizzato i dati della caldaia, il meteo della tua zona e i contatori ufficiali. Ecco cosa ho notato, in ordine di importanza, con cosa fare e quanto puoi risparmiare.', 'I analysed the boiler data, the weather in your area and the official counters. Here is what I noticed, by importance, with what to do and how much you can save.')}</p></div></div>
  ${advice.length ? `<div class="bot">${icon('bot')}<p>${tr(`Ho trovato <b>${advice.length}</b> ${advice.length === 1 ? 'suggerimento' : 'suggerimenti'}${totalSave > 5 ? `, per un risparmio stimato di circa <b>${eur(totalSave)} all’anno</b>` : ''}. Le stime usano il tuo consumo reale e il prezzo del gas di ${nf(GAS_PRICE, 2)} €/m³.`, `I found <b>${advice.length}</b> suggestion${advice.length === 1 ? '' : 's'}${totalSave > 5 ? `, for an estimated saving of about <b>${eur(totalSave)} a year</b>` : ''}. Estimates use your real consumption and a gas price of €${nf(GAS_PRICE, 2)}/m³.`)}</p></div>${adviceHtml}` : `<div class="bot">${icon('bot')}<p>${tr('Non ho trovato nulla da correggere nel periodo analizzato. Ottimo!', 'I found nothing to fix in the analysed period. Well done!')}</p></div>`}
  ${positives.length ? `${sub(tr('Cosa va bene', 'What is going well'))}<ul class="pos">${positives.map(p => `<li>${icon('check')}<span>${p}</span></li>`).join('')}</ul>` : ''}
 </section>
-${S_OVERVIEW}${S_GAS}${S_HEAT}${S_BURNER}${S_DHW}${S_HOUSE}${S_API}${S_ENERGY}${S_ROOMS}${S_MSG}${S_GLOSS}
+${S_OVERVIEW}${S_GAS}${S_HEAT}${S_SENSOR}${S_BURNER}${S_COMB}${S_DHW}${S_HOUSE}${S_API}${S_ENERGY}${S_ROOMS}${S_MSG}${S_GLOSS}
 </main>
 <footer>${tr('Generato da homebridge-viessmann-vicare', 'Generated by homebridge-viessmann-vicare')} · ${esc(path.basename(CSV_FILE))}${loc ? ` · ${tr('meteo', 'weather')}: Open-Meteo.com` : ''}</footer>
 <script>
 const D=${JSON.stringify(chart)};
 const L=${JSON.stringify({
-  room: tr('Stanza', 'Room'), set: tr('Impostata', 'Set'), flow: tr('Mandata (bruciatore acceso)', 'Flow (burner on)'), sensor: tr('Sonda esterna caldaia', 'Boiler outdoor sensor'), real: tr('Esterna reale', 'Real outdoor'), dhw: tr('Acqua calda', 'Hot water'), ign: IGN_DAILY ? tr('Accensioni/giorno', 'Starts/day') : tr('Accensioni/ora', 'Starts/hour'),
+  room: tr('Stanza', 'Room'), set: tr('Impostata', 'Set'), flow: tr('Mandata (bruciatore acceso)', 'Flow (burner on)'), sensor: tr('Sonda esterna caldaia', 'Boiler outdoor sensor'), real: tr('Esterna (meteo di zona)', 'Outdoor (area weather)'), dhw: tr('Acqua calda', 'Hot water'), ign: IGN_DAILY ? tr('Accensioni/giorno', 'Starts/day') : tr('Accensioni/ora', 'Starts/hour'),
   heat: tr('Riscaldamento', 'Heating'), dhwGas: tr('Acqua calda', 'Hot water'), tmean: tr('Temp. esterna media', 'Mean outdoor temp.'), day: tr('Giorni', 'Days'), model: tr('Modello', 'Model'),
   starts: tr('Accensioni', 'Starts'), calc: tr('Curva calcolata', 'Calculated curve'), meas: tr('Mandata misurata', 'Measured flow'), target: tr('Obiettivo', 'Target'), mod: tr('Modulazione', 'Modulation'),
-  pv: tr('Fotovoltaico (W)', 'PV (W)'), batt: tr('Batteria (%)', 'Battery (%)'), outX: tr('Temperatura esterna (°C)', 'Outdoor temperature (°C)') })};
+  pv: tr('Fotovoltaico', 'Solar'), batt: tr('Batteria (%)', 'Battery (%)'), house: tr('Consumo casa', 'Home consumption'), draw: tr('Presa dalla rete', 'From the grid'), feed: tr('Immessa in rete', 'To the grid'), wall: tr('Auto (wallbox)', 'Car (wallbox)'), kwh: 'kWh', w: 'W', outX: tr('Temperatura esterna (°C)', 'Outdoor temperature (°C)') })};
 (function(){
 if(!window.Chart){document.querySelectorAll('.chart').forEach(e=>e.style.display='none');return;}
 const dark=matchMedia('(prefers-color-scheme: dark)').matches;
-Chart.defaults.color=dark?'#9aa4ba':'#5b6478';Chart.defaults.borderColor=dark?'#26304a':'#e3e7ef';Chart.defaults.font.family='Inter,-apple-system,Segoe UI,Roboto,sans-serif';Chart.defaults.font.size=12.5;
+// Validated categorical palette (dataviz reference order), stepped per mode
+const C=dark?{b:'#3987e5',o:'#d95926',a:'#199e70',y:'#c98500',m:'#d55181',g:'#008300',surf:'#141b2e',mute:'rgba(154,164,186,.45)'}:{b:'#2a78d6',o:'#eb6834',a:'#1baf7a',y:'#eda100',m:'#e87ba4',g:'#008300',surf:'#ffffff',mute:'rgba(91,100,120,.35)'};
+const dot=(c,r)=>({backgroundColor:c,borderColor:C.surf,borderWidth:1.5,pointRadius:r||4.5,pointHoverRadius:(r||4.5)+2});
+const tFoot=(arr)=>({callbacks:{footer:(it)=>{const v=arr[it[0].dataIndex];return v===null||v===undefined?'':'${tr("Esterna (meteo di zona)","Outdoor (area weather)")}: '+v.toFixed(1)+' °C';}}});
+Chart.defaults.color=dark?'#9aa4ba':'#5b6478';Chart.defaults.borderColor=dark?'#26304a':'#e3e7ef';Chart.defaults.font.family='Inter,-apple-system,Segoe UI,Roboto,sans-serif';Chart.defaults.font.size=12.5*Math.min(1.7,Math.max(1,0.0005*innerWidth+0.3));
 Chart.defaults.plugins.legend.labels.usePointStyle=true;Chart.defaults.plugins.legend.position='bottom';Chart.defaults.maintainAspectRatio=false;
 const zoom=window.ChartZoom?{zoom:{drag:{enabled:true,backgroundColor:'rgba(47,111,237,.15)'},mode:'x'},pan:{enabled:true,mode:'x',modifierKey:'shift'}}:undefined;
 const time={type:'time',time:{tooltipFormat:'dd/MM/yyyy HH:mm',displayFormats:{hour:'HH:mm',day:'dd/MM',week:'dd/MM',month:'MMM yy'}},ticks:{maxRotation:0,autoSkipPadding:18}};
@@ -994,25 +1276,33 @@ const grad=(ctx,c)=>{const g=ctx.createLinearGradient(0,0,0,ctx.canvas.height);g
 const mk=(id,cfg)=>{const el=document.getElementById(id);if(!el)return;const c=new Chart(el,cfg);el.addEventListener('dblclick',()=>c.resetZoom&&c.resetZoom());return c;};
 const line=(label,data,color,extra)=>Object.assign({type:'line',label,data,borderColor:color,backgroundColor:color,pointRadius:0,borderWidth:2,tension:.25},extra||{});
 mk('cOverview',{data:{datasets:[
-  line(L.room,D.overview.room,'#12a150',{borderWidth:2.5}),line(L.set,D.overview.set,'#e5a000',{borderDash:[6,4],stepped:true,borderWidth:1.5,tension:0}),
-  line(L.flow,D.overview.flow,'#ef4444',{borderWidth:1.2}),line(L.dhw,D.overview.dhw,'#a855f7',{borderWidth:1,hidden:true}),
-  line(L.sensor,D.overview.sensor,'#94a3b8',{borderWidth:1}),line(L.real,D.overview.real,'#2f6fed',{pointRadius:3,borderWidth:2.5}),
-  {type:'bar',label:L.ign,data:D.overview.ign,backgroundColor:'rgba(255,122,69,.45)',yAxisID:'y2',barThickness:3}]},
+  line(L.room,D.overview.room,C.a,{borderWidth:2.5}),line(L.set,D.overview.set,C.y,{borderDash:[6,4],stepped:true,borderWidth:2,tension:0}),
+  line(L.flow,D.overview.flow,C.o,{borderWidth:1.5}),line(L.dhw,D.overview.dhw,C.m,{borderWidth:1.5,hidden:true}),
+  line(L.sensor,D.overview.sensor,C.g,{borderWidth:1.5}),line(L.real,D.overview.real,C.b,{pointRadius:3,borderWidth:2.5}),
+  {type:'bar',label:L.ign,data:D.overview.ign,backgroundColor:C.mute,yAxisID:'y2',barThickness:3}]},
   options:{interaction:{mode:'nearest',axis:'x',intersect:false},scales:{x:time,y:{title:{display:true,text:'°C'}},y2:{position:'right',beginAtZero:true,grid:{display:false},title:{display:true,text:L.ign}}},plugins:{zoom}}});
 mk('cGas',{data:{labels:D.gas.labels,datasets:[
-  {type:'bar',label:L.heat,data:D.gas.h,backgroundColor:'#e2001a',stack:'g',borderRadius:3},{type:'bar',label:L.dhwGas,data:D.gas.w,backgroundColor:'#2f6fed',stack:'g',borderRadius:3},
-  line(L.tmean,D.gas.t,'#0ea5e9',{yAxisID:'y2',pointRadius:1.5,borderWidth:1.5,spanGaps:true})]},
-  options:{scales:{x:{stacked:true,ticks:{maxTicksLimit:12,maxRotation:0}},y:{stacked:true,beginAtZero:true,title:{display:true,text:'m³'}},y2:{position:'right',grid:{display:false},title:{display:true,text:'°C'}}}}});
-if(D.dd.pts.length)mk('cDD',{data:{datasets:[{type:'scatter',label:L.day,data:D.dd.pts,backgroundColor:'rgba(226,0,26,.5)',pointRadius:3.5},D.dd.line?line(L.model,D.dd.line,'#2f6fed',{borderWidth:2.5,tension:0}):null].filter(Boolean)},
+  {type:'bar',label:L.heat,data:D.gas.h,backgroundColor:C.o,stack:'g',borderRadius:4,maxBarThickness:48},{type:'bar',label:L.dhwGas,data:D.gas.w,backgroundColor:C.b,stack:'g',borderRadius:4,maxBarThickness:48}]},
+  options:{interaction:{mode:'index',intersect:false},plugins:{tooltip:tFoot(D.gas.t)},scales:{x:{stacked:true,ticks:{maxTicksLimit:12,maxRotation:0}},y:{stacked:true,beginAtZero:true,title:{display:true,text:'m³'}}}}});
+mk('cTemp',{data:{labels:D.temp.labels,datasets:[line(L.real,D.temp.zone,C.b,{pointRadius:D.temp.labels.length>60?0:3,borderWidth:2,spanGaps:true}),line(L.sensor,D.temp.sensor,C.o,{pointRadius:D.temp.labels.length>60?0:3,borderWidth:2,spanGaps:true})]},
+  options:{interaction:{mode:'index',intersect:false},scales:{x:{ticks:{maxTicksLimit:12,maxRotation:0}},y:{title:{display:true,text:'°C'}}}}});
+if(D.dd.pts.length)mk('cDD',{data:{datasets:[Object.assign({type:'scatter',label:L.day,data:D.dd.pts},dot(C.o)),D.dd.line?line(L.model,D.dd.line,C.b,{borderWidth:2.5,tension:0}):null].filter(Boolean)},
   options:{scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{beginAtZero:true,title:{display:true,text:'m³'}}},plugins:{tooltip:{callbacks:{label:c=>(c.raw.d?c.raw.d+': ':'')+c.raw.y+' m³ @ '+c.raw.x+' °C'}}}}});
-if(D.curve)mk('cCurve',{data:{datasets:[line(L.calc,D.curve.line,'#ff7a45',{borderWidth:3,tension:.3}),{type:'scatter',label:L.meas,data:D.curve.pts,backgroundColor:'rgba(47,111,237,.45)',pointRadius:3}]},
+if(D.curve)mk('cCurve',{data:{datasets:[line(L.calc,D.curve.line,C.o,{borderWidth:2.5,tension:.3}),Object.assign({type:'scatter',label:L.meas,data:D.curve.pts},dot(C.b))]},
   options:{scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{title:{display:true,text:'°C'}}}}});
-if(D.starts)mk('cStarts',{data:{labels:D.starts.labels,datasets:[{type:'bar',label:L.starts,data:D.starts.v,backgroundColor:'#ff7a45',borderRadius:3},line(L.tmean,D.starts.t,'#2f6fed',{yAxisID:'y2',pointRadius:1.5,borderWidth:1.5,spanGaps:true})]},
-  options:{scales:{x:{ticks:{maxTicksLimit:12,maxRotation:0}},y:{beginAtZero:true},y2:{position:'right',grid:{display:false},title:{display:true,text:'°C'}}}}});
-if(D.startsOut.length)mk('cStartsOut',{type:'scatter',data:{datasets:[{label:L.starts,data:D.startsOut,backgroundColor:'rgba(255,122,69,.6)',pointRadius:3.5}]},options:{plugins:{legend:{display:false}},scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{beginAtZero:true,title:{display:true,text:L.starts}}}}});
-if(D.mod)mk('cMod',{type:'scatter',data:{datasets:[{label:L.mod,data:D.mod,backgroundColor:'rgba(168,85,247,.6)',pointRadius:2.5}]},options:{plugins:{legend:{display:false},zoom},scales:{x:time,y:{beginAtZero:true,max:100,title:{display:true,text:'%'}}}}});
-mk('cDhw',{data:{datasets:[line(L.dhw,D.dhw.t,'#ef4444',{borderWidth:1.5,fill:true,backgroundColor:c=>grad(c.chart.ctx,'#ef4444')}),line(L.target,D.dhw.s,'#e5a000',{borderDash:[6,4],stepped:true,tension:0,borderWidth:1.5})]},options:{scales:{x:time,y:{title:{display:true,text:'°C'}}},plugins:{zoom}}});
-if(D.energy)mk('cEnergy',{data:{datasets:[line(L.pv,D.energy.pv,'#f5b400',{fill:true,backgroundColor:c=>grad(c.chart.ctx,'#f5b400')}),line(L.batt,D.energy.batt,'#12a150',{yAxisID:'y2'})]},options:{scales:{x:time,y:{beginAtZero:true},y2:{position:'right',min:0,max:100,grid:{display:false}}},plugins:{zoom}}});
+if(D.starts)mk('cStarts',{data:{labels:D.starts.labels,datasets:[{type:'bar',label:L.starts,data:D.starts.v,backgroundColor:C.o,borderRadius:4,maxBarThickness:48}]},
+  options:{plugins:{legend:{display:false},tooltip:tFoot(D.starts.t)},scales:{x:{ticks:{maxTicksLimit:12,maxRotation:0}},y:{beginAtZero:true,title:{display:true,text:L.starts}}}}});
+if(D.startsOut.length)mk('cStartsOut',{type:'scatter',data:{datasets:[Object.assign({label:L.starts,data:D.startsOut},dot(C.o))]},options:{plugins:{legend:{display:false}},scales:{x:{type:'linear',title:{display:true,text:L.outX}},y:{beginAtZero:true,title:{display:true,text:L.starts}}}}});
+if(D.mod)mk('cMod',{type:'scatter',data:{datasets:[Object.assign({label:L.mod,data:D.mod},dot(C.m,3))]},options:{plugins:{legend:{display:false},zoom},scales:{x:time,y:{beginAtZero:true,max:100,title:{display:true,text:'%'}}}}});
+mk('cDhw',{data:{datasets:[line(L.dhw,D.dhw.t,C.o,{borderWidth:2,fill:true,backgroundColor:c=>grad(c.chart.ctx,C.o)}),line(L.target,D.dhw.s,C.b,{borderDash:[6,4],stepped:true,tension:0,borderWidth:2})]},options:{scales:{x:time,y:{title:{display:true,text:'°C'}}},plugins:{zoom}}});
+if(D.eDay){const ds=[];const bar=(l,d,c)=>({type:'bar',label:l,data:d,backgroundColor:c,borderRadius:4,maxBarThickness:28});
+if(D.eDay.pv)ds.push(bar(L.pv,D.eDay.pv,C.y));if(D.eDay.draw)ds.push(bar(L.draw,D.eDay.draw,C.o));if(D.eDay.feed)ds.push(bar(L.feed,D.eDay.feed,C.a));
+if(D.eDay.house)ds.push(line(L.house,D.eDay.house,C.b,{borderWidth:2.5,tension:.3,spanGaps:true,pointRadius:3.5,pointBackgroundColor:C.b,pointBorderColor:C.surf,pointBorderWidth:1.5,order:-1}));
+mk('cEnergyDay',{data:{labels:D.eDay.labels,datasets:ds},options:{scales:{x:{ticks:{maxTicksLimit:12,maxRotation:0}},y:{beginAtZero:true,title:{display:true,text:L.kwh}}}}});}
+if(D.energy){const ds=[];if(D.energy.pv)ds.push(line(L.pv,D.energy.pv,C.y,{fill:true,backgroundColor:c=>grad(c.chart.ctx,C.y)}));if(D.energy.house)ds.push(line(L.house,D.energy.house,C.b));
+if(D.energy.draw)ds.push(line(L.draw,D.energy.draw,C.o));if(D.energy.feed)ds.push(line(L.feed,D.energy.feed,C.a));if(D.energy.wall)ds.push(line(L.wall,D.energy.wall,C.m));
+mk('cEnergy',{data:{datasets:ds},options:{scales:{x:time,y:{beginAtZero:true,title:{display:true,text:L.w}}},plugins:{zoom}}});}
+if(D.batt)mk('cBatt',{data:{datasets:[line(L.batt,D.batt,C.a,{fill:true,backgroundColor:c=>grad(c.chart.ctx,C.a)})]},options:{plugins:{legend:{display:false},zoom},scales:{x:time,y:{min:0,max:100,title:{display:true,text:'%'}}}}});
 })();
 </script></body></html>`;
 

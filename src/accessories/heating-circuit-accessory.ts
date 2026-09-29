@@ -383,6 +383,45 @@ export class ViessmannHeatingCircuitAccessory {
     }
   }
 
+  /**
+   * "Heating" / "Idle" under the tile in Apple Home. HEATING only while the burner is really
+   * heating this circuit: burner on, circuit in a heating program (not Off / Holiday / standby),
+   * circuit pump running when the boiler reports it, and not busy with a hot-water charge.
+   * Otherwise IDLE (the circuit is on, but nothing is being heated right now), or INACTIVE when off.
+   */
+  private burnerOn = false;
+  private circuitPumpOn?: boolean;
+  private dhwCharging = false;
+  private heaterState(): number {
+    const S = this.platform.Characteristic.CurrentHeaterCoolerState;
+    const p = this.plan();
+    if (p === 'off' || p === 'holiday' || this.currentMode === 'standby') return S.INACTIVE;
+    const heating = this.burnerOn && !this.dhwCharging && this.circuitPumpOn !== false;
+    return heating ? S.HEATING : S.IDLE;
+  }
+
+  /** Reads burner / circuit pump / hot-water charging from the device features. */
+  private updateHeatingActivity(features: any[]) {
+    const val = (name: string, prop: string) => features.find((f: any) => f.feature === name)?.properties?.[prop]?.value;
+    const burner = val('heating.burners.0', 'active') ?? val('heating.burner', 'active');
+    if (typeof burner === 'boolean') this.burnerOn = burner;
+    const pump = val(`heating.circuits.${this.circuitNumber}.circulation.pump`, 'status');
+    this.circuitPumpOn = pump === undefined ? undefined : pump === 'on';
+    const charging = val('heating.dhw.charging', 'active');
+    this.dhwCharging = charging === true;
+    const before = this.lastHeaterState;
+    const now = this.heaterState();
+    this.lastHeaterState = now;
+    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState, now);
+    if (before !== now) this.refreshLevelThermostats();
+    if (before !== undefined && before !== now) {
+      const S = this.platform.Characteristic.CurrentHeaterCoolerState;
+      const txt = now === S.HEATING ? 'HEATING (burner on for this circuit)' : now === S.IDLE ? 'IDLE (circuit on, burner not heating it)' : 'INACTIVE';
+      this.platform.log.info(`🔥 Riscaldamento ${this.circuitNumber}: ${txt}`);
+    }
+  }
+  private lastHeaterState?: number;
+
   private setupHeaterCoolerService() {
     // Active characteristic (On/Off)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.Active)
@@ -394,11 +433,7 @@ export class ViessmannHeatingCircuitAccessory {
     // Current Heater Cooler State (read-only)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
       .onGet(() => {
-        if (this.plan() === 'off' || this.plan() === 'holiday') {
-          return this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE;
-        }
-        // For heating circuits, we're always in heating mode when active
-        return this.platform.Characteristic.CurrentHeaterCoolerState.HEATING;
+        return this.heaterState();
       });
 
     // Target Heater Cooler State
@@ -488,7 +523,7 @@ export class ViessmannHeatingCircuitAccessory {
     // two minutes later (a level cannot be forced on — ViCare has no such command).
     const isOn = () => this.levelInForce() === prog || (this.levelEditUntil[prog] ?? 0) > Date.now();
     svc.getCharacteristic(C.CurrentHeatingCoolingState)
-      .onGet(() => this.levelInForce() === prog ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
+      .onGet(() => this.levelInForce() === prog && this.heaterState() === this.platform.Characteristic.CurrentHeaterCoolerState.HEATING ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
     const tgt = svc.getCharacteristic(C.TargetHeatingCoolingState);
     tgt.setProps({ validValues: [C.TargetHeatingCoolingState.OFF, C.TargetHeatingCoolingState.HEAT] });
     tgt.onGet(() => isOn() ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF)
@@ -557,7 +592,7 @@ export class ViessmannHeatingCircuitAccessory {
       svc.updateCharacteristic(C.TargetTemperature, v);
       const inForce = this.levelInForce() === prog;
       const on = inForce || (this.levelEditUntil[prog] ?? 0) > Date.now();
-      svc.updateCharacteristic(C.CurrentHeatingCoolingState, inForce ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
+      svc.updateCharacteristic(C.CurrentHeatingCoolingState, inForce && this.heaterState() === this.platform.Characteristic.CurrentHeaterCoolerState.HEATING ? C.CurrentHeatingCoolingState.HEAT : C.CurrentHeatingCoolingState.OFF);
       svc.updateCharacteristic(C.TargetHeatingCoolingState, on ? C.TargetHeatingCoolingState.HEAT : C.TargetHeatingCoolingState.OFF);
     }
   }
@@ -979,17 +1014,17 @@ export class ViessmannHeatingCircuitAccessory {
       this.holidayService?.updateCharacteristic(C.On, p === 'holiday');
       this.holidayAtHomeService?.updateCharacteristic(C.On, p === 'holidayAtHome');
       // The dial shows the temperature in force: Holiday → reduced, Holiday at home → normal,
-      // Comfort → comfort. Otherwise it keeps what the schedule reports.
+      // Comfort / Extended heating → comfort (extended heating runs at the comfort temperature). Otherwise it keeps what the schedule reports.
       const t = p === 'holiday' ? this.programTemperatures.reduced
         : p === 'holidayAtHome' ? this.programTemperatures.normal
-        : p === 'comfort' ? this.programTemperatures.comfort : undefined;
+        : p === 'comfort' || p === 'extended' ? this.programTemperatures.comfort : undefined;
       if (t) {
         this.states.HeatingThresholdTemperature = t;
         this.heaterCoolerService.updateCharacteristic(C.HeatingThresholdTemperature, this.getThresholdForDisplay());
       }
       const active = p !== 'off' && p !== 'holiday';
       this.heaterCoolerService.updateCharacteristic(C.Active, active ? C.Active.ACTIVE : C.Active.INACTIVE);
-      this.heaterCoolerService.updateCharacteristic(C.CurrentHeaterCoolerState, active ? C.CurrentHeaterCoolerState.HEATING : C.CurrentHeaterCoolerState.INACTIVE);
+      this.heaterCoolerService.updateCharacteristic(C.CurrentHeaterCoolerState, this.heaterState());
       this.refreshLevelThermostats();
     } finally {
       setImmediate(() => { this._updatingCharacteristics = false; });
@@ -1136,9 +1171,7 @@ export class ViessmannHeatingCircuitAccessory {
     this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
       isActive ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
     
-    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState,
-      isActive ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
-                 this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE);
+    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState, this.heaterState());
     
     this.platform.log.debug(`Heating Circuit ${this.circuitNumber} States - Mode: ${this.currentMode.toUpperCase()}, Active: ${isActive}`);
   }
@@ -1487,8 +1520,9 @@ export class ViessmannHeatingCircuitAccessory {
       this.updateServiceNames();
     }
 
-    // Update HeatingThresholdTemperature to match the active program
-    const activeTemp = this.programTemperatures[activeProgram as ProgramType];
+    // HeatingThresholdTemperature = temperature in force (Extended heating / Comfort → comfort,
+    // Holiday → reduced, Holiday at home → normal, otherwise the program of the time schedule)
+    const activeTemp = this.programTemperatures[(this.levelInForce() ?? activeProgram) as ProgramType];
     if (Date.now() < this.pendingTempUntil) {
       if (activeTemp !== this.pendingPreviousTemp && activeTemp !== this.pendingExpectedTemp) {
         this.platform.log.info(`🔀 HC${this.circuitNumber} external temp change while guard active: API=${activeTemp}°C — applying and resetting guard`);
@@ -1500,7 +1534,7 @@ export class ViessmannHeatingCircuitAccessory {
       } else {
         this.platform.log.debug(`🌡️ HC${this.circuitNumber} temp: API returned ${activeTemp}°C but command guard active — keeping ${this.states.HeatingThresholdTemperature}°C`);
       }
-    } else if (activeTemp !== this.states.HeatingThresholdTemperature) {
+    } else if (typeof activeTemp === 'number' && activeTemp > 0 && activeTemp !== this.states.HeatingThresholdTemperature) {
       this.states.HeatingThresholdTemperature = activeTemp;
       this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature, activeTemp);
     }
@@ -1615,6 +1649,9 @@ export class ViessmannHeatingCircuitAccessory {
     } else {
       this.platform.log.warn(`🌡️ Riscaldamento ${this.circuitNumber}: feature '${circuitPrefix}.operating.modes.active' not found — mode NOT updated`);
     }
+
+    // "Heating" only while the burner is really heating this circuit
+    this.updateHeatingActivity(features);
 
     // Update humidity if available
     const humidityFeature = features.find(f => f.feature.includes('sensors.humidity'));

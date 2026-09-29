@@ -52,12 +52,12 @@
         "description": "IP address for OAuth redirect (auto-detected if not specified). Use the IP where Homebridge is running."
       },
       "redirectPort": {
-        "title": "OAuth Redirect Port",
+        "title": "Dashboard / OAuth Redirect Port",
         "type": "integer",
         "default": 4200,
         "minimum": 1024,
         "maximum": 65535,
-        "description": "Port for OAuth callback server. Must be accessible from your browser and not blocked by firewall."
+        "description": "Port of the Viessmann dashboard (login, reports, flue gas analyses, status) and of the OAuth callback: open http://<homebridge-ip>:<port>. Must match the redirect URI registered in the Viessmann developer portal."
       },
       "authTimeout": {
         "title": "OAuth Authentication Timeout (ms)",
@@ -164,18 +164,18 @@
         "description": "Enable verbose debug logging for troubleshooting. Warning: May expose sensitive information in logs."
       },
       "reportServerPort": {
-        "title": "Report Server Port",
+        "title": "Report Server Port (not used since 2.0.81)",
         "type": "integer",
         "default": 0,
         "minimum": 0,
         "maximum": 65535,
-        "description": "Port for the Viessmann history report web server (0 = disabled). E.g. 3001"
+        "description": "No longer used: reports are part of the dashboard on the redirect port (default 4200). Kept only so existing configurations still validate."
       },
       "reportServerPath": {
-        "title": "Report Server Data Path",
+        "title": "Data Path (dashboard and reports)",
         "type": "string",
         "default": "/var/lib/homebridge",
-        "description": "Path to Homebridge data directory containing viessmann-history-*.csv files"
+        "description": "Homebridge data directory with viessmann-history-*.csv; reports and flue gas analyses are stored here too. Default: the Homebridge storage path."
       },
       "forceServiceRecreation": {
         "title": "Force Service Recreation",
@@ -459,7 +459,13 @@
             "title": "Boiler alarm sensor",
             "type": "boolean",
             "default": true,
-            "description": "Contact sensor that opens when the boiler reports a fault code (F.xx) or the water pressure is outside 0.8–3.0 bar. Apple Home can send a notification and run automations."
+            "description": "Contact sensor that opens when the boiler reports a fault code (F.xx), is locked out after a fault (reset needed) or the water pressure is outside 0.8–3.0 bar. Apple Home can send a notification and run automations."
+          },
+          "exposeWaterPressureEve": {
+            "title": "Water pressure in the Eve app",
+            "type": "boolean",
+            "default": true,
+            "description": "Shows the heating-system water pressure in the Eve app as \"Air pressure\" in hPa (1200 hPa = 1.2 bar). Apple Home has no pressure sensor type, so it is not shown there."
           },
           "dhwTemperatureDisplay": {
             "title": "Hot water temperature shown in Apple Home",
@@ -550,6 +556,42 @@
             "type": "boolean",
             "default": true,
             "description": "Each temperature level of the heating circuit appears as a thermostat: turning its dial changes that level on the boiler (the same as ViCare → heating circuit → Reduced / Normal / Comfort)."
+          },
+          "curveAutoTune": {
+            "title": "Automatic heating-curve optimisation",
+            "type": "boolean",
+            "default": false,
+            "description": "Once a day the plugin compares the room temperature with the program temperature over the last 48 h and corrects the heating curve by one small step (slope 0.1 or shift 1), only on heating days, within the limits below and at most once every 48 h. Every change is logged and shown in the dashboard, where the starting curve can be restored. Needs a room temperature (room sensor or ViCare Smart Climate)."
+          },
+          "curveAutoTuneIntervalHours": {
+            "title": "Check every (hours)",
+            "type": "integer",
+            "default": 24,
+            "minimum": 12,
+            "maximum": 168,
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
+          },
+          "curveAutoTuneMaxSlopeDelta": {
+            "title": "Max slope change from the starting curve",
+            "type": "number",
+            "default": 0.3,
+            "minimum": 0.1,
+            "maximum": 1,
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
+          },
+          "curveAutoTuneMaxShiftDelta": {
+            "title": "Max shift change from the starting curve",
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10,
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
           }
         }
       },
@@ -634,7 +676,15 @@
         "default": 600,
         "minimum": 120,
         "maximum": 3600,
-        "description": "Maximum time in seconds for report generation. RPi 3 benchmark: ~365s for 90 days / ~1460s for 365 days. Default: 600s. Range: 120–3600s."
+        "description": "Maximum time in seconds for report generation from the dashboard. RPi 3 benchmark: ~365s for 90 days / ~1460s for 365 days. Default: 600s. Range: 120–3600s."
+      },
+      "reportRetentionDays": {
+        "title": "Keep saved reports (days)",
+        "type": "integer",
+        "default": 30,
+        "minimum": 1,
+        "maximum": 3650,
+        "description": "Reports created from the dashboard are deleted automatically after this many days."
       },
       "logging": {
         "title": "📊 History Logging",
@@ -747,6 +797,18 @@
     },
     {
       "type": "fieldset",
+      "title": "🔥 Dashboard & reports",
+      "description": "The dashboard is at http://<homebridge-ip>:<redirect port> (default 4200): Viessmann login, reports, flue gas analyses and API status on one page.",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "reportServerPath",
+        "reportServerTimeout",
+        "reportRetentionDays"
+      ]
+    },
+    {
+      "type": "fieldset",
       "title": "⚙️ Manual Authentication (Advanced)",
       "description": "Only required if authMethod is 'manual'. For headless/server environments where browser OAuth isn't possible.",
       "expandable": true,
@@ -853,6 +915,7 @@
         "features.enableRoomSensors",
         "features.enableRoomSensorDiscovery",
         "features.enableBoilerAlarm",
+        "features.exposeWaterPressureEve",
         "features.dhwTemperatureDisplay",
         "features.dhwPeakHours",
         "features.alarmNotifyUrl",
@@ -861,6 +924,10 @@
         "features.holidayDays",
         "features.holidayAtHomeDays",
         "features.exposeProgramTemperatures",
+        "features.curveAutoTune",
+        "features.curveAutoTuneIntervalHours",
+        "features.curveAutoTuneMaxSlopeDelta",
+        "features.curveAutoTuneMaxShiftDelta",
         "features.enableLegacyDiagnosticSensors"
       ]
     },

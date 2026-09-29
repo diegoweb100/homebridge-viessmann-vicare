@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.80';
+export const PLUGIN_VERSION = '2.0.81';
 
 /**
  * Default configuration values
@@ -73,6 +73,12 @@ export const DEFAULT_CONFIG = {
     holidayAtHomeDays: 7,
     // Reduced / Normal / Comfort temperatures as thermostats in Apple Home (their dial changes the level)
     exposeProgramTemperatures: true,
+    exposeWaterPressureEve: true,
+    // Automatic heating-curve optimisation (off by default): small steps, within limits, logged
+    curveAutoTune: false,
+    curveAutoTuneIntervalHours: 24,
+    curveAutoTuneMaxSlopeDelta: 0.3,
+    curveAutoTuneMaxShiftDelta: 3,
     // Optional push message when the boiler alarm opens/clears ({text} placeholder → GET)
     alarmNotifyUrl: '',
     // Hot water mode used when the active mode is switched off / hot water is switched on

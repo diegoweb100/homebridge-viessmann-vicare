@@ -22,6 +22,8 @@ export class ViessmannBoilerAccessory {
   private waterPressureService?: Service;
   private alarmService?: Service;
   private activeFaults: string[] = [];
+  private malfunctionLock = false;   // device.lock.malfunction: boiler locked out after a fault
+  private evePressureService?: Service;
   
   private supportsTemperatureControl = false;
   private historyLogger?: ViessmannHistoryLogger;
@@ -690,6 +692,48 @@ export class ViessmannBoilerAccessory {
 
     // 8. Boiler alarm (faults / pressure) — a real alert, replaces the leak-sensor trick
     this.setupAlarmService(installationName, boilerName, subtypeVersion);
+
+    // 9. Water pressure for the Eve app (Apple Home has no pressure sensor type)
+    this.setupEvePressureService(installationName, boilerName);
+  }
+
+  /**
+   * Heating-system water pressure as an Eve "Air Pressure" value. Eve shows it in hPa (mbar):
+   * 1200 hPa = 1.2 bar. Apple Home does not show it (no native pressure type), Eve does and can use
+   * it in its automations. Disable with features.exposeWaterPressureEve = false.
+   */
+  private setupEvePressureService(installationName: string, boilerName: string) {
+    const old = this.accessory.services.find(x => x.subtype === 'boiler-pressure-eve');
+    if ((this.platform.config as any).features?.exposeWaterPressureEve === false || !this.hasWaterPressure()) {
+      if (old) this.accessory.removeService(old);
+      return;
+    }
+    const hap = this.platform.api.hap;
+    const EVE_SERVICE = 'E863F001-079E-48FF-8F27-9C2605A29F52';
+    const EVE_AIR_PRESSURE = 'E863F10F-079E-48FF-8F27-9C2605A29F52';
+    const name = `${installationName} ${boilerName} ${(this.platform.config as any).customNames?.waterPressure || 'Pressione impianto'}`;
+    const svc = old || this.accessory.addService(new hap.Service(name, EVE_SERVICE, 'boiler-pressure-eve'));
+    svc.setCharacteristic(this.platform.Characteristic.Name, name);
+    let ch = svc.characteristics.find(c => c.UUID === EVE_AIR_PRESSURE);
+    if (!ch) {
+      ch = new hap.Characteristic('Air Pressure', EVE_AIR_PRESSURE, {
+        format: hap.Formats.UINT16, unit: 'hPa' as any, minValue: 0, maxValue: 6000, minStep: 1,
+        perms: [hap.Perms.PAIRED_READ, hap.Perms.NOTIFY],
+      });
+      svc.addCharacteristic(ch);
+    }
+    ch.onGet(() => this.pressureHpa());
+    this.evePressureService = svc;
+    this.platform.log.info(`✅ Water pressure for the Eve app: ${name} (hPa: 1200 hPa = 1.2 bar)`);
+  }
+
+  private pressureHpa(): number {
+    return Math.max(0, Math.round((Number(this.states.WaterPressure) || 0) * 1000));
+  }
+
+  private refreshEvePressure() {
+    const ch = this.evePressureService?.characteristics.find(c => c.UUID === 'E863F10F-079E-48FF-8F27-9C2605A29F52');
+    ch?.updateValue(this.pressureHpa());
   }
 
   /** true when the user keeps the pre-2.0.80 "creative" diagnostic services. */
@@ -698,8 +742,8 @@ export class ViessmannBoilerAccessory {
   }
 
   /**
-   * Boiler alarm: a contact sensor that OPENS when the boiler reports a fault code (F.xx)
-   * or the water pressure is outside the safe range. Apple Home can notify on it and
+   * Boiler alarm: a contact sensor that OPENS when the boiler reports a fault code (F.xx),
+   * is locked out after a fault (device.lock.malfunction) or the water pressure is outside the safe range. Apple Home can notify on it and
    * it can trigger automations. Enabled by default (features.enableBoilerAlarm).
    */
   private setupAlarmService(installationName: string, boilerName: string, subtypeVersion: string) {
@@ -711,14 +755,14 @@ export class ViessmannBoilerAccessory {
     this.alarmService.displayName = name;
     this.alarmService.getCharacteristic(this.platform.Characteristic.ContactSensorState)
       .onGet(() => this.alarmState());
-    this.platform.log.info(`✅ Boiler alarm sensor created: ${name} (opens on F.xx faults or water pressure outside ${ALARM_PRESSURE_MIN}–${ALARM_PRESSURE_MAX} bar)`);
+    this.platform.log.info(`✅ Boiler alarm sensor created: ${name} (opens on F.xx faults, boiler lock-out or water pressure outside ${ALARM_PRESSURE_MIN}–${ALARM_PRESSURE_MAX} bar)`);
   }
 
   private alarmState(): number {
     const C = this.platform.Characteristic.ContactSensorState;
     const p = this.states.WaterPressure;
     const pressureBad = p > 0 && (p < ALARM_PRESSURE_MIN || p > ALARM_PRESSURE_MAX);
-    return (this.activeFaults.length > 0 || pressureBad) ? C.CONTACT_NOT_DETECTED : C.CONTACT_DETECTED;
+    return (this.activeFaults.length > 0 || this.malfunctionLock || pressureBad) ? C.CONTACT_NOT_DETECTED : C.CONTACT_DETECTED;
   }
 
   /** Reads the active fault codes (F.xx …) from device.messages.errors.raw and updates the alarm sensor. */
@@ -733,6 +777,12 @@ export class ViessmannBoilerAccessory {
         else if (this.activeFaults.length) this.platform.log.info('✅ Boiler fault codes cleared');
         this.activeFaults = codes;
       }
+    }
+    const lock = features.find((x: any) => x.feature === 'device.lock.malfunction')?.properties?.active?.value;
+    if (typeof lock === 'boolean' && lock !== this.malfunctionLock) {
+      if (lock) this.platform.log.warn('⚠️ Boiler locked out (device.lock.malfunction): reset it on the boiler, or call the installer if it happens again');
+      else if (this.malfunctionLock) this.platform.log.info('✅ Boiler lock-out cleared');
+      this.malfunctionLock = lock;
     }
     const state = this.alarmState();
     this.alarmService?.updateCharacteristic(this.platform.Characteristic.ContactSensorState, state);
@@ -755,12 +805,13 @@ export class ViessmannBoilerAccessory {
     const who = this.installation.description || 'Viessmann';
     const p = this.states.WaterPressure;
     const why = [this.activeFaults.length ? `fault ${this.activeFaults.join(', ')}` : '',
+      this.malfunctionLock ? 'boiler locked out (reset needed)' : '',
       p > 0 && (p < ALARM_PRESSURE_MIN || p > ALARM_PRESSURE_MAX) ? `water pressure ${p} bar` : ''].filter(Boolean).join(', ');
     const text = open ? `⚠️ ${who}: boiler alarm — ${why || 'check the boiler'}` : `✅ ${who}: boiler alarm cleared`;
     const req = url.includes('{text}')
       ? fetch(url.replace('{text}', encodeURIComponent(text)))
       : fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'Viessmann', text, faults: this.activeFaults, pressure: p, open }) });
+        body: JSON.stringify({ title: 'Viessmann', text, faults: this.activeFaults, lockout: this.malfunctionLock, pressure: p, open }) });
     req.then(r => this.platform.log.info(`📣 Alarm notification sent (HTTP ${r.status})`))
       .catch(e => this.platform.log.warn(`Alarm notification failed: ${e?.message || e}`));
   }
@@ -1205,6 +1256,7 @@ export class ViessmannBoilerAccessory {
       const newPressure = waterPressureFeature.properties.value.value;
       if (newPressure !== this.states.WaterPressure) {
         this.states.WaterPressure = newPressure;
+        this.refreshEvePressure();
         
         if (this.waterPressureService) {
           const isOptimal = newPressure >= 1.0 && newPressure <= 2.5;

@@ -3,6 +3,29 @@
 All notable changes to homebridge-viessmann-vicare.
 
 
+### [2.0.81] - 2026-09-29
+- feat: **one Viessmann dashboard** at `http://<homebridge-ip>:4200` (the OAuth `redirectPort`) replaces the separate login status page and report server:
+  - Viessmann login with a clear *Log in to Viessmann* button, token and renewal status, *Log in again* / *Disconnect*
+  - connection status: daily API usage, rate limit, response time, errors, age of the collected history
+  - report generation in the background; reports are **saved** and listed until they expire (`reportRetentionDays`, default 30), with Open / Delete
+  - **flue gas analyses**: add, edit and delete the installer's values with the same labels as the analyser printout; last result and due dates
+  - Italian / English from the browser language, dark mode, phone layout
+- feat: **automatic heating-curve optimisation** (`features.curveAutoTune`, off by default): once a day it compares the room with the program temperature over 48 h and corrects the curve by one step (slope ±0.1 when the error grows with the cold, otherwise shift ±1), within ±0.3 slope / ±3 shift from the starting curve, at most once every 48 h, only on heating days (outside the heating season: no API call, nothing written). Changes are logged and listed in the dashboard with *Restore the starting curve*
+- feat: the dashboard shows the heating curve read from the boiler; the report's curve fields are only needed for boilers that do not report it
+- change: the report and the dashboard adapt to any screen (phone, computer, TV): the whole layout — text, boxes, margins and charts — scales smoothly with the window width, side margins are small, boxes stretch to fill the row and long values wrap instead of spilling out (the page was limited to 1180 px)
+- feat: report section **Outdoor sensor and area weather**: the boiler sensor compared with the Open-Meteo estimate for the installation coordinates (from ViCare), by day (maxima) and by night (minima), with the last 14 days; the average alone hid large night differences. "Real temperature" is now called **area weather (estimate)**: the sensor measures its own spot, the estimate describes open air around the house
+- fix: report charts readable in light and dark mode: validated colour palette, solid dots with an outline, gas and outdoor temperature in separate charts (no double scale; area weather and boiler sensor side by side), temperature in the bar tooltips, and daily charts always show at least 14 days so short reports keep context
+- change: the report server on `reportServerPort` (e.g. 3001) is no longer started, so only one port is used; `reportServerPort` is ignored (a log line says where the reports are now)
+- feat: **flue gas analysis in the report**: values checked against the legal limits (CO air-free ≤ 1000 ppm, minimum efficiency by nominal power — Italy DPR 74/2013) and typical ranges, explained in plain words, compared over the years (rising CO or flue temperature = dirty heat exchanger/burner), next efficiency check (default every 4 years) and maintenance (default yearly), with advice when something is out of limits or due
+- change (log): one clear block at startup with the dashboard address; the 🔐 AUTHENTICATION REQUIRED block with the full login URL is unchanged and now also points to the dashboard
+- security: dashboard write actions need a custom header, so other web sites cannot change data on your network (CSRF)
+- fix (HomeKit): the heating-circuit tile says **Heating** only while the burner is really heating that circuit (burner on, circuit pump running when the boiler reports it, no hot-water charge in progress); otherwise **Idle**, and **Off** in Off / Holiday / standby. It said "Heating" whenever the circuit was on. The Reduced / Normal / Comfort tiles follow the same rule; during Extended heating the dial shows the Comfort temperature, the one the boiler uses
+- feat (HomeKit): the boiler alarm also opens when the boiler is **locked out after a fault** (`device.lock.malfunction`, reset needed); the optional notification says so
+- feat (Eve app): **water pressure** of the heating system as Eve "Air pressure" in hPa (**1200 hPa = 1.2 bar**). Apple Home has no pressure sensor type, so it only appears in Eve (`features.exposeWaterPressureEve`, on by default)
+- feat (HomeKit, #5): VitoCharge **grid exchange**: *Grid Draw*, *Grid Feed-in* and *House Consumption* power sensors (W) for automations (e.g. "feed-in above 2000 W → start the washing machine"). Before, the grid values were never read and were always 0. Sign checked on real VitoCharge data (positive = drawing from the grid)
+- fix: each energy device writes only its own values to the history, so a separate wallbox no longer writes PV 0 W between the PV readings (averages were halved)
+- feat (report, #1 #2 #5): new **Electricity: solar, battery, grid and car** section, shown only for installations that have these devices: kWh produced, home consumption, taken from and fed into the grid (with cost), **self-consumption** and **self-sufficiency**, battery average/minimum and kWh charged/discharged, car energy and charging sessions; daily energy chart, power through the day and battery charge. New advice when much solar power goes to the grid (move appliances and car charging to sunny hours, Apple Home automation) and when the battery never goes below a high level (backup reserve); menu entries for Energy and Rooms
+
 ### [2.0.80] - 2026-09-27
 - feat: **report redesigned** for technicians and non-technical users alike (IT/EN):
   - an illustrated drawing of the system (outdoor, house, radiator, boiler, hot water, gas meter) with the period values

@@ -387,6 +387,14 @@ export class ViessmannAPI {
     return this.apiClient.getRateLimitStatus();
   }
 
+  public setDashboard(d: any): void {
+    this.authManager.setDashboard(d);
+  }
+
+  public getDashboardUrl(): string {
+    return this.authManager.getDashboardUrl();
+  }
+
   public getTokenStatus() {
     return this.authManager.getTokenStatus();
   }

@@ -62,6 +62,25 @@ export class AuthManager {
   // Persistent auth server fields
   private authServerPort: number = 4200;
   private pendingAuthCallback?: (code?: string, error?: Error) => void;
+  // Unified web dashboard (viessmann-dashboard.js), mounted on this server by the platform
+  private dashboard?: { handle: (req: any, res: any, url: URL, getAuth: () => any) => Promise<boolean>; page: (req: any, auth: any) => string };
+
+  /** Mounts the dashboard (reports, flue gas analyses, status) on the OAuth port. */
+  public setDashboard(d: any): void {
+    this.dashboard = d;
+  }
+
+  public getDashboardUrl(): string {
+    return `http://${this.hostIp}:${this.authServerPort}`;
+  }
+
+  private dashboardAuth(authUrl?: string) {
+    return {
+      state: this.getTokenStatus().hasTokens ? 'authenticated' : 'unauthenticated',
+      authUrl, status: this.getTokenStatus(), username: this.config.username || '',
+      method: this.config.authMethod || 'auto', redirectUri: this.redirectUri,
+    };
+  }
 
   constructor(
     private readonly log: Logger,
@@ -479,6 +498,14 @@ export class AuthManager {
       const pathname  = parsedUrl.pathname;
       const method    = req.method?.toUpperCase() ?? 'GET';
 
+      // ── Dashboard routes (/api, /assets, /reports) ───────────────────────
+      if (this.dashboard && /^\/(api|assets|reports)\//.test(pathname)) {
+        this.dashboard.handle(req, res, parsedUrl, () => this.dashboardAuth())
+          .then((done) => { if (!done) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('Not found'); } })
+          .catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
+        return;
+      }
+
       // ── GET /health ──────────────────────────────────────────────────────
       if (pathname === '/health' && method === 'GET') {
         const status = this.getTokenStatus();
@@ -563,8 +590,14 @@ export class AuthManager {
         }
 
         // No code — render status page
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         const tokenStatus = this.getTokenStatus();
+        if (this.dashboard) {
+          let authUrl: string | undefined;
+          if (!tokenStatus.hasTokens) { this.generatePKCECodes(); authUrl = this.buildAuthUrl(); }
+          res.end(this.dashboard.page(req, this.dashboardAuth(authUrl)));
+          return;
+        }
         if (tokenStatus.hasTokens) {
           res.end(this.buildStatusPageHtml('authenticated'));
         } else {
@@ -584,14 +617,14 @@ export class AuthManager {
       const port = this.authServerPort;
       const ip   = this.hostIp;
       this.log.info('═'.repeat(60));
-      this.log.info('🔐 Viessmann Auth Manager');
-      this.log.info(`   Status page: http://${ip}:${port}`);
+      this.log.info(`🔥 Viessmann dashboard: http://${ip}:${port}`);
+      this.log.info('   Login · reports · flue gas analyses · API status');
       this.log.info('═'.repeat(60));
     });
 
     this.authServer.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
-        this.log.warn(`⚠️ Auth server port ${this.authServerPort} already in use — auth status page unavailable`);
+        this.log.warn(`⚠️ Port ${this.authServerPort} already in use — the Viessmann dashboard and the login page are not available (change redirectPort)`);
       } else {
         this.log.error('❌ Auth server error:', error.message);
       }
@@ -739,7 +772,7 @@ private openBrowser(url: string): void {
   this.log.info('');
   this.log.info(`   ${url}`);
   this.log.info('');
-  this.log.info(`🌐 Or open the status page: http://${this.hostIp}:${this.config.redirectPort || 4200}`);
+  this.log.info(`🌐 Or open the dashboard and press "Log in": http://${this.hostIp}:${this.config.redirectPort || 4200}`);
   this.log.info('⏳ Waiting for authentication...');
   this.log.info('='.repeat(80));
 

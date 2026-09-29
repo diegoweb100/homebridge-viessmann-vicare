@@ -57,6 +57,7 @@ export class ViessmannEnergyAccessory {
   private hasBattery      = false;
   private hasWallbox      = false;
   private hasElectricDHW  = false;
+  private hasGrid         = false;   // pcc.* — power exchanged with the grid (VitoCharge)
 
   // ── Known heat pump feature path variants (populated at runtime) ──────────
   // We try several known paths; whichever resolves first is stored here.
@@ -253,6 +254,8 @@ export class ViessmannEnergyAccessory {
         names.some(n => n.startsWith('charging.ev')) ||
         names.some(n => n.startsWith('heating.ev'));
 
+      this.hasGrid = names.some(n => n === 'pcc.transfer.power.exchange' || n === 'pcc.ac.active.power');
+
       this.hasElectricDHW =
         names.some(n => n.startsWith('heating.dhw.heating.rod')) ||
         names.some(n => n.startsWith('heating.dhw.pumps.primary')) ||
@@ -265,6 +268,7 @@ export class ViessmannEnergyAccessory {
       this.hasBattery     ? 'Battery'  : null,
       this.hasWallbox     ? 'Wallbox'  : null,
       this.hasElectricDHW ? 'ElecDHW'  : null,
+      this.hasGrid        ? 'Grid'     : null,
     ].filter(Boolean).join(', ') || 'none';
     this.platform.log.info(`${tag} Capabilities detected: ${caps}`);
     this.platform.log.debug(`${tag}    isHeatPump   : ${this.isHeatPump}`);
@@ -350,6 +354,12 @@ export class ViessmannEnergyAccessory {
     this.powerSensors.push({ svc, get });
   }
 
+  /** House consumption (EV charging included) = PV + grid draw + battery discharge − grid feed-in − battery charge. */
+  private houseConsumptionW(): number {
+    const st = this.states;
+    return Math.max(0, Math.round(st.pvProductionW + st.gridDrawW + st.batteryDischargingW - st.gridFeedInW - st.batteryChargingW));
+  }
+
   private refreshPowerSensors() {
     for (const p of this.powerSensors) {
       p.svc.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, Math.max(0.0001, Number(p.get()) || 0));
@@ -371,9 +381,16 @@ export class ViessmannEnergyAccessory {
       if (this.hasBattery)     { this.setupBatteryServices(); }
       if (this.hasWallbox)     { this.setupWallboxServices(); }
       if (this.hasElectricDHW) { this.setupElectricDHWService(); }
+      if (this.hasGrid) {
+        // Grid exchange and house consumption as power sensors (W) — usable in automations,
+        // e.g. "when Grid Feed-in rises above 2000 → start the washing machine".
+        this.addPowerSensor('Grid Draw', 'grid-draw-w', () => this.states.gridDrawW);
+        this.addPowerSensor('Grid Feed-in', 'grid-feedin-w', () => this.states.gridFeedInW);
+        this.addPowerSensor('House Consumption', 'house-consumption-w', () => this.houseConsumptionW());
+      }
     }
 
-    if (!this.isHeatPump && !this.hasPV && !this.hasBattery && !this.hasWallbox && !this.hasElectricDHW) {
+    if (!this.isHeatPump && !this.hasPV && !this.hasBattery && !this.hasWallbox && !this.hasElectricDHW && !this.hasGrid) {
       this.platform.log.warn(
         `[EnergyAccessory] No known features detected for device ${this.device.id}. ` +
         'Enable "debug": true in plugin config to see the full feature dump, then report to the plugin maintainer.',
@@ -712,15 +729,17 @@ export class ViessmannEnergyAccessory {
           timestamp:             new Date().toISOString(),
           accessory:             'energy',
           event_type:            'snapshot',
-          pv_production_w:       this.states.pvProductionW,
-          pv_daily_kwh:          this.states.pvDailyYieldKwh,
-          battery_level:         this.states.batteryLevelPercent,
-          battery_charging_w:    this.states.batteryChargingW,
-          battery_discharging_w: this.states.batteryDischargingW,
-          grid_feedin_w:         this.states.gridFeedInW,
-          grid_draw_w:           this.states.gridDrawW,
-          wallbox_charging:      this.states.wallboxChargingActive,
-          wallbox_power_w:       this.states.wallboxChargingPowerW,
+          // Only the values this device really has: a PV device and a separate wallbox both
+          // write "energy" rows, and a 0 from the wrong device would halve the other's averages.
+          pv_production_w:       this.hasPV ? this.states.pvProductionW : undefined,
+          pv_daily_kwh:          this.hasPV ? this.states.pvDailyYieldKwh : undefined,
+          battery_level:         this.hasBattery ? this.states.batteryLevelPercent : undefined,
+          battery_charging_w:    this.hasBattery ? this.states.batteryChargingW : undefined,
+          battery_discharging_w: this.hasBattery ? this.states.batteryDischargingW : undefined,
+          grid_feedin_w:         this.hasGrid ? this.states.gridFeedInW : undefined,
+          grid_draw_w:           this.hasGrid ? this.states.gridDrawW : undefined,
+          wallbox_charging:      this.hasWallbox ? this.states.wallboxChargingActive : undefined,
+          wallbox_power_w:       this.hasWallbox ? this.states.wallboxChargingPowerW : undefined,
         });
       }
     }
@@ -981,6 +1000,22 @@ export class ViessmannEnergyAccessory {
               ? this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
               : this.platform.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL,
           );
+      }
+    }
+
+    // Grid (point of common coupling). pcc.transfer.power.exchange: > 0 = drawing from the grid,
+    // < 0 = feeding in (checked on real VitoCharge dumps: no PV, no battery → +6624 W).
+    if (this.hasGrid) {
+      const ex = get('pcc.transfer.power.exchange');
+      let w: number | undefined = ex?.properties?.value?.value;
+      if (typeof w !== 'number') {
+        const ph = get('pcc.ac.active.power')?.properties;
+        if (ph) w = ['phaseOne', 'phaseTwo', 'phaseThree'].reduce((a, k) => a + (Number(ph[k]?.value) || 0), 0);
+      }
+      if (typeof w === 'number' && Number.isFinite(w)) {
+        this.states.gridDrawW   = Math.max(0, Math.round(w));
+        this.states.gridFeedInW = Math.max(0, Math.round(-w));
+        this.platform.log.debug(`${tag} Grid → draw ${this.states.gridDrawW} W, feed-in ${this.states.gridFeedInW} W, house ${this.houseConsumptionW()} W`);
       }
     }
 

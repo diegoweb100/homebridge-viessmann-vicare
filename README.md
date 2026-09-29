@@ -165,6 +165,24 @@ For detailed architecture documentation, see the [Plugin Architecture](#%EF%B8%8
 - **🔧 Advanced Timeout Controls**: Configurable timeouts and retry mechanisms
 
 
+## 🔥 Viessmann dashboard (v2.0.81+)
+
+One page for everything, at **`http://<homebridge-ip>:4200`** (the OAuth `redirectPort`). The address is also printed in the Homebridge log at startup:
+
+```
+════════════════════════════════════════════════════════════
+🔥 Viessmann dashboard: http://192.168.1.10:4200
+   Login · reports · flue gas analyses · API status
+════════════════════════════════════════════════════════════
+```
+
+- **Viessmann login**: big *Log in to Viessmann* button when a login is needed, token and renewal status, *Log in again* / *Disconnect*. When the plugin is not authenticated, the log still shows the full login URL in the usual 🔐 AUTHENTICATION REQUIRED block.
+- **Connection status**: daily API usage against the Viessmann limit, rate-limit state, response time and errors, age of the collected history.
+- **Create a report**: 1 day to 1 year, language, gas and electricity price, advanced options. Reports run in the background and are **saved**: the *Saved reports* list shows them until they expire (`reportRetentionDays`, default 30), with *Open* and *Delete*.
+- **Flue gas analyses**: add, edit and delete the installer's analyser values (same labels as the printout: CO₂, O₂, λ, CO, uCO, TF, TA, efficiency, Qs, NOx, tdp); last result, next efficiency check and maintenance. The report adds a full *Flue gas analysis* section.
+
+Before 2.0.81 reports had their own server on `reportServerPort` (e.g. 3001) and the login page was separate: now only the dashboard port is used and `reportServerPort` is ignored. Write actions need a header that other web sites cannot send, so a page on the internet cannot change your data; the dashboard is meant for the home network only (do not expose the port to the internet).
+
 ## 📊 HTML Report Preview
 
 ![Viessmann ViCare History Report](https://raw.githubusercontent.com/diegoweb100/homebridge-viessmann-vicare/main/docs/report_preview_hero.png)
@@ -192,7 +210,10 @@ All Viessmann heating systems compatible with ViCare API:
 | Boiler | Heater | Boiler water temperature; "heating" while the burner is on |
 | Burner | Switch (read-only) | Burner on/off |
 | Outside | Temperature sensor | Boiler outdoor sensor |
-| **Alarm** | Contact sensor | **Opens** on a boiler fault code (F.xx) or water pressure outside 0.8–3.0 bar. Turn on notifications for it in Home to get an alert. |
+| Heating circuit | Heater | **Heating** only while the burner is really heating the circuit (burner on, circuit pump running if reported, no hot-water charge); **Idle** when the circuit is on but not being heated; **Off** in Off / Holiday / standby |
+| **Alarm** | Contact sensor | **Opens** on a boiler fault code (F.xx), a lock-out after a fault (reset needed) or water pressure outside 0.8–3.0 bar. Turn on notifications for it in Home to get an alert. |
+| Water pressure | Eve app only | Heating-system pressure as Eve "Air pressure" in hPa: **1200 hPa = 1.2 bar**. Apple Home has no pressure type, so the Home app does not show it (`features.exposeWaterPressureEve`) |
+| PV / battery / grid / wallbox (#1 #2 #5) | Light sensors in W, battery | Only for devices you have (VitoCharge, PV, wallbox): *PV Production*, *Battery Charging/Discharging*, battery level, *Grid Draw*, *Grid Feed-in*, *House Consumption*, *EV Charging Power*. The value shown in "lux" is the power in watts |
 
 ### 🤖 Apple Home automations (examples)
 
@@ -207,6 +228,7 @@ All Viessmann heating systems compatible with ViCare API:
 | Message to Telegram / ntfy / others | `features.alarmNotifyUrl`, e.g. `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>&text={text}` |
 | "Shower ready" | *When DHW Temperature rises above 40 °C* → notification or scene |
 | Frost / cold day | *When Outside drops below 3 °C* → scene |
+| Use your solar surplus | *When Grid Feed-in rises above 2000* → turn on a plug (washing machine, boiler heating rod…) |
 
 **Heating plans (since 2.0.80)**: the boiler's programs are mutually exclusive, exactly as in ViCare. Switching one on switches all the others off; switching the active one off returns to Normal. Only the programs your boiler really has are created — the same list as ViCare (operating mode Heating/Off, Extended heating, Holiday, Holiday at home; hot water Comfort/Eco/Off).
 - **Normal** follows the boiler time schedule (normal and reduced periods).
@@ -216,6 +238,8 @@ All Viessmann heating systems compatible with ViCare API:
 - **Off** is standby: the heating-circuit tile or the Off entry in its mode menu.
 - **Temperatures**: Reduced, Normal and Comfort are the three temperature levels the time schedule uses. Each is its own thermostat tile ("Temp Reduced", "Temp Normal", "Temp Comfort"): its dial changes that level on the boiler, and it follows the time schedule: only the level the boiler is using right now is on (all off when the circuit is off; Holiday → Reduced, Holiday at home → Normal, Extended heating → Comfort). To change a level that is not in use, switch its tile to Heat, set the temperature, and it returns to Off two minutes later, also from automations (`exposeProgramTemperatures`, on by default). The main heating dial changes the level currently in force.
 - There is no Reduced switch: the boiler has no command to select the reduced temperature, the time schedule decides it. The reduced temperature is still shown by the dial while Holiday is on.
+
+**Automatic heating-curve optimisation (v2.0.81+, `features.curveAutoTune`, off by default)**: once a day the plugin compares the room temperature with the program temperature (Normal/Comfort periods, last 48 h) and, if the room is more than 0.5 °C off, corrects the heating curve by one small step: the **slope** (±0.1) when the error is larger in cold weather, otherwise the **shift** (±1). It never goes further than ±0.3 slope / ±3 shift from the curve it found when switched on (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`), waits 48 h after each change (24 h if the house is too cold) and does nothing without heating (summer, holiday, standby, outdoor above 15 °C): outside the heating season it only reads the local history, with no API call and nothing written. Every change is written in the log with its reason and listed in the dashboard, where *Restore the starting curve* puts the original values back. It needs a room temperature (room sensor or ViCare Smart Climate).
 
 Hot water: Comfort, Eco and Off are mutually exclusive too; switching the active mode off returns to `dhwDefaultMode` (default Eco).
 
@@ -419,6 +443,15 @@ The report includes:
 - **DHW chart**: temperature vs setpoint over time
 - Works offline once downloaded — no server required, all data is embedded
 
+#### 🔥 Flue gas analysis (v2.0.81+)
+
+The boiler does not report combustion values: they come from the installer's analyser (the printout of the yearly service or of the legal efficiency check). Enter them in the dashboard → **Flue gas analyses**; they are stored in `viessmann-combustion.json` and the report adds a **Flue gas analysis** section:
+
+- every value with a green / yellow / red badge and a plain explanation: legal limits (CO air-free ≤ 1000 ppm, minimum efficiency 91–94 % by nominal power for condensing boilers, Italy DPR 74/2013) and typical ranges (CO₂ 7.5–10 %, λ 1.1–1.6, flue gas below the dew point = condensing, NOx class 6)
+- comparison over the years: rising CO, hotter flue gas or lower efficiency is the typical sign of a dirty heat exchanger or burner
+- due dates: next efficiency check (default every 4 years — Italy, gas 10–100 kW; check your regional rule) and next maintenance (default 12 months — Viessmann: yearly), both set in the dashboard
+- advice when a value is out of limits, when combustion gets worse or when a check is due, plus gas burned since the last analysis
+
 ---
 
 ### 📧 Automated email report via crontab
@@ -586,7 +619,9 @@ All parameters are now configurable through the Homebridge Config UI X interface
 #### **Authentication Method**
 - `authMethod`: "auto" (recommended) or "manual"
 - `hostIp`: IP for OAuth redirect (auto-detected)
-- `redirectPort`: Port for OAuth callback (default: 4200)
+- `redirectPort`: Port of the dashboard and of the OAuth callback (default: 4200)
+- `reportServerPath`: Data folder for history, reports and flue gas analyses (default: Homebridge storage)
+- `reportRetentionDays`: Days saved reports are kept (default: 30)
 - `accessToken`: Manual access token (manual auth only)
 - `refreshToken`: Manual refresh token (manual auth only)
 
@@ -1151,6 +1186,29 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.81] - 2026-09-29
+- feat: **one Viessmann dashboard** at `http://<homebridge-ip>:4200` (the OAuth `redirectPort`) replaces the separate login status page and report server:
+  - Viessmann login with a clear *Log in to Viessmann* button, token and renewal status, *Log in again* / *Disconnect*
+  - connection status: daily API usage, rate limit, response time, errors, age of the collected history
+  - report generation in the background; reports are **saved** and listed until they expire (`reportRetentionDays`, default 30), with Open / Delete
+  - **flue gas analyses**: add, edit and delete the installer's values with the same labels as the analyser printout; last result and due dates
+  - Italian / English from the browser language, dark mode, phone layout
+- feat: **automatic heating-curve optimisation** (`features.curveAutoTune`, off by default): once a day it compares the room with the program temperature over 48 h and corrects the curve by one step (slope ±0.1 when the error grows with the cold, otherwise shift ±1), within ±0.3 slope / ±3 shift from the starting curve, at most once every 48 h, only on heating days (outside the heating season: no API call, nothing written). Changes are logged and listed in the dashboard with *Restore the starting curve*
+- feat: the dashboard shows the heating curve read from the boiler; the report's curve fields are only needed for boilers that do not report it
+- change: the report and the dashboard adapt to any screen (phone, computer, TV): the whole layout — text, boxes, margins and charts — scales smoothly with the window width, side margins are small, boxes stretch to fill the row and long values wrap instead of spilling out (the page was limited to 1180 px)
+- feat: report section **Outdoor sensor and area weather**: the boiler sensor compared with the Open-Meteo estimate for the installation coordinates (from ViCare), by day (maxima) and by night (minima), with the last 14 days; the average alone hid large night differences. "Real temperature" is now called **area weather (estimate)**: the sensor measures its own spot, the estimate describes open air around the house
+- fix: report charts readable in light and dark mode: validated colour palette, solid dots with an outline, gas and outdoor temperature in separate charts (no double scale; area weather and boiler sensor side by side), temperature in the bar tooltips, and daily charts always show at least 14 days so short reports keep context
+- change: the report server on `reportServerPort` (e.g. 3001) is no longer started, so only one port is used; `reportServerPort` is ignored (a log line says where the reports are now)
+- feat: **flue gas analysis in the report**: values checked against the legal limits (CO air-free ≤ 1000 ppm, minimum efficiency by nominal power — Italy DPR 74/2013) and typical ranges, explained in plain words, compared over the years (rising CO or flue temperature = dirty heat exchanger/burner), next efficiency check (default every 4 years) and maintenance (default yearly), with advice when something is out of limits or due
+- change (log): one clear block at startup with the dashboard address; the 🔐 AUTHENTICATION REQUIRED block with the full login URL is unchanged and now also points to the dashboard
+- security: dashboard write actions need a custom header, so other web sites cannot change data on your network (CSRF)
+- fix (HomeKit): the heating-circuit tile says **Heating** only while the burner is really heating that circuit (burner on, circuit pump running when the boiler reports it, no hot-water charge in progress); otherwise **Idle**, and **Off** in Off / Holiday / standby. It said "Heating" whenever the circuit was on. The Reduced / Normal / Comfort tiles follow the same rule; during Extended heating the dial shows the Comfort temperature, the one the boiler uses
+- feat (HomeKit): the boiler alarm also opens when the boiler is **locked out after a fault** (`device.lock.malfunction`, reset needed); the optional notification says so
+- feat (Eve app): **water pressure** of the heating system as Eve "Air pressure" in hPa (**1200 hPa = 1.2 bar**). Apple Home has no pressure sensor type, so it only appears in Eve (`features.exposeWaterPressureEve`, on by default)
+- feat (HomeKit, #5): VitoCharge **grid exchange**: *Grid Draw*, *Grid Feed-in* and *House Consumption* power sensors (W) for automations (e.g. "feed-in above 2000 W → start the washing machine"). Before, the grid values were never read and were always 0. Sign checked on real VitoCharge data (positive = drawing from the grid)
+- fix: each energy device writes only its own values to the history, so a separate wallbox no longer writes PV 0 W between the PV readings (averages were halved)
+- feat (report, #1 #2 #5): new **Electricity: solar, battery, grid and car** section, shown only for installations that have these devices: kWh produced, home consumption, taken from and fed into the grid (with cost), **self-consumption** and **self-sufficiency**, battery average/minimum and kWh charged/discharged, car energy and charging sessions; daily energy chart, power through the day and battery charge. New advice when much solar power goes to the grid (move appliances and car charging to sunny hours, Apple Home automation) and when the battery never goes below a high level (backup reserve); menu entries for Energy and Rooms
 
 ### [2.0.80] - 2026-09-27
 - feat: **report redesigned** for technicians and non-technical users alike (IT/EN):

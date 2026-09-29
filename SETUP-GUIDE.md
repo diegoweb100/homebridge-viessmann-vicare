@@ -936,7 +936,7 @@ Monitor rate limit status in logs:
 2. ✅ **Check Client ID**: Ensure Client ID is correct
 3. ✅ **Check API application**: Verify redirect URI: `http://localhost:4200/`
 4. ✅ **Try manual authentication**: Change `authMethod` to `"manual"`
-5. ✅ **Network issues**: Check firewall settings and port 4200 accessibility
+5. ✅ **Network issues**: Check firewall settings and port 4200 accessibility (the same port serves the dashboard)
 
 ### 🏠 No Installations/Devices Found
 
@@ -1291,6 +1291,14 @@ sudo systemctl restart homebridge
 ---
 
 ## Changelog
+
+### v2.0.81 (2026-09-29)
+- feat: one Viessmann dashboard at `http://<homebridge-ip>:4200`: login, API status, reports (saved, with automatic expiry) and flue gas analyses on one page; the separate report server (3001) is no longer used
+- feat: flue gas analysis in the report — legal limits, plain explanations, comparison over the years, next efficiency check and maintenance
+- feat: optional automatic heating-curve optimisation (`features.curveAutoTune`): small daily steps within limits, logged, restorable from the dashboard
+- fix (Apple Home): the heating tile says "Heating" only while the burner is really heating the circuit, otherwise "Idle"
+- feat (Apple Home): boiler alarm also on lock-out after a fault; water pressure in the Eve app (1200 hPa = 1.2 bar)
+- feat (Apple Home + report, #1 #2 #5): VitoCharge grid draw / feed-in / house consumption sensors; report section on solar, battery, grid and car with self-consumption and self-sufficiency
 
 ### v2.0.80 (2026-09-27)
 - feat: report redesigned for everyone (drawing of the system, scores, step-by-step advice with savings, explanations, glossary); values checked against the real gas bills; location-independent
