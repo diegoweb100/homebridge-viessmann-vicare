@@ -59,6 +59,19 @@
         "maximum": 65535,
         "description": "Port of the Viessmann dashboard (login, reports, flue gas analyses, status) and of the OAuth callback: open http://<homebridge-ip>:<port>. Must match the redirect URI registered in the Viessmann developer portal."
       },
+      "dashboardPin": {
+        "title": "Dashboard PIN (optional)",
+        "type": "string",
+        "minLength": 4,
+        "maxLength": 32,
+        "description": "If set, every change from the dashboard (log in again, disconnect, reports, flue gas analyses, heating curve) asks for this PIN once per browser (remembered for 30 days; 5 wrong attempts lock that device out for 15 minutes). Reading stays open on the home network. Empty = no PIN, as before."
+      },
+      "dashboardBind": {
+        "title": "Dashboard listen address (advanced)",
+        "type": "string",
+        "placeholder": "0.0.0.0",
+        "description": "Network address the dashboard listens on. Empty / 0.0.0.0 = every network of this computer (default, needed to log in from a phone or PC). An IP of this computer (e.g. 192.168.1.10) = only that network. 127.0.0.1 = this computer only (log in through an SSH tunnel)."
+      },
       "authTimeout": {
         "title": "OAuth Authentication Timeout (ms)",
         "type": "integer",
@@ -561,7 +574,30 @@
             "title": "Automatic heating-curve optimisation",
             "type": "boolean",
             "default": false,
-            "description": "Once a day the plugin compares the room temperature with the program temperature over the last 48 h and corrects the heating curve by one small step (slope 0.1 or shift 1), only on heating days, within the limits below and at most once every 48 h. Every change is logged and shown in the dashboard, where the starting curve can be restored. Needs a room temperature (room sensor or ViCare Smart Climate)."
+            "description": "Once a day, on heating days only, the plugin compares the room with the program temperature (up to 7 days of data) and works out whether the slope (error growing with the cold) or the shift (same error always) should change by one step (0.1 or 1). It never raises the curve when the flow is already high, waits 48 h between changes and stays within the limits below. Every decision is shown in the dashboard with its reason and confidence; the starting curve can be restored. Needs a room temperature (room sensor or ViCare Smart Climate)."
+          },
+          "curveAutoTuneMode": {
+            "title": "What to do with a decision",
+            "type": "string",
+            "default": "auto",
+            "oneOf": [
+              { "title": "Apply it automatically (confidence 75 % or more)", "enum": ["auto"] },
+              { "title": "Only propose it: I apply it from the dashboard", "enum": ["proposal"] }
+            ],
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
+          },
+          "curveAutoTuneMaxFlow": {
+            "title": "Never raise the curve above this flow temperature (°C)",
+            "type": "integer",
+            "default": 55,
+            "minimum": 35,
+            "maximum": 80,
+            "description": "If the house is cold although the flow (with the burner on) is already this high, the cause is not the curve (radiator valves, air in the radiators, pump, room sensor position): the plugin does not raise it and says so. 55 °C keeps a condensing boiler condensing.",
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
           },
           "curveAutoTuneIntervalHours": {
             "title": "Check every (hours)",
@@ -792,6 +828,8 @@
         "authMethod",
         "hostIp",
         "redirectPort",
+        "dashboardPin",
+        "dashboardBind",
         "authTimeout"
       ]
     },
@@ -925,6 +963,8 @@
         "features.holidayAtHomeDays",
         "features.exposeProgramTemperatures",
         "features.curveAutoTune",
+        "features.curveAutoTuneMode",
+        "features.curveAutoTuneMaxFlow",
         "features.curveAutoTuneIntervalHours",
         "features.curveAutoTuneMaxSlopeDelta",
         "features.curveAutoTuneMaxShiftDelta",

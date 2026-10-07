@@ -32,6 +32,7 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
 
   public readonly accessories: PlatformAccessory[] = [];
   public curveTuner?: CurveTuner;
+
   public readonly viessmannAPI!: ViessmannAPI;
   private configValid = false;
 
@@ -520,10 +521,16 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
   private mountDashboard() {
     try {
       const dataDir = (this.config as any).reportServerPath ?? this.api.user.storagePath();
-      this.curveTuner = new CurveTuner(this, dataDir, (this.config as any).features?.curveAutoTune === true);
+      const cat = (this.config as any).features?.curveAutoTune;
+      this.curveTuner = new CurveTuner(this, dataDir, cat === true || cat === 'proposal');
       const { createDashboard } = require(path.join(__dirname, '..', 'viessmann-dashboard.js'));
       const dash = createDashboard({
-        curve: { status: () => this.curveTuner!.status(), restore: (inst: string, hc: number) => this.curveTuner!.restore(inst, hc) },
+        curve: {
+          status: () => this.curveTuner!.status(),
+          restore: (inst: string, hc: number) => this.curveTuner!.restore(inst, hc),
+          check: (inst: string, hc: number) => this.curveTuner!.check(inst, hc),
+          apply: (inst: string, hc: number, expected?: any) => this.curveTuner!.applyProposal(inst, hc, expected),
+        },
         hbPath: dataDir,
         reportScript: path.join(__dirname, '..', 'viessmann-report.js'),
         timeoutSec: (this.config as any).reportServerTimeout ?? 600,

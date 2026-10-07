@@ -11,7 +11,7 @@ export const PLUGIN_NAME = 'homebridge-viessmann-vicare';
 /**
  * Plugin version for User-Agent and logging
  */
-export const PLUGIN_VERSION = '2.0.81';
+export const PLUGIN_VERSION = '2.0.82';
 
 /**
  * Default configuration values
@@ -79,6 +79,8 @@ export const DEFAULT_CONFIG = {
     curveAutoTuneIntervalHours: 24,
     curveAutoTuneMaxSlopeDelta: 0.3,
     curveAutoTuneMaxShiftDelta: 3,
+    curveAutoTuneMode: 'auto',        // 'auto' = apply from 75 % confidence, 'proposal' = only propose (dashboard)
+    curveAutoTuneMaxFlow: 55,         // never raise the curve when the flow is already this high (°C)
     // Optional push message when the boiler alarm opens/clears ({text} placeholder → GET)
     alarmNotifyUrl: '',
     // Hot water mode used when the active mode is switched off / hot water is switched on

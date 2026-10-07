@@ -3,6 +3,22 @@
 All notable changes to homebridge-viessmann-vicare.
 
 
+### [2.0.82] - 2026-10-07
+- fix (security): **Log in again** and **Disconnect** in the dashboard (`/reauth`, `/clear`) were plain form posts without the protection of the other dashboard actions: a web page opened on any computer of the home network could disconnect the plugin from Viessmann. Every change now needs a **CSRF token** that only pages served by the dashboard can read, plus a same-origin check. (The 2.0.81 notes said all write actions were protected: these two were not.)
+- fix (security): the login error page showed the `error_description` of the address without escaping it (reflected XSS); all values are now escaped
+- feat (security): optional **dashboard PIN** (`dashboardPin`): every change (log in again, disconnect, reports, flue gas analyses, heating curve) asks for it once per browser, remembered for 30 days (HttpOnly, SameSite=Strict cookie); 5 wrong PINs lock that device out for 15 minutes. Reading stays open on the home network. Without a PIN everything works as before
+- feat (security): security headers on every page (`Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, so the login code never leaks through the Referer)
+- feat: **listen address** of the dashboard configurable (`dashboardBind`): default all networks as before; an IP of the computer limits it to that network; `127.0.0.1` to this computer only (log in through an SSH tunnel)
+- fix: the Viessmann token file is written **atomically** (temporary file, fsync, rename) with permissions 0600: a power cut during the write can no longer leave a truncated file and force a new login
+- fix: opening the dashboard no longer invalidates a login link already in use (the PKCE pair is kept for 15 minutes); a login started from the dashboard is accepted even after the startup login timed out, and an expired link says so instead of being ignored
+- feat: **heating-curve optimisation v2** — one decision engine for every mode:
+  - regression of the room error against the outdoor temperature on up to **7 days** of data (never earlier than 12 h after the last change): the **slope** changes only when the error clearly depends on the cold (wide outdoor range, good fit), otherwise the **shift**; steps stay those the boiler accepts (0.1 / 1)
+  - **confidence** 0–100 % (samples, hours covered, agreement of the samples, size of the error, fit and outdoor range for the slope): applied automatically only from 75 %
+  - **flow veto**: if the house is cold although the flow with the burner on is already high (`curveAutoTuneMaxFlow`, default 55 °C, or near the circuit maximum), the curve is **never raised** and the dashboard says to check radiator valves, air, pump and room sensor
+  - **proposal mode** (`curveAutoTuneMode: "proposal"`): the plugin only proposes; the dashboard shows current and proposed curve, reason, confidence, samples, outdoor range, median error, flow and safety result, with *Apply* (re-checked with fresh data before writing) and *Check now*
+  - every decision is a structured object (decision, reason code, confidence, statistics, flow, safety) used by the automatic mode, the log and the dashboard alike
+- feat (HomeKit): the boiler **Alarm** sensor also reports *StatusFault*, so Apple Home marks its tile with a warning sign (HAP does not allow a fault status on the heating tiles themselves)
+
 ### [2.0.81] - 2026-09-29
 - feat: **one Viessmann dashboard** at `http://<homebridge-ip>:4200` (the OAuth `redirectPort`) replaces the separate login status page and report server:
   - Viessmann login with a clear *Log in to Viessmann* button, token and renewal status, *Log in again* / *Disconnect*

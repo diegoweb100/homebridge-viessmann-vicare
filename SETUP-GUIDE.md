@@ -1292,6 +1292,12 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.82 (2026-10-07)
+- fix (security): dashboard *Log in again* / *Disconnect* protected like every other change (CSRF token + same origin); escaped login error page
+- feat (security): optional dashboard PIN (`dashboardPin`), security headers, configurable listen address (`dashboardBind`), atomic token file
+- feat: heating-curve optimisation v2 — regression on up to 7 days, confidence, flow veto, proposal mode with *Apply* in the dashboard
+- feat (Apple Home): the boiler Alarm tile shows a warning sign while it is open
+
 ### v2.0.81 (2026-09-29)
 - feat: one Viessmann dashboard at `http://<homebridge-ip>:4200`: login, API status, reports (saved, with automatic expiry) and flue gas analyses on one page; the separate report server (3001) is no longer used
 - feat: flue gas analysis in the report — legal limits, plain explanations, comparison over the years, next efficiency check and maintenance

@@ -755,6 +755,11 @@ export class ViessmannBoilerAccessory {
     this.alarmService.displayName = name;
     this.alarmService.getCharacteristic(this.platform.Characteristic.ContactSensorState)
       .onGet(() => this.alarmState());
+    this.alarmService.getCharacteristic(this.platform.Characteristic.StatusFault)
+      .onGet(() => this.alarmState() === this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED
+        ? this.platform.Characteristic.StatusFault.GENERAL_FAULT : this.platform.Characteristic.StatusFault.NO_FAULT);
+    const stray = this.heaterCoolerService.characteristics.find(c => c.UUID === this.platform.Characteristic.StatusFault.UUID);
+    if (stray) this.heaterCoolerService.removeCharacteristic(stray);   // added by a pre-release build
     this.platform.log.info(`✅ Boiler alarm sensor created: ${name} (opens on F.xx faults, boiler lock-out or water pressure outside ${ALARM_PRESSURE_MIN}–${ALARM_PRESSURE_MAX} bar)`);
   }
 
@@ -787,6 +792,10 @@ export class ViessmannBoilerAccessory {
     const state = this.alarmState();
     this.alarmService?.updateCharacteristic(this.platform.Characteristic.ContactSensorState, state);
     const open = state === this.platform.Characteristic.ContactSensorState.CONTACT_NOT_DETECTED;
+    // StatusFault on the alarm sensor: Apple Home marks the tile with a warning sign
+    // (HAP allows StatusFault on sensors, not on HeaterCooler / Thermostat)
+    const F = this.platform.Characteristic.StatusFault;
+    this.alarmService?.updateCharacteristic(F, open ? F.GENERAL_FAULT : F.NO_FAULT);
     if (this.alarmWasOpen !== undefined && open !== this.alarmWasOpen) this.notifyAlarm(open);
     this.alarmWasOpen = open;
   }

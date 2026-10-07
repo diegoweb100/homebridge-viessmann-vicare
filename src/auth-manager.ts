@@ -19,6 +19,8 @@ export interface AuthConfig {
   tokenRefreshBuffer?: number;
   authTimeout?: number;
   enableTokenPersistence?: boolean;
+  dashboardPin?: string;    // optional PIN for dashboard changes
+  dashboardBind?: string;   // listen address of the dashboard (default all interfaces)
 }
 
 interface AuthResponse {
@@ -63,7 +65,7 @@ export class AuthManager {
   private authServerPort: number = 4200;
   private pendingAuthCallback?: (code?: string, error?: Error) => void;
   // Unified web dashboard (viessmann-dashboard.js), mounted on this server by the platform
-  private dashboard?: { handle: (req: any, res: any, url: URL, getAuth: () => any) => Promise<boolean>; page: (req: any, auth: any) => string };
+  private dashboard?: { handle: (req: any, res: any, url: URL, getAuth: () => any, getSecurity: () => any) => Promise<boolean>; page: (req: any, auth: any, security: any) => string };
 
   /** Mounts the dashboard (reports, flue gas analyses, status) on the OAuth port. */
   public setDashboard(d: any): void {
@@ -143,6 +145,7 @@ export class AuthManager {
     // Using 96 bytes of random data results in 128 characters when base64url encoded
     // (96 bytes * 4/3 = 128 characters)
     this.codeVerifier = crypto.randomBytes(96).toString('base64url');
+    this.pkceAt = Date.now();
     
     // Verify the length is within RFC 7636 limits
     if (this.codeVerifier.length < 43 || this.codeVerifier.length > 128) {
@@ -258,12 +261,30 @@ export class AuthManager {
         };
 
         // Write to file with proper permissions
-        fs.writeFileSync(this.tokenStoragePath, JSON.stringify(tokenData, null, 2), { mode: 0o600 });
+        this.writeSecureJson(this.tokenStoragePath, tokenData);
         this.log.debug('💾 Saved tokens to persistent storage');
       } catch (error) {
         this.log.warn('⚠️ Failed to save tokens to persistent storage:', error);
       }
     }
+  }
+
+  /**
+   * Writes a JSON file readable only by the Homebridge user (0600), atomically: temporary file,
+   * fsync, rename. A power cut during the write leaves the old file, never a truncated one.
+   */
+  private writeSecureJson(file: string, obj: unknown): void {
+    const tmp = `${file}.${process.pid}.tmp`;
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+      fs.writeSync(fd, JSON.stringify(obj, null, 2));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try { fs.chmodSync(tmp, 0o600); } catch { /* not supported on this file system */ }
+    fs.renameSync(tmp, file);
+    try { const d = fs.openSync(path.dirname(file), 'r'); try { fs.fsyncSync(d); } finally { fs.closeSync(d); } } catch { /* directory fsync not supported (e.g. Windows) */ }
   }
 
   private clearStoredTokens(): void {
@@ -274,7 +295,7 @@ export class AuthManager {
         
         if (tokenData[tokenKey]) {
           delete tokenData[tokenKey];
-          fs.writeFileSync(this.tokenStoragePath, JSON.stringify(tokenData, null, 2), { mode: 0o600 });
+          this.writeSecureJson(this.tokenStoragePath, tokenData);
           this.log.debug('🗑️ Cleared expired tokens from persistent storage');
         }
       }
@@ -481,11 +502,182 @@ export class AuthManager {
   // ─── Persistent auth/status server ────────────────────────────────────────
   // Started once in the constructor and never closed while Homebridge is running.
   // Routes:
-  //   GET /           → token status page (or "authenticate" page if no tokens)
-  //   GET /callback   → OAuth callback (code exchange)
-  //   POST /reauth    → force re-authentication (regenerates PKCE + redirects)
+  //   GET /           → dashboard (or the plain status page if the dashboard is not mounted)
+  //   GET /?code=…    → OAuth callback (code exchange)
+  //   POST /reauth    → force re-authentication: returns {authUrl} for the browser to open
   //   POST /clear     → clear stored tokens
+  //   POST /api/unlock, /api/lock → dashboard PIN session (only when dashboardPin is set)
   //   GET /health     → JSON status
+  //   /api, /assets, /reports → dashboard (viessmann-dashboard.js)
+  //
+  // Security (2.0.82):
+  //   - every write (POST/PUT/DELETE) needs the per-start CSRF token (header X-Vicare-Csrf, only
+  //     readable by pages served by this server) and, when the browser sends one, a same-origin
+  //     Origin header. Other web sites cannot read the token, so they cannot trigger writes.
+  //   - optional dashboardPin: writes also need an unlocked session (HttpOnly, SameSite=Strict
+  //     cookie), so other devices on the LAN cannot change anything without the PIN.
+  //   - security headers on every response; the OAuth callback URL never leaks via Referer.
+  //   - listen address configurable (dashboardBind, default all interfaces).
+
+  private readonly csrfToken = crypto.randomBytes(32).toString('base64url');
+  private pkceAt = 0;
+  private sessions = new Map<string, number>();        // sha256(session id) → expiry (ms)
+  private sessionsLoaded = false;
+  private pinFails = new Map<string, { n: number; first: number; until: number }>();
+  private static readonly SESSION_TTL = 30 * 86400000;
+  private static readonly PKCE_TTL = 15 * 60000;
+
+  private dashboardPin(): string {
+    const p = (this.config as any).dashboardPin;
+    return (typeof p === 'string' || typeof p === 'number') ? String(p).trim() : '';
+  }
+
+  private bindAddress(): string {
+    const b = String((this.config as any).dashboardBind || '').trim();
+    return /^[0-9a-fA-F:.]+$/.test(b) ? b : '0.0.0.0';
+  }
+
+  /** Keeps the PKCE pair of a login in progress: opening the page again must not invalidate the link in use. */
+  private ensureFreshPKCE(): void {
+    if (!this.codeVerifier || Date.now() - this.pkceAt > AuthManager.PKCE_TTL) this.generatePKCECodes();
+  }
+
+  private securityHeaders(res: http.ServerResponse, strictPage = false): void {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', strictPage
+      ? "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+      : "frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
+  }
+
+  private sameOrigin(req: http.IncomingMessage): boolean {
+    const host = String(req.headers.host || '').toLowerCase();
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null') {
+      try { return new URL(origin).host.toLowerCase() === host; } catch { return false; }
+    }
+    if (origin === 'null') return false;
+    return true;   // no Origin header (non-browser client): the CSRF token still applies
+  }
+
+  private validCsrf(req: http.IncomingMessage): boolean {
+    const got = Buffer.from(String(req.headers['x-vicare-csrf'] || ''));
+    const exp = Buffer.from(this.csrfToken);
+    return got.length === exp.length && crypto.timingSafeEqual(got, exp);
+  }
+
+  private sessionFile(): string {
+    return path.join(path.dirname(this.tokenStoragePath), 'viessmann-dashboard-sessions.json');
+  }
+
+  private loadSessions(): void {
+    if (this.sessionsLoaded) return;
+    this.sessionsLoaded = true;
+    try {
+      const j = JSON.parse(fs.readFileSync(this.sessionFile(), 'utf8'));
+      const now = Date.now();
+      for (const [k, v] of Object.entries(j)) if (typeof v === 'number' && v > now) this.sessions.set(k, v);
+    } catch { /* no sessions yet */ }
+  }
+
+  private saveSessions(): void {
+    try { this.writeSecureJson(this.sessionFile(), Object.fromEntries(this.sessions)); } catch (e: any) {
+      this.log.debug(`Dashboard sessions not saved: ${e?.message || e}`);
+    }
+  }
+
+  private sessionId(req: http.IncomingMessage): string | undefined {
+    const m = String(req.headers.cookie || '').match(/(?:^|;\s*)vicare_session=([A-Za-z0-9_-]{20,})/);
+    return m ? m[1] : undefined;
+  }
+
+  private isUnlocked(req: http.IncomingMessage): boolean {
+    if (!this.dashboardPin()) return true;
+    this.loadSessions();
+    const id = this.sessionId(req);
+    if (!id) return false;
+    const h = crypto.createHash('sha256').update(id).digest('hex');
+    const exp = this.sessions.get(h);
+    if (!exp || exp < Date.now()) { if (exp) { this.sessions.delete(h); this.saveSessions(); } return false; }
+    return true;
+  }
+
+  /** Security info for the dashboard page / status. */
+  private dashboardSecurity(req: http.IncomingMessage) {
+    return { csrf: this.csrfToken, pinRequired: !!this.dashboardPin(), unlocked: this.isUnlocked(req) };
+  }
+
+  private readSmallJson(req: http.IncomingMessage): Promise<any> {
+    return new Promise((resolve) => {
+      let n = 0; const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => { n += c.length; if (n > 4096) { req.destroy(); resolve({}); } else chunks.push(c); });
+      req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { resolve({}); } });
+      req.on('error', () => resolve({}));
+    });
+  }
+
+  private sendJson(res: http.ServerResponse, code: number, obj: any, extra: Record<string, string> = {}): void {
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra });
+    res.end(JSON.stringify(obj));
+  }
+
+  /** POST /api/unlock {pin}: 5 wrong PINs from one address → 15 minutes locked out. */
+  private async handleUnlock(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const pin = this.dashboardPin();
+    if (!pin) { this.sendJson(res, 200, { ok: true, unlocked: true }); return; }
+    const ip = String(req.socket.remoteAddress || '?');
+    const f = this.pinFails.get(ip);
+    if (f && f.until > Date.now()) { this.sendJson(res, 429, { error: 'too many attempts', retryInSec: Math.ceil((f.until - Date.now()) / 1000) }); return; }
+    const b = await this.readSmallJson(req);
+    const a = crypto.createHash('sha256').update(String(b.pin ?? '')).digest();
+    const e = crypto.createHash('sha256').update(pin).digest();
+    if (!crypto.timingSafeEqual(a, e)) {
+      const fresh = f && f.until === 0 && Date.now() - f.first < 3600000;   // count failures within one hour
+      const n = (fresh ? f!.n : 0) + 1;
+      this.pinFails.set(ip, { n, first: fresh ? f!.first : Date.now(), until: n >= 5 ? Date.now() + 15 * 60000 : 0 });
+      if (n >= 5) this.log.warn(`🔒 Dashboard: 5 wrong PINs from ${ip}, locked for 15 minutes`);
+      this.sendJson(res, 403, { error: 'wrong PIN', left: Math.max(0, 5 - n) });
+      return;
+    }
+    this.pinFails.delete(ip);
+    this.loadSessions();
+    const id = crypto.randomBytes(32).toString('base64url');
+    const now = Date.now();
+    for (const [k, v] of this.sessions) if (v < now) this.sessions.delete(k);
+    this.sessions.set(crypto.createHash('sha256').update(id).digest('hex'), now + AuthManager.SESSION_TTL);
+    this.saveSessions();
+    this.log.info(`🔓 Dashboard unlocked from ${ip}`);
+    this.sendJson(res, 200, { ok: true, unlocked: true }, {
+      'Set-Cookie': `vicare_session=${id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${AuthManager.SESSION_TTL / 1000}`,
+    });
+  }
+
+  private handleLock(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const id = this.sessionId(req);
+    if (id) { this.sessions.delete(crypto.createHash('sha256').update(id).digest('hex')); this.saveSessions(); }
+    this.sendJson(res, 200, { ok: true, unlocked: !this.dashboardPin() }, { 'Set-Cookie': 'vicare_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0' });
+  }
+
+  /** Arms the OAuth callback for a login started from the browser (dashboard button or /reauth). */
+  private armBrowserLogin(): void {
+    if (this.pendingAuthCallback) return;   // the startup login is already waiting for the code
+    this.pendingAuthCallback = (code, error) => {
+      this.pendingAuthCallback = undefined;
+      if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; }
+      if (error) { this.log.error('❌ Login failed:', error.message); return; }
+      if (code) {
+        this.exchangeCodeForTokens(code)
+          .then(() => this.log.info('✅ Viessmann login successful'))
+          .catch((err) => this.log.error('❌ Login token exchange failed:', err));
+      }
+    };
+    const timeout = this.config.authTimeout || 300000;
+    this.authTimeout = setTimeout(() => {
+      this.pendingAuthCallback = undefined;
+      this.log.warn('⏰ Viessmann login from the dashboard timed out');
+    }, Math.max(timeout, AuthManager.PKCE_TTL));
+  }
 
   private startPersistentAuthServer(): void {
     if (this.authServer?.listening) {
@@ -497,10 +689,25 @@ export class AuthManager {
       const parsedUrl = new URL(req.url ?? '/', `http://localhost:${this.authServerPort}`);
       const pathname  = parsedUrl.pathname;
       const method    = req.method?.toUpperCase() ?? 'GET';
+      this.securityHeaders(res);
+
+      // ── Write gate: CSRF token + same origin (+ PIN session when configured) ──
+      if (method !== 'GET' && method !== 'HEAD') {
+        if (!this.sameOrigin(req) || !this.validCsrf(req)) {
+          this.sendJson(res, 403, { error: 'csrf', message: 'Reload the dashboard page and try again' });
+          return;
+        }
+        if (pathname === '/api/unlock' && method === 'POST') { void this.handleUnlock(req, res); return; }
+        if (pathname === '/api/lock' && method === 'POST') { this.handleLock(req, res); return; }
+        if (!this.isUnlocked(req)) {
+          this.sendJson(res, 401, { error: 'locked', message: 'Enter the dashboard PIN' });
+          return;
+        }
+      }
 
       // ── Dashboard routes (/api, /assets, /reports) ───────────────────────
       if (this.dashboard && /^\/(api|assets|reports)\//.test(pathname)) {
-        this.dashboard.handle(req, res, parsedUrl, () => this.dashboardAuth())
+        this.dashboard.handle(req, res, parsedUrl, () => this.dashboardAuth(), () => this.dashboardSecurity(req))
           .then((done) => { if (!done) { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('Not found'); } })
           .catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
         return;
@@ -509,66 +716,43 @@ export class AuthManager {
       // ── GET /health ──────────────────────────────────────────────────────
       if (pathname === '/health' && method === 'GET') {
         const status = this.getTokenStatus();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        this.sendJson(res, 200, {
           authenticated: status.hasTokens,
           expiresInSeconds: status.expiresInSeconds,
           hasRefreshToken: status.hasRefreshToken,
           refreshTokenExpiresInDays: status.refreshTokenExpiresInDays,
           pendingAuth: !!this.pendingAuthCallback,
-        }));
+        });
         return;
       }
 
       // ── POST /reauth ────────────────────────────────────────────────────
       if (pathname === '/reauth' && method === 'POST') {
-        this.log.info('🔄 Re-authentication requested from auth status page');
+        this.log.info('🔄 Re-authentication requested from the dashboard');
         this.clearStoredTokens();
+        if (this.pendingAuthCallback) { this.pendingAuthCallback = undefined; if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; } }
         this.generatePKCECodes();
         const authUrl = this.buildAuthUrl();
-
-        // Set pending callback — whoever opened /reauth will be redirected to Viessmann
-        // The promise is not awaited here; Homebridge will pick up new tokens on next authenticate()
-        this.pendingAuthCallback = (code, error) => {
-          this.pendingAuthCallback = undefined;
-          if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; }
-          if (error) { this.log.error('❌ Re-auth failed:', error.message); return; }
-          if (code) {
-            this.exchangeCodeForTokens(code)
-              .then(() => this.log.info('✅ Re-authentication successful'))
-              .catch((err) => this.log.error('❌ Re-auth token exchange failed:', err));
-          }
-        };
-
-        const timeout = this.config.authTimeout || 300000;
-        this.authTimeout = setTimeout(() => {
-          this.pendingAuthCallback = undefined;
-          this.log.warn('⏰ Re-authentication timed out');
-        }, timeout);
-
-        // Redirect the browser to Viessmann OAuth
-        res.writeHead(302, { Location: authUrl });
-        res.end();
-        // Also log the URL for headless environments
-        this.openBrowser(authUrl);
+        this.armBrowserLogin();
+        this.sendJson(res, 200, { authUrl });
+        this.openBrowser(authUrl);   // also in the log, for headless setups
         return;
       }
 
       // ── POST /clear ─────────────────────────────────────────────────────
       if (pathname === '/clear' && method === 'POST') {
-        this.log.info('🗑️ Token clear requested from auth status page');
+        this.log.info('🗑️ Token clear requested from the dashboard');
         this.clearStoredTokens();
         if (this.pendingAuthCallback) {
           this.pendingAuthCallback = undefined;
           if (this.authTimeout) { clearTimeout(this.authTimeout); this.authTimeout = undefined; }
         }
-        res.writeHead(302, { Location: '/' });
-        res.end();
+        this.sendJson(res, 200, { ok: true });
         return;
       }
 
-      // ── GET /callback ────────────────────────────────────────────────────
-      if (pathname === '/' || pathname === '/callback') {
+      // ── GET / and the OAuth callback ─────────────────────────────────────
+      if ((pathname === '/' || pathname === '/callback') && (method === 'GET' || method === 'HEAD')) {
         const code  = parsedUrl.searchParams.get('code');
         const error = parsedUrl.searchParams.get('error');
         const errorDesc = parsedUrl.searchParams.get('error_description') || error || '';
@@ -576,36 +760,37 @@ export class AuthManager {
         if (error) {
           this.log.error(`❌ OAuth error: ${errorDesc}`);
           if (this.pendingAuthCallback) this.pendingAuthCallback(undefined, new Error(errorDesc));
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           res.end(this.buildStatusPageHtml('error', errorDesc));
           return;
         }
 
-        if (code && this.pendingAuthCallback) {
-          this.log.info('✅ OAuth callback received — exchanging code for tokens...');
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(this.buildStatusPageHtml('exchanging'));
-          this.pendingAuthCallback(code);
+        if (code) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          if (this.pendingAuthCallback) {
+            this.log.info('✅ OAuth callback received — exchanging code for tokens...');
+            res.end(this.buildStatusPageHtml('exchanging'));
+            this.pendingAuthCallback(code);
+          } else {
+            this.log.warn('⚠️ OAuth callback received but no login is in progress (expired): press "Log in" again');
+            res.end(this.buildStatusPageHtml('error', 'The login link has expired. Open the dashboard and press "Log in" again.'));
+          }
           return;
         }
 
-        // No code — render status page
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        // No code — render the dashboard (or the plain status page)
+        res.setHeader('Cache-Control', 'no-store');
         const tokenStatus = this.getTokenStatus();
+        let authUrl: string | undefined;
+        if (!tokenStatus.hasTokens) { this.ensureFreshPKCE(); authUrl = this.buildAuthUrl(); this.armBrowserLogin(); }
         if (this.dashboard) {
-          let authUrl: string | undefined;
-          if (!tokenStatus.hasTokens) { this.generatePKCECodes(); authUrl = this.buildAuthUrl(); }
-          res.end(this.dashboard.page(req, this.dashboardAuth(authUrl)));
+          this.securityHeaders(res, true);
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(this.dashboard.page(req, this.dashboardAuth(authUrl), this.dashboardSecurity(req)));
           return;
         }
-        if (tokenStatus.hasTokens) {
-          res.end(this.buildStatusPageHtml('authenticated'));
-        } else {
-          // Not authenticated: show "click to authenticate" page
-          this.generatePKCECodes();
-          const authUrl = this.buildAuthUrl();
-          res.end(this.buildStatusPageHtml('unauthenticated', authUrl));
-        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(tokenStatus.hasTokens ? this.buildStatusPageHtml('authenticated') : this.buildStatusPageHtml('unauthenticated', authUrl));
         return;
       }
 
@@ -613,18 +798,24 @@ export class AuthManager {
       res.end('Not found');
     });
 
-    this.authServer.listen(this.authServerPort, '0.0.0.0', () => {
+    const bind = this.bindAddress();
+    this.authServer.listen(this.authServerPort, bind, () => {
       const port = this.authServerPort;
-      const ip   = this.hostIp;
+      const local = bind === '127.0.0.1' || bind === '::1';
+      const ip   = local ? bind : (bind === '0.0.0.0' || bind === '::' ? this.hostIp : bind);
       this.log.info('═'.repeat(60));
       this.log.info(`🔥 Viessmann dashboard: http://${ip}:${port}`);
       this.log.info('   Login · reports · flue gas analyses · API status');
+      if (local) this.log.info('   (dashboardBind: reachable only from this computer)');
+      if (this.dashboardPin()) this.log.info('   🔒 Changes need the dashboard PIN');
       this.log.info('═'.repeat(60));
     });
 
     this.authServer.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
         this.log.warn(`⚠️ Port ${this.authServerPort} already in use — the Viessmann dashboard and the login page are not available (change redirectPort)`);
+      } else if (error.code === 'EADDRNOTAVAIL') {
+        this.log.warn(`⚠️ dashboardBind "${bind}" is not an address of this computer — the dashboard is not available (remove dashboardBind or use one of its IP addresses)`);
       } else {
         this.log.error('❌ Auth server error:', error.message);
       }
@@ -635,7 +826,16 @@ export class AuthManager {
   private buildStatusPageHtml(state: 'authenticated' | 'unauthenticated' | 'exchanging' | 'error', extra?: string): string {
     const status   = this.getTokenStatus();
     const port     = this.authServerPort;
-    const username = this.config.username || '';
+    // Everything put into the page is escaped: error_description comes from the URL (reflected XSS)
+    const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+    const username = esc(this.config.username || '');
+    extra = extra === undefined ? undefined : esc(extra);
+    // Buttons call the API with the CSRF token (plain forms are refused since 2.0.82)
+    const actions = `<script>
+      function vicare(path, ask){ if (ask && !confirm(ask)) return;
+        fetch(path,{method:'POST',headers:{'X-Vicare-Csrf':${JSON.stringify(this.csrfToken)}}})
+          .then(function(r){return r.json();}).then(function(j){ if (j.authUrl) location.href=j.authUrl; else location.href='/'; });
+      }</script>`;
 
     const css = `
       <style>
@@ -692,13 +892,9 @@ export class AuthManager {
         </div>
         <div class="card">
           <div class="btns">
-            <form method="POST" action="/reauth" style="margin:0">
-              <button type="submit" class="btn-secondary">🔄 Re-authenticate</button>
-            </form>
-            <form method="POST" action="/clear" style="margin:0" onsubmit="return confirm('Clear stored tokens and disconnect?')">
-              <button type="submit" class="btn-danger">🗑️ Clear tokens</button>
-            </form>
-          </div>
+            <button type="button" class="btn-secondary" onclick="vicare('/reauth')">🔄 Re-authenticate</button>
+            <button type="button" class="btn-danger" onclick="vicare('/clear','Clear stored tokens and disconnect?')">🗑️ Clear tokens</button>
+          </div>${actions}
         </div>
         <footer>homebridge-viessmann-vicare &nbsp;·&nbsp; auth status</footer>
       </body></html>`;
@@ -740,8 +936,8 @@ export class AuthManager {
         <div class="badge no">❌ Authentication error</div>
         <p style="font-size:14px;color:var(--bad);margin-bottom:16px">${extra ?? 'Unknown error'}</p>
         <div class="btns">
-          <a href="/reauth" class="btn btn-secondary" onclick="event.preventDefault();fetch('/reauth',{method:'POST'}).then(r=>r.ok?window.location.href='/':null)">🔄 Try again</a>
-        </div>
+          <button type="button" class="btn btn-secondary" onclick="vicare('/reauth')">🔄 Try again</button>
+        </div>${actions}
       </div>
     </body></html>`;
   }

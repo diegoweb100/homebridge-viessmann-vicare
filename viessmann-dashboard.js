@@ -12,9 +12,10 @@
  * Mounted by src/auth-manager.ts: the auth server calls handle() for every request it does
  * not serve itself, and page() for "/" when there is no OAuth code in the URL.
  *
- * Write requests (POST/PUT/DELETE on /api) must carry the header "X-Vicare-Dashboard: 1":
- * browsers cannot add it from another site without a CORS preflight, which this server
- * never allows, so other web pages cannot change data on your LAN (CSRF protection).
+ * Security is enforced by the auth server before handle() is called (src/auth-manager.ts):
+ * every write needs the per-start CSRF token (header X-Vicare-Csrf, embedded in the page served
+ * by this server and unreadable by other web sites) and a same-origin Origin header; with
+ * dashboardPin set, writes also need an unlocked session. Reads stay open on the home network.
  */
 const fs = require('fs');
 const path = require('path');
@@ -188,9 +189,10 @@ function createDashboard(opts) {
 
   // ── page ───────────────────────────────────────────────────────────────────
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  function page(req, auth) {
+  function page(req, auth, security) {
     const lang = langOf(req);
-    const boot = { lang, version: opts.pluginVersion || '', retentionDays, auth: authView(auth) };
+    const sec = security || {};
+    const boot = { lang, version: opts.pluginVersion || '', retentionDays, auth: authView(auth), csrf: sec.csrf || '', pinRequired: !!sec.pinRequired, unlocked: sec.unlocked !== false };
     return `<!DOCTYPE html>
 <html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Viessmann ViCare</title><link rel="stylesheet" href="/assets/app.css"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f97316' d='M12 2c1 4 6 6 6 12a6 6 0 0 1-12 0c0-3 2-5 3-6 0 2 1 3 2 3-1-3 0-6 1-9z'/%3E%3C/svg%3E">
@@ -208,7 +210,7 @@ function createDashboard(opts) {
   }
 
   // ── router ─────────────────────────────────────────────────────────────────
-  async function handle(req, res, url, getAuth) {
+  async function handle(req, res, url, getAuth, getSecurity) {
     const p = url.pathname, m = (req.method || 'GET').toUpperCase();
     try {
       if (p.startsWith('/assets/') && m === 'GET') {
@@ -224,11 +226,11 @@ function createDashboard(opts) {
         return true;
       }
       if (!p.startsWith('/api/')) return false;
-      if (m !== 'GET' && req.headers['x-vicare-dashboard'] !== '1') { send(res, 403, { error: 'missing dashboard header' }); return true; }
 
       if (p === '/api/status' && m === 'GET') {
         let curve = null; try { curve = opts.curve ? opts.curve.status() : null; } catch { /* tuner not ready */ }
-        send(res, 200, { auth: authView(getAuth ? getAuth() : null), api: apiStatus(), installations: installations(), reports: listReports(), combustion: combSummary(), curve, retentionDays, version: opts.pluginVersion || '' });
+        const sec = getSecurity ? getSecurity() : {};
+        send(res, 200, { auth: authView(getAuth ? getAuth() : null), security: { pinRequired: !!sec.pinRequired, unlocked: sec.unlocked !== false }, api: apiStatus(), installations: installations(), reports: listReports(), combustion: combSummary(), curve, retentionDays, version: opts.pluginVersion || '' });
         return true;
       }
       if (p === '/api/reports' && m === 'GET') { send(res, 200, listReports()); return true; }
@@ -246,6 +248,16 @@ function createDashboard(opts) {
         if (!NAME_RE.test(f)) { send(res, 400, { error: 'name' }); return true; }
         fs.rmSync(path.join(reportsDir, f), { force: true }); fs.rmSync(path.join(reportsDir, f.replace(/\.html$/, '.json')), { force: true });
         send(res, 200, { ok: true }); return true;
+      }
+      if ((p === '/api/curve/check' || p === '/api/curve/apply') && m === 'POST') {
+        if (!opts.curve || !opts.curve.check) { send(res, 404, { error: 'not available' }); return true; }
+        const b = await body(req);
+        const inst = String(b.installationId || ''), hc = Number(b.circuit) || 0;
+        try {
+          const exp = b.expected && typeof b.expected === 'object' ? { slope: Number(b.expected.slope), shift: Number(b.expected.shift) } : undefined;
+          send(res, 200, p === '/api/curve/check' ? await opts.curve.check(inst, hc) : await opts.curve.apply(inst, hc, exp));
+        } catch (e) { send(res, 400, { error: e.message }); }
+        return true;
       }
       if (p === '/api/curve/restore' && m === 'POST') {
         if (!opts.curve) { send(res, 404, { error: 'not available' }); return true; }

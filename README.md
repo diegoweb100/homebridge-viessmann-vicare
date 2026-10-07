@@ -181,7 +181,18 @@ One page for everything, at **`http://<homebridge-ip>:4200`** (the OAuth `redire
 - **Create a report**: 1 day to 1 year, language, gas and electricity price, advanced options. Reports run in the background and are **saved**: the *Saved reports* list shows them until they expire (`reportRetentionDays`, default 30), with *Open* and *Delete*.
 - **Flue gas analyses**: add, edit and delete the installer's analyser values (same labels as the printout: CO₂, O₂, λ, CO, uCO, TF, TA, efficiency, Qs, NOx, tdp); last result, next efficiency check and maintenance. The report adds a full *Flue gas analysis* section.
 
-Before 2.0.81 reports had their own server on `reportServerPort` (e.g. 3001) and the login page was separate: now only the dashboard port is used and `reportServerPort` is ignored. Write actions need a header that other web sites cannot send, so a page on the internet cannot change your data; the dashboard is meant for the home network only (do not expose the port to the internet).
+Before 2.0.81 reports had their own server on `reportServerPort` (e.g. 3001) and the login page was separate: now only the dashboard port is used and `reportServerPort` is ignored.
+
+**Security (v2.0.82+)** — the dashboard is meant for the home network only: never forward its port to the internet.
+- Every change needs a token that only the dashboard's own pages can read (CSRF protection) and a same-origin request, so a web page you open cannot change anything on your network.
+- `dashboardPin` (optional): changes also need a PIN, asked once per browser and remembered for 30 days; 5 wrong attempts lock that device out for 15 minutes. Use it if other people or devices share your network. Reading stays open.
+- `dashboardBind` (optional): listen address. Default all networks of the computer (needed to log in from a phone or PC); an IP of the computer limits it to that network; `127.0.0.1` to the computer itself (then log in through an SSH tunnel, e.g. `ssh -L 4200:127.0.0.1:4200 pi@homebridge`).
+- Security headers on every page; the login code never leaks through the Referer; the token file is written atomically with permissions 0600.
+
+```json
+"dashboardPin": "4826",
+"dashboardBind": "192.168.1.10"
+```
 
 ## 📊 HTML Report Preview
 
@@ -211,7 +222,7 @@ All Viessmann heating systems compatible with ViCare API:
 | Burner | Switch (read-only) | Burner on/off |
 | Outside | Temperature sensor | Boiler outdoor sensor |
 | Heating circuit | Heater | **Heating** only while the burner is really heating the circuit (burner on, circuit pump running if reported, no hot-water charge); **Idle** when the circuit is on but not being heated; **Off** in Off / Holiday / standby |
-| **Alarm** | Contact sensor | **Opens** on a boiler fault code (F.xx), a lock-out after a fault (reset needed) or water pressure outside 0.8–3.0 bar. Turn on notifications for it in Home to get an alert. |
+| **Alarm** | Contact sensor | **Opens** on a boiler fault code (F.xx), a lock-out after a fault (reset needed) or water pressure outside 0.8–3.0 bar, and shows a warning sign on its tile. Turn on notifications for it in Home to get an alert. |
 | Water pressure | Eve app only | Heating-system pressure as Eve "Air pressure" in hPa: **1200 hPa = 1.2 bar**. Apple Home has no pressure type, so the Home app does not show it (`features.exposeWaterPressureEve`) |
 | PV / battery / grid / wallbox (#1 #2 #5) | Light sensors in W, battery | Only for devices you have (VitoCharge, PV, wallbox): *PV Production*, *Battery Charging/Discharging*, battery level, *Grid Draw*, *Grid Feed-in*, *House Consumption*, *EV Charging Power*. The value shown in "lux" is the power in watts |
 
@@ -239,7 +250,13 @@ All Viessmann heating systems compatible with ViCare API:
 - **Temperatures**: Reduced, Normal and Comfort are the three temperature levels the time schedule uses. Each is its own thermostat tile ("Temp Reduced", "Temp Normal", "Temp Comfort"): its dial changes that level on the boiler, and it follows the time schedule: only the level the boiler is using right now is on (all off when the circuit is off; Holiday → Reduced, Holiday at home → Normal, Extended heating → Comfort). To change a level that is not in use, switch its tile to Heat, set the temperature, and it returns to Off two minutes later, also from automations (`exposeProgramTemperatures`, on by default). The main heating dial changes the level currently in force.
 - There is no Reduced switch: the boiler has no command to select the reduced temperature, the time schedule decides it. The reduced temperature is still shown by the dial while Holiday is on.
 
-**Automatic heating-curve optimisation (v2.0.81+, `features.curveAutoTune`, off by default)**: once a day the plugin compares the room temperature with the program temperature (Normal/Comfort periods, last 48 h) and, if the room is more than 0.5 °C off, corrects the heating curve by one small step: the **slope** (±0.1) when the error is larger in cold weather, otherwise the **shift** (±1). It never goes further than ±0.3 slope / ±3 shift from the curve it found when switched on (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`), waits 48 h after each change (24 h if the house is too cold) and does nothing without heating (summer, holiday, standby, outdoor above 15 °C): outside the heating season it only reads the local history, with no API call and nothing written. Every change is written in the log with its reason and listed in the dashboard, where *Restore the starting curve* puts the original values back. It needs a room temperature (room sensor or ViCare Smart Climate).
+**Automatic heating-curve optimisation (v2.0.81+, v2 since 2.0.82, `features.curveAutoTune`, off by default)**: once a day, on heating days only, the plugin compares the room temperature with the program temperature (Normal/Comfort periods, up to 7 days, never earlier than 12 h after the last change) and fits the error against the outdoor temperature:
+- error that clearly grows with the cold (wide outdoor range, good fit) → **slope** ±0.1; same error at any outdoor temperature → **shift** ±1; within ±0.5 °C → nothing
+- a **confidence** (0–100 %) from the number of samples, the hours covered, how many samples agree, the size of the error and, for the slope, fit and outdoor range; the automatic mode applies only from 75 %
+- **never raises the curve when the flow is already high** (median flow with the burner on ≥ `curveAutoTuneMaxFlow`, default 55 °C, or near the circuit maximum): a cold house with a hot flow is a radiator, valve, air, pump or sensor problem, and the dashboard says so
+- `curveAutoTuneMode`: `"auto"` (default) applies the change; `"proposal"` only proposes it, and you press *Apply* in the dashboard (the data are checked again before writing)
+- limits: never further than ±0.3 slope / ±3 shift from the curve found when switched on (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`), 48 h between changes (24 h if the house is too cold); nothing without heating (summer, holiday, standby, outdoor above 15 °C): outside the heating season it only reads the local history, with no API call and nothing written
+- the dashboard shows the last decision (current and proposed curve, reason, confidence, samples, outdoor range, median error, flow, safety result), *Check now*, the history of changes and *Restore the starting curve*. It needs a room temperature (room sensor or ViCare Smart Climate).
 
 Hot water: Comfort, Eco and Off are mutually exclusive too; switching the active mode off returns to `dhwDefaultMode` (default Eco).
 
@@ -1186,6 +1203,22 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.82] - 2026-10-07
+- fix (security): **Log in again** and **Disconnect** in the dashboard (`/reauth`, `/clear`) were plain form posts without the protection of the other dashboard actions: a web page opened on any computer of the home network could disconnect the plugin from Viessmann. Every change now needs a **CSRF token** that only pages served by the dashboard can read, plus a same-origin check. (The 2.0.81 notes said all write actions were protected: these two were not.)
+- fix (security): the login error page showed the `error_description` of the address without escaping it (reflected XSS); all values are now escaped
+- feat (security): optional **dashboard PIN** (`dashboardPin`): every change (log in again, disconnect, reports, flue gas analyses, heating curve) asks for it once per browser, remembered for 30 days (HttpOnly, SameSite=Strict cookie); 5 wrong PINs lock that device out for 15 minutes. Reading stays open on the home network. Without a PIN everything works as before
+- feat (security): security headers on every page (`Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, so the login code never leaks through the Referer)
+- feat: **listen address** of the dashboard configurable (`dashboardBind`): default all networks as before; an IP of the computer limits it to that network; `127.0.0.1` to this computer only (log in through an SSH tunnel)
+- fix: the Viessmann token file is written **atomically** (temporary file, fsync, rename) with permissions 0600: a power cut during the write can no longer leave a truncated file and force a new login
+- fix: opening the dashboard no longer invalidates a login link already in use (the PKCE pair is kept for 15 minutes); a login started from the dashboard is accepted even after the startup login timed out, and an expired link says so instead of being ignored
+- feat: **heating-curve optimisation v2** — one decision engine for every mode:
+  - regression of the room error against the outdoor temperature on up to **7 days** of data (never earlier than 12 h after the last change): the **slope** changes only when the error clearly depends on the cold (wide outdoor range, good fit), otherwise the **shift**; steps stay those the boiler accepts (0.1 / 1)
+  - **confidence** 0–100 % (samples, hours covered, agreement of the samples, size of the error, fit and outdoor range for the slope): applied automatically only from 75 %
+  - **flow veto**: if the house is cold although the flow with the burner on is already high (`curveAutoTuneMaxFlow`, default 55 °C, or near the circuit maximum), the curve is **never raised** and the dashboard says to check radiator valves, air, pump and room sensor
+  - **proposal mode** (`curveAutoTuneMode: "proposal"`): the plugin only proposes; the dashboard shows current and proposed curve, reason, confidence, samples, outdoor range, median error, flow and safety result, with *Apply* (re-checked with fresh data before writing) and *Check now*
+  - every decision is a structured object (decision, reason code, confidence, statistics, flow, safety) used by the automatic mode, the log and the dashboard alike
+- feat (HomeKit): the boiler **Alarm** sensor also reports *StatusFault*, so Apple Home marks its tile with a warning sign (HAP does not allow a fault status on the heating tiles themselves)
 
 ### [2.0.81] - 2026-09-29
 - feat: **one Viessmann dashboard** at `http://<homebridge-ip>:4200` (the OAuth `redirectPort`) replaces the separate login status page and report server:

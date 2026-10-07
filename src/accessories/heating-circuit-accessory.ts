@@ -352,6 +352,7 @@ export class ViessmannHeatingCircuitAccessory {
 
     // Configure HeaterCooler service
     this.setupHeaterCoolerService();
+    this.setupFaultStatus();
 
     // Add temperature program services
     this.setupTemperatureProgramServices();
@@ -421,6 +422,12 @@ export class ViessmannHeatingCircuitAccessory {
     }
   }
   private lastHeaterState?: number;
+
+  /** StatusFault is not allowed on HeaterCooler by HAP: removes it if a pre-release build added it. */
+  private setupFaultStatus() {
+    const ch = this.heaterCoolerService.characteristics.find(c => c.UUID === this.platform.Characteristic.StatusFault.UUID);
+    if (ch) this.heaterCoolerService.removeCharacteristic(ch);
+  }
 
   private setupHeaterCoolerService() {
     // Active characteristic (On/Off)

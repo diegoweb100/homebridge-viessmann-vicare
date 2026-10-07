@@ -1,4 +1,4 @@
-/* Viessmann dashboard — client (homebridge-viessmann-vicare 2.0.81+) */
+/* Viessmann dashboard — client (homebridge-viessmann-vicare 2.0.81+; CSRF token and PIN since 2.0.82) */
 (function () {
   'use strict';
   const BOOT = JSON.parse(document.getElementById('boot').textContent);
@@ -12,12 +12,42 @@
   const fmtDT = (ds) => ds ? new Date(ds).toLocaleString(LOC, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
   const ago = (sec) => sec === null || sec === undefined ? '—' : sec < 90 ? tr(`${sec} s fa`, `${sec} s ago`) : sec < 5400 ? tr(`${Math.round(sec / 60)} min fa`, `${Math.round(sec / 60)} min ago`) : sec < 172800 ? tr(`${Math.round(sec / 3600)} ore fa`, `${Math.round(sec / 3600)} h ago`) : tr(`${Math.round(sec / 86400)} giorni fa`, `${Math.round(sec / 86400)} days ago`);
   const store = { get(k, d) { try { const v = localStorage.getItem('vicare.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem('vicare.' + k, JSON.stringify(v)); } catch { /* private mode */ } } };
-  const api = async (method, url, data) => {
-    const r = await fetch(url, { method, headers: method === 'GET' ? {} : { 'Content-Type': 'application/json', 'X-Vicare-Dashboard': '1' }, body: data ? JSON.stringify(data) : undefined });
+  // Every change carries the CSRF token of this page; with a dashboard PIN the server answers
+  // 401 "locked" until the PIN is entered, then the request is sent again.
+  const SEC = { pinRequired: !!BOOT.pinRequired, unlocked: BOOT.unlocked !== false };
+  const api = async (method, url, data, retried) => {
+    const r = await fetch(url, { method, credentials: 'same-origin', headers: method === 'GET' ? {} : { 'Content-Type': 'application/json', 'X-Vicare-Csrf': BOOT.csrf || '' }, body: data ? JSON.stringify(data) : undefined });
     const j = await r.json().catch(() => ({}));
+    if (r.status === 403 && j.error === 'csrf') { location.reload(); throw new Error(tr('pagina scaduta, la ricarico', 'page expired, reloading')); }
+    if (r.status === 401 && j.error === 'locked' && !retried) { SEC.unlocked = false; renderPills(); if (await askPin()) return api(method, url, data, true); throw new Error(tr('serve il PIN', 'PIN needed')); }
     if (!r.ok) throw new Error(j.error || r.statusText);
     return j;
   };
+  // PIN dialog (only when dashboardPin is set in the plugin settings)
+  function askPin() {
+    return new Promise((resolve) => {
+      const m = document.createElement('div');
+      m.className = 'modal';
+      m.innerHTML = `<form class="card mbox"><h2>${icon('key')} ${tr('PIN della dashboard', 'Dashboard PIN')}</h2>
+        <p class="intro">${tr('Le modifiche sono protette da un PIN (impostazioni del plugin, “dashboardPin”). Questo browser resterà sbloccato per 30 giorni.', 'Changes are protected by a PIN (plugin settings, “dashboardPin”). This browser stays unlocked for 30 days.')}</p>
+        <input type="password" inputmode="numeric" autocomplete="current-password" id="pin-in" required>
+        <div class="err" id="pin-err"></div>
+        <div class="btns"><button class="btn primary" type="submit">${tr('Sblocca', 'Unlock')}</button><button class="btn" type="button" id="pin-x">${tr('Annulla', 'Cancel')}</button></div></form>`;
+      document.body.appendChild(m);
+      const done = (v) => { m.remove(); resolve(v); };
+      $('#pin-in', m).focus();
+      $('#pin-x', m).onclick = () => done(false);
+      $('form', m).onsubmit = async (e) => {
+        e.preventDefault();
+        const r = await fetch('/api/unlock', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Vicare-Csrf': BOOT.csrf || '' }, body: JSON.stringify({ pin: $('#pin-in', m).value }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) { SEC.unlocked = true; renderPills(); done(true); return; }
+        $('#pin-err', m).textContent = r.status === 429 ? tr(`Troppi tentativi: riprova tra ${Math.ceil((j.retryInSec || 900) / 60)} minuti.`, `Too many attempts: try again in ${Math.ceil((j.retryInSec || 900) / 60)} minutes.`)
+          : r.status === 403 && j.error === 'csrf' ? tr('Pagina scaduta: ricaricala.', 'Page expired: reload it.')
+          : tr(`PIN errato (${j.left ?? 0} tentativi rimasti).`, `Wrong PIN (${j.left ?? 0} attempts left).`);
+      };
+    });
+  }
   const toast = (msg) => { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2600); };
   const IC = {
     curve: '<path d="M3 20c4 0 5-9 9-9s5-7 9-7"/><path d="M3 4v16h18"/>',
@@ -52,7 +82,13 @@
     if (S.api) { const pct = S.api.dailyUsagePct ?? 0; p.push(`<span class="pill"><span class="dot ${pct > 80 ? 'bad' : pct > 50 ? 'warn' : 'good'}"></span>API ${Math.round(pct)}%</span>`); }
     const inst = S.installations[0];
     if (inst) { const age = Math.round((Date.now() - new Date(inst.updated)) / 1000); p.push(`<span class="pill"><span class="dot ${age > 3600 ? 'warn' : 'good'}"></span>${tr('Dati', 'Data')} ${ago(age)}</span>`); }
+    if (SEC.pinRequired) p.push(`<button class="pill lockpill" id="lockpill" type="button">${SEC.unlocked ? '🔓 ' + tr('Modifiche sbloccate', 'Changes unlocked') : '🔒 ' + tr('Modifiche bloccate', 'Changes locked')}</button>`);
     $('#pills').innerHTML = p.join('');
+    const lp = $('#lockpill');
+    if (lp) lp.onclick = async () => {
+      if (SEC.unlocked) { await api('POST', '/api/lock').catch(() => null); SEC.unlocked = false; renderPills(); toast(tr('Modifiche bloccate', 'Changes locked')); }
+      else if (await askPin()) toast(tr('Modifiche sbloccate', 'Changes unlocked'));
+    };
   }
 
   // ── login ──────────────────────────────────────────────────────────────────
@@ -64,10 +100,11 @@
       el.className = 'card hero';
       el.innerHTML = `<h2>${icon('key')} ${tr('Collega il tuo account Viessmann', 'Connect your Viessmann account')}</h2>
       <p class="intro">${tr('Il plugin non ha ancora un accesso valido: senza, Home non può leggere né comandare la caldaia.', 'The plugin has no valid login yet: without it, Home cannot read or control the boiler.')}</p>
-      ${a.authUrl ? `<a class="btn primary big" href="${esc(a.authUrl)}">${tr('Accedi a Viessmann', 'Log in to Viessmann')} →</a>` : `<form method="post" action="/reauth"><button class="btn primary big">${tr('Accedi a Viessmann', 'Log in to Viessmann')} →</button></form>`}
+      ${a.authUrl ? `<a class="btn primary big" href="${esc(a.authUrl)}">${tr('Accedi a Viessmann', 'Log in to Viessmann')} →</a>` : `<button class="btn primary big" type="button" id="au-login">${tr('Accedi a Viessmann', 'Log in to Viessmann')} →</button>`}
       <ol class="steps"><li>${tr('Accedi con le stesse credenziali dell’app ViCare', 'Log in with your ViCare app credentials')}${a.username ? ` (<b>${esc(a.username)}</b>)` : ''}.</li>
       <li>${tr('Conferma l’accesso: tornerai automaticamente qui.', 'Confirm access: you will come back here automatically.')}</li>
       <li>${tr('Se Viessmann segnala “redirect_uri” non valido, nel portale sviluppatori Viessmann deve essere registrato esattamente', 'If Viessmann reports an invalid “redirect_uri”, the Viessmann developer portal must list exactly')} <code>${esc(a.redirectUri)}</code></li></ol>`;
+      wireAuth();
       return;
     }
     el.className = 'card c6';
@@ -80,8 +117,19 @@
         <div class="row"><span class="k">${tr('Token attuale', 'Current token')}</span><span class="v">${a.expiresInSeconds ? tr(`valido ancora ${Math.round(a.expiresInSeconds / 60)} min`, `valid for ${Math.round(a.expiresInSeconds / 60)} min`) : '—'}</span></div>
         <div class="row"><span class="k">${tr('Rinnovo automatico', 'Automatic renewal')}</span><span class="v ${days !== null && days < 14 ? 'warn' : ''}">${a.hasRefreshToken ? (days !== null ? tr(`ancora ${days} giorni`, `${days} more days`) : tr('attivo', 'active')) : tr('non disponibile', 'not available')}</span></div>
       </div>
-      <div class="btns"><form method="post" action="/reauth"><button class="btn">${tr('Rifai l’accesso', 'Log in again')}</button></form>
-      <form method="post" action="/clear" onsubmit="return confirm('${tr('Disconnettere il plugin da Viessmann? Home smetterà di funzionare finché non rifai l’accesso.', 'Disconnect the plugin from Viessmann? Home stops working until you log in again.')}')"><button class="btn danger">${tr('Disconnetti', 'Disconnect')}</button></form></div>`;
+      <div class="btns"><button class="btn" type="button" id="au-login">${tr('Rifai l’accesso', 'Log in again')}</button>
+      <button class="btn danger" type="button" id="au-clear">${tr('Disconnetti', 'Disconnect')}</button></div>`;
+    wireAuth();
+  }
+  function wireAuth() {
+    const l = $('#au-login'), c = $('#au-clear');
+    if (l) l.onclick = async () => {
+      try { const j = await api('POST', '/reauth'); if (j.authUrl) location.href = j.authUrl; } catch (e) { toast(tr('Errore: ', 'Error: ') + e.message); }
+    };
+    if (c) c.onclick = async () => {
+      if (!confirm(tr('Disconnettere il plugin da Viessmann? Home smetterà di funzionare finché non rifai l’accesso.', 'Disconnect the plugin from Viessmann? Home stops working until you log in again.'))) return;
+      try { await api('POST', '/clear'); location.reload(); } catch (e) { toast(tr('Errore: ', 'Error: ') + e.message); }
+    };
   }
 
   // ── status ─────────────────────────────────────────────────────────────────
@@ -248,31 +296,94 @@
     .replace(/waiting for the effect of the last change \((\d+) h\)/, 'attendo l’effetto dell’ultima modifica ($1 ore)')
     .replace(/circuit not heating \(([^)]*)\)/, 'circuito non in riscaldamento ($1)').replace('holiday program active', 'programma vacanza attivo')
     .replace(/room ([+-][\d.]+) °C vs the program over 48 h/, 'stanza $1 °C rispetto al programma nelle ultime 48 ore')
+    .replace(/room ([+-][\d.]+) °C vs the program/, 'stanza $1 °C rispetto al programma').replace(/(\d+) samples, (\d+) h/, '$1 campioni, $2 ore')
+    .replace(/([+-][\d.]+) °C at ([\d.-]+) °C vs ([+-][\d.]+) °C at ([\d.-]+) °C/, '$1 °C con $2 °C fuori, $3 °C con $4 °C')
+    .replace(/within ±0.5 °C, no change/, 'entro ±0,5 °C, nessuna modifica').replace(/confidence (\d+) % \(below (\d+) %\)/, 'affidabilità $1 % (sotto $2 %)')
+    .replace('(applied from the dashboard)', '(applicata dalla dashboard)').replace(/room cold although the flow is already high/, 'casa fresca con mandata già alta')
     .replace('outdoor', 'esterno').replace(', cold', ', freddo').replace(', mild', ', mite')
     .replace(/: limit reached/, ': limite raggiunto').replace('restored from the dashboard', 'ripristinata dalla dashboard')
     .replace('heating curve not available on this device', 'curva non disponibile su questo dispositivo');
+  // Decision of the curve engine, in plain words (codes from src/curve-tuner.ts)
+  const num1 = (x) => nf(x, 1);
+  function decisionText(d) {
+    if (!d) return '';
+    const st = d.stats, n = (re) => { const m = String(d.reason || '').match(re); return m ? m[1] : '?'; };
+    const room = st ? tr(`La stanza è in media ${st.medianRoomError >= 0 ? '+' : ''}${num1(st.medianRoomError)} °C rispetto al programma (${st.samples} campioni in ${Math.round(st.hours)} ore, esterno ${num1(st.outdoorLow)}…${num1(st.outdoorHigh)} °C).`,
+      `The room is on average ${st.medianRoomError >= 0 ? '+' : ''}${num1(st.medianRoomError)} °C vs the program (${st.samples} samples over ${Math.round(st.hours)} h, outdoor ${num1(st.outdoorLow)}…${num1(st.outdoorHigh)} °C).`) : '';
+    const byOut = st ? tr(`Con ${num1(st.outdoorLow)} °C fuori la stanza è a ${st.errorAtLow >= 0 ? '+' : ''}${num1(st.errorAtLow)} °C, con ${num1(st.outdoorHigh)} °C a ${st.errorAtHigh >= 0 ? '+' : ''}${num1(st.errorAtHigh)} °C: l’errore dipende dal freddo, quindi va cambiata la pendenza.`,
+      `At ${num1(st.outdoorLow)} °C outdoor the room is ${st.errorAtLow >= 0 ? '+' : ''}${num1(st.errorAtLow)} °C, at ${num1(st.outdoorHigh)} °C ${st.errorAtHigh >= 0 ? '+' : ''}${num1(st.errorAtHigh)} °C: the error depends on the cold, so the slope needs changing.`) : '';
+    switch (d.reasonCode) {
+      case 'NO_HEATING': return tr('Nessun riscaldamento nelle ultime 48 ore: niente da valutare (nessuna chiamata a Viessmann, nulla scritto).', 'No heating in the last 48 h: nothing to evaluate (no Viessmann call, nothing written).');
+      case 'MILD_WEATHER': return tr(`Clima mite (esterno ${n(/outdoor ([\d.-]+)/)} °C): niente da valutare.`, `Mild weather (outdoor ${n(/outdoor ([\d.-]+)/)} °C): nothing to evaluate.`);
+      case 'CURVE_NOT_AVAILABLE': return tr('La caldaia non permette di leggere o cambiare la curva.', 'The boiler does not allow reading or changing the curve.');
+      case 'NOT_HEATING_MODE': return tr('Il circuito non è in riscaldamento.', 'The circuit is not heating.');
+      case 'HOLIDAY': return tr('Programma vacanza attivo: niente modifiche.', 'Holiday program active: no changes.');
+      case 'WAITING_EFFECT': return tr(`Attendo l’effetto dell’ultima modifica (${n(/\((\d+) h\)/)} ore): la casa reagisce lentamente.`, `Waiting for the effect of the last change (${n(/\((\d+) h\)/)} h): the house reacts slowly.`);
+      case 'NOT_ENOUGH_DATA': return tr(`Dati ancora insufficienti (${n(/\((\d+) samples/)} campioni in ${n(/samples, ([\d.]+) h/)} ore con Normale/Comfort in corso): servono almeno 24 campioni su 12 ore.`, `Not enough data yet (${n(/\((\d+) samples/)} samples over ${n(/samples, ([\d.]+) h/)} h with Normal/Comfort running): at least 24 samples over 12 h are needed.`);
+      case 'WITHIN_TOLERANCE': return room + ' ' + tr('Entro ±0,5 °C: la curva va bene così.', 'Within ±0.5 °C: the curve is fine.');
+      case 'ROOM_COLD': return room + ' ' + tr('Troppo fresco a qualsiasi temperatura esterna: va alzato lo spostamento.', 'Too cool at any outdoor temperature: the shift should go up.');
+      case 'ROOM_WARM': return room + ' ' + tr('Troppo caldo a qualsiasi temperatura esterna: va abbassato lo spostamento.', 'Too warm at any outdoor temperature: the shift should go down.');
+      case 'ROOM_COLD_WHEN_COLD_OUTSIDE': case 'ROOM_WARM_WHEN_COLD_OUTSIDE': return room + ' ' + byOut;
+      case 'HIGH_FLOW_FOR_CURRENT_OUTDOOR': return room + ' ' + tr(`La casa è fresca anche se la mandata è già alta (mediana ${num1(d.flow && d.flow.median)} °C, limite ${num1(d.flow && d.flow.limit)} °C): alzare la curva non risolverebbe. Controlla valvole termostatiche, aria nei radiatori, pompa e posizione della sonda ambiente.`,
+        `The house is cool although the flow is already high (median ${num1(d.flow && d.flow.median)} °C, limit ${num1(d.flow && d.flow.limit)} °C): raising the curve would not fix it. Check thermostatic valves, air in the radiators, pump and room sensor position.`);
+      case 'LIMIT_REACHED': return room + ' ' + tr('Ma la curva è già al limite consentito rispetto alla curva di partenza.', 'But the curve is already at the allowed limit from the starting curve.');
+      default: return why(d.reason);
+    }
+  }
+  const DEC = {
+    INCREASE_SLOPE: ['Aumentare la pendenza', 'Increase the slope'], DECREASE_SLOPE: ['Ridurre la pendenza', 'Decrease the slope'],
+    INCREASE_SHIFT: ['Alzare lo spostamento', 'Raise the shift'], DECREASE_SHIFT: ['Abbassare lo spostamento', 'Lower the shift'],
+    NO_CHANGE: ['Nessuna modifica', 'No change'], WAIT: ['In attesa', 'Waiting'], IDLE: ['Fuori stagione', 'Off season'],
+  };
   function renderCurve() {
     const el = $('#curve'), C = S.curve, inst = S.installations[0], cur = inst && inst.curve;
     if (!C || (!C.circuits.length && !cur)) { el.style.display = 'none'; return; }
     el.style.display = '';
     const c = C.circuits[0] || {};
-    const base = c.baseline, hist = (c.history || []).slice().reverse();
+    const base = c.baseline, hist = (c.history || []).slice().reverse(), d = c.lastDecision;
+    const modeTxt = !C.enabled ? tr('spenta', 'off') : C.mode === 'proposal' ? tr('solo proposte', 'proposals only') : tr('automatica', 'automatic');
+    const canApply = C.enabled && d && d.proposed && d.safety === 'PASS' && !d.applied;
+    const confLvl = d ? (d.confidence >= C.autoConfidence ? 'good' : d.confidence >= 50 ? 'warn' : 'bad') : '';
+    const decBox = !d ? '' : `<div class="decision ${d.safety === 'VETO' ? 'veto' : canApply ? 'prop' : ''}">
+        <div class="dh"><b>${esc(tr(...(DEC[d.decision] || [d.decision, d.decision])))}</b>
+          ${d.proposed ? `<span class="badge info">${tr('Proposta', 'Proposal')}: ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}</span>` : ''}
+          ${d.safety === 'VETO' ? `<span class="badge bad">${d.vetoCode === 'LIMIT_REACHED' ? tr('Limite raggiunto', 'Limit reached') : tr('Bloccato per sicurezza', 'Blocked for safety')}</span>` : d.proposed ? `<span class="badge good">${tr('Controlli superati', 'Safety checks passed')}</span>` : ''}
+          ${d.applied ? `<span class="badge good">✓ ${tr('applicata', 'applied')}</span>` : ''}</div>
+        <p>${esc(decisionText(d))}</p>
+        ${d.stats ? `<div class="rows">
+          ${d.proposed || d.vetoCode ? `<div class="row"><span class="k">${tr('Affidabilità', 'Confidence')}</span><span class="v"><span class="bar"><i class="${confLvl}" style="width:${d.confidence}%"></i></span>${d.confidence}% <small class="muted">${C.mode === 'auto' && C.enabled ? tr(`(applicata da sola da ${C.autoConfidence}%)`, `(applied automatically from ${C.autoConfidence}%)`) : ''}</small></span></div>` : ''}
+          <div class="row"><span class="k">${tr('Dati usati', 'Data used')}</span><span class="v">${d.stats.samples} ${tr('campioni', 'samples')} · ${Math.round(d.stats.hours)} ${tr('ore', 'h')} · ${tr('accordo', 'agreement')} ${Math.round(d.stats.agreement * 100)}%</span></div>
+          <div class="row"><span class="k">${tr('Temperatura esterna', 'Outdoor temperature')}</span><span class="v">${num1(d.stats.outdoorLow)} … ${num1(d.stats.outdoorHigh)} °C (${tr('escursione', 'range')} ${num1(d.stats.outdoorRange)} °C)</span></div>
+          <div class="row"><span class="k">${tr('Errore stanza (mediana)', 'Room error (median)')}</span><span class="v">${d.stats.medianRoomError >= 0 ? '+' : ''}${nf(d.stats.medianRoomError, 2)} °C</span></div>
+          <div class="row"><span class="k">${tr('Errore col freddo / col mite', 'Error when cold / mild')}</span><span class="v">${nf(d.stats.errorAtLow, 2)} / ${nf(d.stats.errorAtHigh, 2)} °C · R² ${nf(d.stats.r2, 2)}</span></div>
+          ${d.flow ? `<div class="row"><span class="k">${tr('Mandata col bruciatore acceso', 'Flow with the burner on')}</span><span class="v ${d.flow.median >= d.flow.limit ? 'bad' : ''}">${tr('mediana', 'median')} ${num1(d.flow.median)} °C · max ${num1(d.flow.max)} °C · ${tr('limite', 'limit')} ${num1(d.flow.limit)} °C${d.flow.expected !== null ? ` · ${tr('curva', 'curve')} ≈ ${num1(d.flow.expected)} °C` : ''}</span></div>` : ''}
+        </div>` : ''}
+        <div class="muted small">${tr('Valutata il', 'Evaluated on')} ${fmtDT(d.ts)}</div>
+      </div>`;
     el.innerHTML = `<h2>${icon('curve')} ${tr('Curva climatica', 'Heating curve')}</h2>
-      <p class="intro">${tr('La curva decide quanto scalda la caldaia in base al freddo esterno. Con l’ottimizzazione automatica il plugin confronta ogni giorno la temperatura della stanza con quella del programma e corregge la curva a piccoli passi (0,1 di pendenza o 1 di spostamento).', 'The curve decides how hard the boiler heats based on the outdoor cold. With automatic optimisation the plugin compares the room with the program temperature every day and corrects the curve in small steps (0.1 slope or 1 shift).')}</p>
+      <p class="intro">${tr('La curva decide quanto scalda la caldaia in base al freddo esterno. Ogni giorno di riscaldamento il plugin confronta la stanza con il programma (fino a 7 giorni di dati) e capisce se va cambiata la pendenza (errore che cresce col freddo) o lo spostamento (errore uguale sempre), a passi di 0,1 o 1. Non alza mai la curva se la mandata è già alta.', 'The curve decides how hard the boiler heats based on the outdoor cold. On every heating day the plugin compares the room with the program (up to 7 days of data) and works out whether the slope (error growing with the cold) or the shift (same error always) needs changing, in steps of 0.1 or 1. It never raises the curve when the flow is already high.')}</p>
       <div class="kpis">
-        <div class="kpi"><div class="l">${tr('Curva attuale', 'Current curve')}</div><div class="n">${cur ? `${nf(cur.slope, 1)} / ${nf(cur.shift, 0)}` : '—'}</div><div class="s muted">${tr('pendenza / spostamento', 'slope / shift')}</div></div>
-        <div class="kpi"><div class="l">${tr('Ottimizzazione automatica', 'Automatic optimisation')}</div><div class="n ${C.enabled ? 'good' : 'muted'}">${C.enabled ? tr('attiva', 'on') : tr('spenta', 'off')}</div><div class="s muted">${C.enabled ? tr(`ogni ${C.intervalHours} ore`, `every ${C.intervalHours} h`) : tr('attivala nelle impostazioni del plugin', 'turn it on in the plugin settings')}</div></div>
-        ${base ? `<div class="kpi"><div class="l">${tr('Curva di partenza', 'Starting curve')}</div><div class="n">${nf(base.slope, 1)} / ${nf(base.shift, 0)}</div><div class="s muted">${tr('limiti', 'limits')} ${nf(base.slope - C.maxSlope, 1)}–${nf(base.slope + C.maxSlope, 1)} / ${nf(base.shift - C.maxShift, 0)}–${nf(base.shift + C.maxShift, 0)}</div></div>` : ''}
-        ${c.lastEval ? `<div class="kpi"><div class="l">${tr('Ultima valutazione', 'Last check')}</div><div class="n" style="font-size:15px">${fmtDT(c.lastEval)}</div><div class="s">${esc(why(c.lastResult))}</div></div>` : ''}
+        <div class="kpi"><div class="l">${tr('Curva attuale', 'Current curve')}</div><div class="n">${cur ? `${num1(cur.slope)} / ${nf(cur.shift, 0)}` : (d && d.current ? `${num1(d.current.slope)} / ${nf(d.current.shift, 0)}` : '—')}</div><div class="s muted">${tr('pendenza / spostamento', 'slope / shift')}</div></div>
+        <div class="kpi"><div class="l">${tr('Ottimizzazione', 'Optimisation')}</div><div class="n ${C.enabled ? 'good' : 'muted'}">${modeTxt}</div><div class="s muted">${C.enabled ? tr(`ogni ${C.intervalHours} ore, nei giorni di riscaldamento`, `every ${C.intervalHours} h, on heating days`) : tr('attivala nelle impostazioni del plugin', 'turn it on in the plugin settings')}</div></div>
+        ${base ? `<div class="kpi"><div class="l">${tr('Curva di partenza', 'Starting curve')}</div><div class="n">${num1(base.slope)} / ${nf(base.shift, 0)}</div><div class="s muted">${tr('limiti', 'limits')} ${num1(base.slope - C.maxSlope)}–${num1(base.slope + C.maxSlope)} / ${nf(base.shift - C.maxShift, 0)}–${nf(base.shift + C.maxShift, 0)}</div></div>` : ''}
       </div>
-      ${hist.length ? `<div class="tw"><table><tr><th>${tr('Quando', 'When')}</th><th>${tr('Da', 'From')}</th><th>${tr('A', 'To')}</th><th style="text-align:left">${tr('Motivo', 'Reason')}</th></tr>${hist.map((h) => `<tr><td>${fmtDT(h.ts)}</td><td>${nf(h.from.slope, 1)} / ${nf(h.from.shift, 0)}</td><td><b>${nf(h.to.slope, 1)} / ${nf(h.to.shift, 0)}</b></td><td style="text-align:left;white-space:normal">${esc(why(h.reason))}</td></tr>`).join('')}</table></div>` : C.enabled ? `<p class="empty">${tr('Nessuna modifica finora: il plugin interviene solo nei giorni di riscaldamento, quando la stanza si discosta di più di 0,5 °C dal programma.', 'No change so far: the plugin acts only on heating days, when the room differs from the program by more than 0.5 °C.')}</p>` : ''}
-      ${base && cur && (base.slope !== cur.slope || base.shift !== cur.shift) ? `<div class="btns"><button class="btn" id="cv-restore">${tr(`Ripristina la curva di partenza (${nf(base.slope, 1)} / ${nf(base.shift, 0)})`, `Restore the starting curve (${nf(base.slope, 1)} / ${nf(base.shift, 0)})`)}</button></div>` : ''}`;
-    const b = $('#cv-restore');
-    if (b) b.onclick = async () => {
+      ${decBox}
+      <div class="btns">
+        ${C.enabled ? `<button class="btn" id="cv-check">${tr('Valuta ora', 'Check now')}</button>` : ''}
+        ${canApply ? `<button class="btn primary" id="cv-apply">${tr(`Applica ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}`, `Apply ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}`)}</button>` : ''}
+        ${base && cur && (base.slope !== cur.slope || base.shift !== cur.shift) ? `<button class="btn" id="cv-restore">${tr(`Ripristina la curva di partenza (${num1(base.slope)} / ${nf(base.shift, 0)})`, `Restore the starting curve (${num1(base.slope)} / ${nf(base.shift, 0)})`)}</button>` : ''}
+      </div>
+      ${hist.length ? `<div class="tw"><table><tr><th>${tr('Quando', 'When')}</th><th>${tr('Da', 'From')}</th><th>${tr('A', 'To')}</th><th>${tr('Affid.', 'Conf.')}</th><th style="text-align:left">${tr('Motivo', 'Reason')}</th></tr>${hist.map((h) => `<tr><td>${fmtDT(h.ts)}</td><td>${num1(h.from.slope)} / ${nf(h.from.shift, 0)}</td><td><b>${num1(h.to.slope)} / ${nf(h.to.shift, 0)}</b></td><td>${h.confidence !== undefined && h.confidence !== null ? h.confidence + '%' : '—'}</td><td style="text-align:left;white-space:normal">${esc(why(h.reason))}${h.auto ? '' : ` <small class="muted">(${tr('manuale', 'manual')})</small>`}</td></tr>`).join('')}</table></div>` : ''}`;
+    const run = (id, fn) => { const b = $(id); if (b) b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { toast(tr('Errore: ', 'Error: ') + e.message); } finally { b.disabled = false; } }; };
+    run('#cv-check', async () => { S.curve = await api('POST', '/api/curve/check', { installationId: c.installationId, circuit: c.circuit }); renderCurve(); toast(tr('Valutazione aggiornata', 'Evaluation updated')); });
+    run('#cv-apply', async () => {
+      if (!confirm(tr(`Scrivere sulla caldaia la curva ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}? I dati vengono ricontrollati prima di applicarla.`, `Write the curve ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)} to the boiler? The data are checked again before applying it.`))) return;
+      S.curve = await api('POST', '/api/curve/apply', { installationId: c.installationId, circuit: c.circuit, expected: d.proposed }); renderCurve(); toast(tr('Curva applicata', 'Curve applied')); refresh();
+    });
+    run('#cv-restore', async () => {
       if (!confirm(tr('Rimettere la curva di partenza sulla caldaia?', 'Put the starting curve back on the boiler?'))) return;
-      try { await api('POST', '/api/curve/restore', { installationId: c.installationId, circuit: c.circuit }); toast(tr('Curva ripristinata', 'Curve restored')); refresh(); }
-      catch (e) { toast(tr('Errore: ', 'Error: ') + e.message); }
-    };
+      await api('POST', '/api/curve/restore', { installationId: c.installationId, circuit: c.circuit }); toast(tr('Curva ripristinata', 'Curve restored')); refresh();
+    });
   }
 
   // ── refresh ────────────────────────────────────────────────────────────────
@@ -282,6 +393,7 @@
       const j = await api('GET', '/api/status');
       const combChanged = JSON.stringify(j.combustion) !== JSON.stringify(S.combustion);
       S = { ...S, ...j };
+      if (j.security) { SEC.pinRequired = !!j.security.pinRequired; SEC.unlocked = !!j.security.unlocked; }
       renderPills(); renderAuth(); renderStatus(); renderSaved(); renderCurve();
       if (!formBuilt) { renderReportForm(); formBuilt = true; }
       $('#report').className = S.auth && S.auth.state !== 'authenticated' ? 'card c7' : 'card';
