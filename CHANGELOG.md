@@ -3,6 +3,16 @@
 All notable changes to homebridge-viessmann-vicare.
 
 
+### [2.0.83] - 2026-10-07
+- feat: **heating-curve optimisation aimed at saving** (`curveAutoTuneGoal: "economy"`, the new default): the plugin keeps looking, all season, for the **lowest curve that keeps the room at the program temperature** (±0.2 °C). Comfort is the constraint, saving the objective:
+  - room below the program by more than 0.2 °C → the curve goes up one step (comfort first, never blocked)
+  - room above by more than 0.2 °C → one step down (wasted heat)
+  - in between, when even the coolest moments are at the program temperature → **saving test**: one step down; if the room stays comfortable the lower curve is kept and the next test can follow, otherwise the curve goes back up by itself
+  - no "rollback that stops" and no back-and-forth: a curve found too cool is not used again for `curveAutoTuneRetryDays` (default 14), doubled after every new failure at it (14 → 28 → 56 days) and forgotten after 120 days; the plugin also **learns how much one step moves your room** and does not take a step that would overshoot the comfort band
+  - simulated over a whole winter on houses that need less or more heat than the starting curve: it converges in about 10 days and makes at most one failed saving test per house
+  - `curveAutoTuneGoal: "comfort"` keeps the 2.0.82 behaviour (corrects only outside ±0.5 °C)
+- feat (dashboard): the curve card shows the goal, the saving tests with their outcome (*kept* / *too cool, back up*), the learned effect of one step and the curves found too cool with the date they will be retried
+
 ### [2.0.82] - 2026-10-07
 - fix (security): **Log in again** and **Disconnect** in the dashboard (`/reauth`, `/clear`) were plain form posts without the protection of the other dashboard actions: a web page opened on any computer of the home network could disconnect the plugin from Viessmann. Every change now needs a **CSRF token** that only pages served by the dashboard can read, plus a same-origin check. (The 2.0.81 notes said all write actions were protected: these two were not.)
 - fix (security): the login error page showed the `error_description` of the address without escaping it (reflected XSS); all values are now escaped

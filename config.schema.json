@@ -574,7 +574,31 @@
             "title": "Automatic heating-curve optimisation",
             "type": "boolean",
             "default": false,
-            "description": "Once a day, on heating days only, the plugin compares the room with the program temperature (up to 7 days of data) and works out whether the slope (error growing with the cold) or the shift (same error always) should change by one step (0.1 or 1). It never raises the curve when the flow is already high, waits 48 h between changes and stays within the limits below. Every decision is shown in the dashboard with its reason and confidence; the starting curve can be restored. Needs a room temperature (room sensor or ViCare Smart Climate)."
+            "description": "Every day of the heating season the plugin compares the room with the program temperature (up to 7 days of data) and moves the curve by one step (slope 0.1 or shift 1) towards the lowest curve that keeps the room at the program temperature: down while there is margin, up as soon as the room gets too cool. It learns how much one step moves your room, never raises the curve when the flow is already high, waits 48 h between changes and stays within the limits below. Every decision is shown in the dashboard with its reason and confidence; the starting curve can be restored. Needs a room temperature (room sensor or ViCare Smart Climate)."
+          },
+          "curveAutoTuneGoal": {
+            "title": "Goal",
+            "type": "string",
+            "default": "economy",
+            "oneOf": [
+              { "title": "Save: the lowest curve that keeps the program temperature (±0.2 °C)", "enum": ["economy"] },
+              { "title": "Comfort only: correct when the room is more than 0.5 °C off", "enum": ["comfort"] }
+            ],
+            "description": "Economy keeps adjusting all season: it lowers the curve while the room stays at the program temperature and raises it again as soon as the room gets too cool. A curve that turned out too cool is not tried again for a while, so it never goes back and forth.",
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
+          },
+          "curveAutoTuneRetryDays": {
+            "title": "Retry a curve that was too cool after (days)",
+            "type": "integer",
+            "default": 14,
+            "minimum": 3,
+            "maximum": 90,
+            "description": "Doubled after every new failure at the same curve (14 → 28 → 56 days); forgotten after 120 days.",
+            "condition": {
+              "functionBody": "return model.features && model.features.curveAutoTune === true;"
+            }
           },
           "curveAutoTuneMode": {
             "title": "What to do with a decision",
@@ -963,8 +987,10 @@
         "features.holidayAtHomeDays",
         "features.exposeProgramTemperatures",
         "features.curveAutoTune",
+        "features.curveAutoTuneGoal",
         "features.curveAutoTuneMode",
         "features.curveAutoTuneMaxFlow",
+        "features.curveAutoTuneRetryDays",
         "features.curveAutoTuneIntervalHours",
         "features.curveAutoTuneMaxSlopeDelta",
         "features.curveAutoTuneMaxShiftDelta",

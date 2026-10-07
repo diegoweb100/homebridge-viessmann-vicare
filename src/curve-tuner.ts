@@ -1,33 +1,40 @@
 /**
- * Automatic heating-curve optimisation (features.curveAutoTune, off by default) — v2 since 2.0.82
+ * Automatic heating-curve optimisation (features.curveAutoTune, off by default)
+ * v2 since 2.0.82, economy optimiser since 2.0.83.
  *
- * One decision engine (evaluate → CurveDecision) used by every mode:
- *   - "auto"     (curveAutoTune: true): applies the decision when it is safe and confident
- *   - "proposal" (curveAutoTuneMode: "proposal"): only proposes; you apply it from the dashboard
- *   - dashboard "Check now" / "Apply proposal": the same engine, never a second implementation
+ * Goal (curveAutoTuneGoal, default "economy"): the LOWEST curve that keeps the room at the
+ * temperature of the program. Comfort is the constraint, saving the objective. Continuous
+ * closed loop, re-evaluated every day of the heating season, in both directions:
  *
- * Data: the history CSV the plugin already writes. Samples = room vs program temperature while
- * Normal/Comfort is in force (first 2 h of each period skipped: the house is still warming up),
- * over the last 7 days but never before 12 h after the last curve change (the house reacts slowly).
+ *   room below target − 0.2 °C  → raise the curve one step (comfort first)
+ *   room above target + 0.2 °C  → lower it one step (wasted heat)
+ *   in between, with margin      → try one step lower (economy probe): if the room stays in the
+ *                                  band the lower curve is kept and the next probe follows;
+ *                                  if it gets too cool, the normal "too cool" rule raises it
+ *                                  again and that curve becomes a temporary floor
+ *   any curve found too cool      → temporary floor, so "too warm" cannot bounce straight back
+ *   goal "comfort"               → only corrects outside ±0.5 °C (the 2.0.82 behaviour)
  *
- * Decision:
- *   - linear regression of the room error (room − program) against the outdoor temperature
- *   - error that changes with the outdoor temperature (wide outdoor range, good fit) → slope ±0.1
- *   - same error at any outdoor temperature → shift ±1 (the steps the boiler accepts)
- *   - |error| ≤ 0.5 °C → no change
- *   - confidence 0–100 % from samples, hours covered, agreement of the samples, size of the error
- *     and (for the slope) fit and outdoor range; "auto" applies only from 75 %
+ * There is no "rollback that stops": a failed probe is just one more measurement. The floor
+ * avoids a loop (probe → too cool → raise → probe …): the same lower curve is retried only after
+ * curveAutoTuneRetryDays (default 14), doubled after every new failure at that curve, and
+ * forgotten after 120 days. Raising for comfort is never blocked by a floor.
+ *
+ * Knob: slope ±0.1 when the error clearly depends on the outdoor temperature (regression of the
+ * room error on the outdoor temperature: wide outdoor range, good fit), otherwise shift ±1 —
+ * the steps the boiler accepts. Data: up to 7 days of Normal/Comfort periods (first 2 h of each
+ * period skipped), never earlier than 12 h after the last change.
  *
  * Safety:
- *   - flow veto: the room is cold although the flow is already high (median flow with the burner
- *     on ≥ curveAutoTuneMaxFlow, default 55 °C, or near the circuit maximum) → never raise the
- *     curve: the cause is elsewhere (radiator valves, air, pump, room sensor position)
- *   - one step, then at least 48 h before the next (24 h if the house is too cold)
+ *   - confidence 0–100 %; automatic changes only from 75 % (50 % to raise the curve again after
+ *     a probe that made the room too cool)
+ *   - flow veto: never raise the curve when the flow with the burner on is already high
+ *     (curveAutoTuneMaxFlow, default 55 °C, or near the circuit maximum)
+ *   - at least 48 h between changes (24 h when the room is too cool)
  *   - never further than ±0.3 slope / ±3 shift from the curve found when it was switched on
  *     (the "baseline", restorable from the dashboard)
  *   - only on heating days; outside the heating season it only reads the local history:
  *     no API call, nothing written
- *   - every change is logged with its reason and kept in viessmann-curve-tuner-<id>-hc<n>.json
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -37,10 +44,17 @@ export interface Curve { slope: number; shift: number }
 type Limits = { sMin: number; sMax: number; hMin: number; hMax: number; flowMax: number | null };
 
 export type DecisionCode = 'NO_CHANGE' | 'INCREASE_SLOPE' | 'DECREASE_SLOPE' | 'INCREASE_SHIFT' | 'DECREASE_SHIFT' | 'WAIT' | 'IDLE';
+export type Goal = 'economy' | 'comfort';
+interface Floor { slope: number; shift: number; ts: string; fails: number; until: string }
+interface LastStep { from: Curve; to: Curve; dir: 1 | -1; ts: string; probe: boolean; before?: number }
+/** Learned effect of one step on the room (°C): how much one shift / slope step moves the room. */
+interface StepEffect { shift: number | null; slope: number | null }
+const PRIOR_EFFECT = { shift: 0.15, slope: 0.3 };
 
 export interface CurveStats {
   samples: number; hours: number; outdoorMean: number; outdoorRange: number; outdoorLow: number; outdoorHigh: number;
   medianRoomError: number; errorAtLow: number; errorAtHigh: number; r2: number; errorPerDegree: number; agreement: number;
+  errorP10: number; comfortShare: number;
 }
 
 export interface CurveDecision {
@@ -60,6 +74,11 @@ export interface CurveDecision {
   vetoCode?: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR' | 'LIMIT_REACHED';
   autoApply: boolean;
   applied: boolean;
+  goal?: Goal;
+  probe?: boolean;          // economy probe (one step lower while comfortable)
+  recovery?: boolean;       // raising again after a step down made the room too cool
+  floor?: { slope: number; shift: number; until: string } | null;
+  stepEffect?: StepEffect;
 }
 
 interface TunerState {
@@ -68,7 +87,10 @@ interface TunerState {
   lastEval?: string;
   lastResult?: string;
   lastDecision?: CurveDecision;
-  history: Array<{ ts: string; from: Curve; to: Curve; reason: string; auto: boolean; confidence?: number; decision?: DecisionCode }>;
+  lastStep?: LastStep;
+  floors?: Floor[];
+  stepEffect?: StepEffect;
+  history: Array<{ ts: string; from: Curve; to: Curve; reason: string; auto: boolean; confidence?: number; decision?: DecisionCode; probe?: boolean; outcome?: 'kept' | 'too cool' }>;
 }
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
@@ -85,7 +107,11 @@ export function curveFlow(c: Curve, room: number, outdoor: number): number {
 }
 
 export const AUTO_CONFIDENCE = 75;
-const TOLERANCE = 0.5;
+const RECOVERY_CONFIDENCE = 50;
+/** Comfort band around the program temperature: [target − lower, target + upper]. */
+const BAND: Record<Goal, { lower: number; upper: number }> = { economy: { lower: 0.2, upper: 0.2 }, comfort: { lower: 0.5, upper: 0.5 } };
+const FLOOR_MAX_AGE_DAYS = 120;
+const flowAt0 = (c: Curve) => curveFlow(c, 20, 0);   // one number to compare curves: flow at 0 °C outdoor
 
 export class CurveTuner {
   private targets: Target[] = [];
@@ -96,6 +122,8 @@ export class CurveTuner {
   private readonly maxShift: number;
   private readonly maxFlow: number;
   readonly mode: 'auto' | 'proposal';
+  readonly goal: Goal;
+  private readonly retryDays: number;
   /** Last decision per circuit while idle (kept in memory: nothing is written outside the heating season). */
   private idle = new Map<string, CurveDecision>();
 
@@ -106,6 +134,8 @@ export class CurveTuner {
     this.maxShift = Math.min(Math.max(Math.round(Number(f.curveAutoTuneMaxShiftDelta) || 3), 1), 10);
     this.maxFlow = Math.min(Math.max(Number(f.curveAutoTuneMaxFlow) || 55, 35), 80);
     this.mode = f.curveAutoTune === 'proposal' || f.curveAutoTuneMode === 'proposal' ? 'proposal' : 'auto';
+    this.goal = f.curveAutoTuneGoal === 'comfort' ? 'comfort' : 'economy';
+    this.retryDays = Math.min(Math.max(Number(f.curveAutoTuneRetryDays) || 14, 3), 90);
   }
 
   private stateFile(t: Target) { return path.join(this.dataDir, `viessmann-curve-tuner-${t.installationId}-hc${t.circuit}.json`); }
@@ -126,7 +156,8 @@ export class CurveTuner {
     if (!this.timer) {
       this.first = setTimeout(() => this.runAll(), 10 * 60 * 1000);
       this.timer = setInterval(() => this.runAll(), this.interval);
-      this.platform.log.info(`🌡️ Heating-curve optimisation ON (${this.mode === 'proposal' ? 'proposals only, you apply them from the dashboard' : `automatic from ${AUTO_CONFIDENCE} % confidence`}): ` +
+      this.platform.log.info(`🌡️ Heating-curve optimisation ON — ${this.goal === 'economy' ? 'economy: lowest curve that keeps the program temperature (±0.2 °C)' : 'comfort: corrects only outside ±0.5 °C'}, ` +
+        `${this.mode === 'proposal' ? 'proposals only, you apply them from the dashboard' : `automatic from ${AUTO_CONFIDENCE} % confidence`}: ` +
         `checks every ${Math.round(this.interval / 3600000)} h on heating days only (steps 0.1 slope / 1 shift, max ±${this.maxSlope} / ±${this.maxShift} from the starting curve, ` +
         `never raised with flow ≥ ${this.maxFlow} °C)`);
     }
@@ -137,7 +168,7 @@ export class CurveTuner {
   /** Summary for the dashboard. */
   status() {
     return {
-      enabled: this.enabled, mode: this.mode, autoConfidence: AUTO_CONFIDENCE, maxFlow: this.maxFlow,
+      enabled: this.enabled, mode: this.mode, goal: this.goal, band: BAND[this.goal], retryDays: this.retryDays, autoConfidence: AUTO_CONFIDENCE, maxFlow: this.maxFlow,
       intervalHours: Math.round(this.interval / 3600000), maxSlope: this.maxSlope, maxShift: this.maxShift,
       circuits: this.targets.map(t => {
         const st = this.readState(t);
@@ -247,20 +278,27 @@ export class CurveTuner {
     const fit = sxx > 1e-9 && syy > 1e-9 ? (sxy * sxy) / (sxx * syy) : 0;
     const lo = quant(xs, 0.1), hi = quant(xs, 0.9), med = median(ys);
     const agree = med === 0 ? 0 : ys.filter(v => Math.sign(v) === Math.sign(med)).length / n;
+    const lower = BAND[this.goal].lower;
     return {
       samples: n, hours: r1((s[n - 1].t - s[0].t) / 3600000), outdoorMean: r1(mx), outdoorRange: r1(hi - lo), outdoorLow: r1(lo), outdoorHigh: r1(hi),
       medianRoomError: r2(med), errorAtLow: r2(a * lo + b), errorAtHigh: r2(a * hi + b), r2: r2(fit), errorPerDegree: Math.round(a * 1000) / 1000, agreement: r2(agree),
+      errorP10: r2(quant(ys, 0.1)), comfortShare: r2(ys.filter(v => v >= -lower).length / n),
     };
   }
 
   /**
    * The decision engine (pure: also used by backtests). Returns the decision object; `apply`
-   * only executes it.
+   * only executes it. `ctx` carries what the loop remembers: the last step and the floors.
    */
-  decide(a: ReturnType<CurveTuner['analyse']>, cur: Curve, base: Curve, lim: Limits):
-    Pick<CurveDecision, 'proposed' | 'decision' | 'reasonCode' | 'reason' | 'confidence' | 'stats' | 'flow' | 'safety' | 'vetoCode' | 'autoApply'> {
+  decide(a: ReturnType<CurveTuner['analyse']>, cur: Curve, base: Curve, lim: Limits,
+    ctx: { lastStep?: LastStep; floors?: Floor[]; now?: number; stepEffect?: StepEffect } = {}):
+    Pick<CurveDecision, 'proposed' | 'decision' | 'reasonCode' | 'reason' | 'confidence' | 'stats' | 'flow' | 'safety' | 'vetoCode' | 'autoApply' | 'goal' | 'probe' | 'recovery' | 'floor' | 'stepEffect'> {
+    const now = ctx.now ?? Date.now();
+    const goal = this.goal, band = BAND[goal];
     const st = this.stats(a.samples);
-    const out = { proposed: null as Curve | null, confidence: 0, stats: st, flow: null as CurveDecision['flow'], safety: 'PASS' as 'PASS' | 'VETO', vetoCode: undefined as CurveDecision['vetoCode'], autoApply: false };
+    const out = { proposed: null as Curve | null, confidence: 0, stats: st, flow: null as CurveDecision['flow'], safety: 'PASS' as 'PASS' | 'VETO',
+      vetoCode: undefined as CurveDecision['vetoCode'], autoApply: false, goal, probe: false, recovery: false, floor: null as CurveDecision['floor'], stepEffect: ctx.stepEffect };
+    const effect = (c: Curve) => c.slope !== cur.slope ? (ctx.stepEffect?.slope ?? PRIOR_EFFECT.slope) : (ctx.stepEffect?.shift ?? PRIOR_EFFECT.shift);
     if (!st || st.samples < 24 || st.hours < 12) {
       return { ...out, decision: 'WAIT', reasonCode: 'NOT_ENOUGH_DATA', reason: `not enough Normal/Comfort data (${st ? st.samples : 0} samples, ${st ? st.hours : 0} h)` };
     }
@@ -272,45 +310,102 @@ export class CurveTuner {
     }
     const sLo = Math.max(lim.sMin, r1(base.slope - this.maxSlope)), sHi = Math.min(lim.sMax, r1(base.slope + this.maxSlope));
     const hLo = Math.max(lim.hMin, base.shift - this.maxShift), hHi = Math.min(lim.hMax, base.shift + this.maxShift);
+    const trySlope = (dir: number) => { const s = r1(cur.slope + 0.1 * dir); return s >= sLo && s <= sHi ? { slope: s, shift: cur.shift } : null; };
+    const tryShift = (dir: number) => { const h = cur.shift + dir; return h >= hLo && h <= hHi ? { slope: cur.slope, shift: h } : null; };
+    const code = (c: Curve, dir: number): DecisionCode => c.slope !== cur.slope ? (dir > 0 ? 'INCREASE_SLOPE' : 'DECREASE_SLOPE') : (dir > 0 ? 'INCREASE_SHIFT' : 'DECREASE_SHIFT');
 
-    // slope when the error clearly depends on the outdoor temperature, otherwise shift
+    // the error depends on the outdoor temperature? (regression: wide range, good fit, clear spread)
     const spread = st.errorAtLow - st.errorAtHigh;
-    const slopeCase = st.outdoorRange >= 6 && st.r2 >= 0.25 && Math.abs(spread) >= 0.6 && Math.abs(st.errorAtLow) > TOLERANCE;
-    const e = slopeCase ? st.errorAtLow : st.medianRoomError;
+    const dependsOnCold = st.outdoorRange >= 6 && st.r2 >= 0.25 && Math.abs(spread) >= 0.6;
     const desc = `room ${sgn(st.medianRoomError)} °C vs the program (${st.samples} samples, ${Math.round(st.hours)} h, outdoor ${st.outdoorLow}…${st.outdoorHigh} °C` +
-      `${slopeCase ? `, ${sgn(st.errorAtLow)} °C at ${st.outdoorLow} °C vs ${sgn(st.errorAtHigh)} °C at ${st.outdoorHigh} °C` : ''})`;
-    if (Math.abs(e) <= TOLERANCE) {
-      return { ...out, decision: 'NO_CHANGE', reasonCode: 'WITHIN_TOLERANCE', reason: `${desc}: within ±${TOLERANCE} °C, no change`, confidence: 0 };
-    }
-    const dir = e > 0 ? -1 : 1;   // too warm → lower
-    const decision: DecisionCode = slopeCase ? (dir > 0 ? 'INCREASE_SLOPE' : 'DECREASE_SLOPE') : (dir > 0 ? 'INCREASE_SHIFT' : 'DECREASE_SHIFT');
-    const reasonCode = slopeCase ? (dir > 0 ? 'ROOM_COLD_WHEN_COLD_OUTSIDE' : 'ROOM_WARM_WHEN_COLD_OUTSIDE') : (dir > 0 ? 'ROOM_COLD' : 'ROOM_WARM');
+      `${dependsOnCold ? `, ${sgn(st.errorAtLow)} °C at ${st.outdoorLow} °C vs ${sgn(st.errorAtHigh)} °C at ${st.outdoorHigh} °C` : ''})`;
+    const base01 = 0.25 * clamp01(st.samples / 96) + 0.2 * clamp01(st.hours / 48);
 
-    // confidence: samples, hours, agreement of the samples, size of the error (+ fit and range for the slope)
-    let conf = 0.25 * clamp01(st.samples / 96) + 0.2 * clamp01(st.hours / 48) + 0.3 * clamp01((st.agreement - 0.5) / 0.4) + 0.25 * clamp01(0.5 + (Math.abs(e) - TOLERANCE) / 0.5);
-    if (slopeCase) conf *= 0.5 + 0.5 * Math.min(clamp01(st.r2 / 0.5), clamp01(st.outdoorRange / 10));
-    out.confidence = Math.round(conf * 100);
+    // 1. too cool → raise (comfort first; never blocked by a floor)
+    const coldSlope = dependsOnCold && st.errorAtLow < -band.lower;
+    if (coldSlope || st.medianRoomError < -band.lower) {
+      const e = coldSlope ? st.errorAtLow : st.medianRoomError;
+      const recovery = !!ctx.lastStep && ctx.lastStep.dir < 0 && ctx.lastStep.to.slope === cur.slope && ctx.lastStep.to.shift === cur.shift;
+      let conf = base01 + 0.3 * clamp01((st.agreement - 0.5) / 0.4) + 0.25 * clamp01(0.5 + (Math.abs(e) - band.lower) / 0.5);
+      if (coldSlope) conf *= 0.5 + 0.5 * Math.min(clamp01(st.r2 / 0.5), clamp01(st.outdoorRange / 10));
+      out.confidence = Math.round(conf * 100); out.recovery = recovery;
+      const reasonCode = coldSlope ? 'ROOM_COLD_WHEN_COLD_OUTSIDE' : 'ROOM_COLD';
+      const pre = coldSlope ? 'INCREASE_SLOPE' : 'INCREASE_SHIFT';
+      const why = `${desc}${recovery ? `: too cool after the step down to ${cur.slope} / ${cur.shift}` : ''}`;
+      if (out.flow && out.flow.median >= out.flow.limit) {
+        return { ...out, decision: pre, reasonCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', safety: 'VETO', vetoCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR',
+          reason: `${why}: room cool although the flow is already high (median ${out.flow.median} °C ≥ ${out.flow.limit} °C) — not raising the curve: check radiator valves, air in the radiators, pump and room sensor position` };
+      }
+      // after a failed step down, go back exactly to where it came from
+      let to = recovery ? { ...ctx.lastStep!.from } : (coldSlope ? (trySlope(1) || tryShift(1)) : (tryShift(1) || trySlope(1)));
+      if (to && (to.slope > sHi || to.shift > hHi)) to = null;
+      if (!to) return { ...out, decision: pre, reasonCode: 'LIMIT_REACHED', safety: 'VETO', vetoCode: 'LIMIT_REACHED', reason: `${why}: limit reached (slope ${sLo}–${sHi}, shift ${hLo}–${hHi})` };
+      out.proposed = to;
+      out.autoApply = out.confidence >= (recovery ? RECOVERY_CONFIDENCE : AUTO_CONFIDENCE);
+      return { ...out, decision: code(to, 1), reasonCode, reason: `${why}${out.autoApply ? '' : `: confidence ${out.confidence} % (below ${recovery ? RECOVERY_CONFIDENCE : AUTO_CONFIDENCE} %)`}` };
+    }
 
-    // safety: never raise the curve when the flow is already high
-    if (dir > 0 && out.flow && out.flow.median >= out.flow.limit) {
-      return { ...out, decision, reasonCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', safety: 'VETO', vetoCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR',
-        reason: `${desc}: room cold although the flow is already high (median ${out.flow.median} °C ≥ ${out.flow.limit} °C) — not raising the curve: check radiator valves, air in the radiators, pump and room sensor position` };
+    // active floors (lower curves that recently made the room too cool)
+    const floors = (ctx.floors || []).filter(f => Date.parse(f.until) > now);
+    const blockedBy = (c: Curve) => floors.find(f => flowAt0(c) <= flowAt0(f) + 0.05);
+    const down = (prefSlope: boolean) => {
+      const cands = (prefSlope ? [trySlope(-1), tryShift(-1)] : [tryShift(-1), trySlope(-1)]).filter(Boolean) as Curve[];
+      for (const c of cands) { const f = blockedBy(c); if (!f) return { to: c, floor: null as Floor | null }; }
+      return { to: null as Curve | null, floor: cands.length ? blockedBy(cands[0]) || null : null };
+    };
+
+    // 2. too warm → lower (wasted heat)
+    const warmSlope = dependsOnCold && st.errorAtLow > band.upper && spread > 0;
+    if (warmSlope || st.medianRoomError > band.upper) {
+      const e = warmSlope ? st.errorAtLow : st.medianRoomError;
+      let conf = base01 + 0.3 * clamp01((st.agreement - 0.5) / 0.4) + 0.25 * clamp01(0.5 + (Math.abs(e) - band.upper) / 0.5);
+      if (warmSlope) conf *= 0.5 + 0.5 * Math.min(clamp01(st.r2 / 0.5), clamp01(st.outdoorRange / 10));
+      out.confidence = Math.round(conf * 100);
+      const reasonCode = warmSlope ? 'ROOM_WARM_WHEN_COLD_OUTSIDE' : 'ROOM_WARM';
+      const { to, floor } = down(warmSlope);
+      if (!to) {
+        if (floor) return { ...out, decision: 'NO_CHANGE', reasonCode: 'FLOOR_ACTIVE', floor: { slope: floor.slope, shift: floor.shift, until: floor.until },
+          reason: `${desc}: a lower curve (${floor.slope} / ${floor.shift}) made the room too cool recently — retry after ${floor.until.slice(0, 10)}` };
+        return { ...out, decision: warmSlope ? 'DECREASE_SLOPE' : 'DECREASE_SHIFT', reasonCode: 'LIMIT_REACHED', safety: 'VETO', vetoCode: 'LIMIT_REACHED', reason: `${desc}: limit reached (slope ${sLo}–${sHi}, shift ${hLo}–${hHi})` };
+      }
+      if (st.medianRoomError - effect(to) < -band.lower) {
+        // one step down would overshoot below the band (big steps for this house): stay a bit warm
+        return { ...out, decision: 'NO_CHANGE', reasonCode: 'STEP_TOO_BIG',
+          reason: `${desc}: one step lower would move the room by about ${effect(to).toFixed(2)} °C and make it too cool — keeping the curve` };
+      }
+      out.proposed = to;
+      out.autoApply = out.confidence >= AUTO_CONFIDENCE;
+      return { ...out, decision: code(to, -1), reasonCode, reason: `${desc}${out.autoApply ? '' : `: confidence ${out.confidence} % (below ${AUTO_CONFIDENCE} %)`}` };
     }
-    const trySlope = () => { const s = r1(cur.slope + 0.1 * dir); return s >= sLo && s <= sHi ? { slope: s, shift: cur.shift } : null; };
-    const tryShift = () => { const h = cur.shift + dir; return h >= hLo && h <= hHi ? { slope: cur.slope, shift: h } : null; };
-    let to = slopeCase ? trySlope() : tryShift();
-    let final = decision;
-    if (!to) {   // the preferred knob is at its limit: the other one, if it can still move
-      to = slopeCase ? tryShift() : trySlope();
-      if (to) final = to.slope !== cur.slope ? (dir > 0 ? 'INCREASE_SLOPE' : 'DECREASE_SLOPE') : (dir > 0 ? 'INCREASE_SHIFT' : 'DECREASE_SHIFT');
+
+    // 3. in the comfort band
+    if (goal === 'comfort') {
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'WITHIN_TOLERANCE', reason: `${desc}: within ±${band.lower} °C, no change` };
     }
+    // economy probe: even the coolest moments (10th percentile) are at the target → one step lower
+    const margin = st.errorP10 >= -0.05 && st.medianRoomError >= 0.05 && st.comfortShare >= 0.9;
+    if (!margin || st.samples < 48 || st.hours < 36) {
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'IN_BAND_NO_MARGIN',
+        reason: `${desc}: comfortable, no margin to save yet (coolest moments ${sgn(st.errorP10)} °C${st.samples < 48 || st.hours < 36 ? `, waiting for 48 samples over 36 h` : ''})` };
+    }
+    // slope first when the margin is larger in cold weather and cold weather was seen
+    const prefSlope = dependsOnCold && spread > 0 && st.outdoorLow <= 5;
+    const { to, floor } = down(prefSlope);
     if (!to) {
-      return { ...out, decision, reasonCode: 'LIMIT_REACHED', safety: 'VETO', vetoCode: 'LIMIT_REACHED',
-        reason: `${desc}: limit reached (slope ${sLo}–${sHi}, shift ${hLo}–${hHi})` };
+      if (floor) return { ...out, decision: 'NO_CHANGE', reasonCode: 'FLOOR_ACTIVE', floor: { slope: floor.slope, shift: floor.shift, until: floor.until },
+        reason: `${desc}: comfortable; the next lower curve (${floor.slope} / ${floor.shift}) made the room too cool recently — retry after ${floor.until.slice(0, 10)}` };
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'LIMIT_REACHED', reason: `${desc}: comfortable, already at the lowest allowed curve (slope ${sLo}, shift ${hLo})` };
     }
-    out.proposed = to;
+    if (st.medianRoomError - effect(to) < -0.1) {
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'IN_BAND_NO_MARGIN',
+        reason: `${desc}: comfortable; one step lower would move the room by about ${effect(to).toFixed(2)} °C, more than the margin (${sgn(st.medianRoomError)} °C)` };
+    }
+    const conf = base01 + 0.3 * clamp01((st.comfortShare - 0.85) / 0.13) + 0.25 * clamp01(0.5 + (st.errorP10 + 0.05) / 0.3);
+    out.confidence = Math.round(conf * 100);
+    out.proposed = to; out.probe = true;
     out.autoApply = out.confidence >= AUTO_CONFIDENCE;
-    return { ...out, decision: final, reasonCode, reason: `${desc}${out.autoApply ? '' : `: confidence ${out.confidence} % (below ${AUTO_CONFIDENCE} %)`}` };
+    return { ...out, decision: code(to, -1), reasonCode: 'ECONOMY_PROBE',
+      reason: `${desc}: comfortable with margin (coolest moments ${sgn(st.errorP10)} °C) — trying one step lower to save${out.autoApply ? '' : `: confidence ${out.confidence} % (below ${AUTO_CONFIDENCE} %)`}` };
   }
 
   /**
@@ -349,12 +444,14 @@ export class CurveTuner {
     const cur = { ...base, current: info.curve };
     if (info.mode !== 'heating') return save({ ...cur, decision: 'WAIT', reasonCode: 'NOT_HEATING_MODE', reason: `circuit not heating (${info.mode || 'unknown'})` });
     if (info.holiday) return save({ ...cur, decision: 'WAIT', reasonCode: 'HOLIDAY', reason: 'holiday program active' });
+    st.floors = (st.floors || []).filter(f => now - Date.parse(f.ts) < FLOOR_MAX_AGE_DAYS * 86400000);
     const pre = this.stats(a.samples);
-    const minGap = pre && pre.medianRoomError < -TOLERANCE ? 24 : 48;
+    const minGap = pre && pre.medianRoomError < -BAND[this.goal].lower ? 24 : 48;
     if (st.lastChange && now - Date.parse(st.lastChange) < minGap * 3600 * 1000) {
       return save({ ...cur, decision: 'WAIT', reasonCode: 'WAITING_EFFECT', reason: `waiting for the effect of the last change (${minGap} h)` });
     }
-    const d: CurveDecision = { ...cur, ...this.decide(a, info.curve, st.baseline, info.limits) };
+    const d: CurveDecision = { ...cur, ...this.decide(a, info.curve, st.baseline, info.limits, { lastStep: st.lastStep, floors: st.floors, now, stepEffect: st.stepEffect }) };
+    this.learn(st, d, info.curve, now);
     const change = !!d.proposed && d.safety === 'PASS';
     if (change && mode === 'auto' && d.autoApply) {
       await this.apply(t, info.curve, d.proposed!, d.reason, true, st, d);
@@ -369,13 +466,57 @@ export class CurveTuner {
     return save(d);
   }
 
+  /**
+   * What the loop learns (no rollback that stops anything):
+   *   room too cool at a curve → that curve becomes a temporary floor (not used again for
+   *                              retryDays, doubled after every new failure at it) and the
+   *                              decision raises the curve one step
+   *   step down + room in the band → the lower curve is kept, the next probe can follow
+   */
+  private learn(st: TunerState, d: CurveDecision, cur: Curve, now: number) {
+    if (!d.stats || d.decision === 'WAIT') return;
+    const ls = st.lastStep;
+    const h = ls ? st.history.slice().reverse().find(x => x.ts === ls.ts) : undefined;
+    const tooCool = d.decision.startsWith('INCREASE') && ['ROOM_COLD', 'ROOM_COLD_WHEN_COLD_OUTSIDE', 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', 'LIMIT_REACHED'].includes(d.reasonCode);
+    if (tooCool) {
+      // this curve is too low: remember it so that "too warm" or an economy probe does not
+      // come straight back to it (no ping-pong); raising for comfort is never blocked
+      const prev = (st.floors || []).find(f => f.slope === cur.slope && f.shift === cur.shift);
+      const since = st.lastChange ? Date.parse(st.lastChange) : 0;
+      if (prev && Date.parse(prev.ts) >= since) return;   // already recorded while at this curve
+      const fails = (prev?.fails || 0) + 1;
+      const until = new Date(now + this.retryDays * Math.pow(2, fails - 1) * 86400000).toISOString();
+      st.floors = [...(st.floors || []).filter(f => f !== prev), { slope: cur.slope, shift: cur.shift, ts: new Date(now).toISOString(), fails, until }];
+      if (ls && ls.dir < 0 && h) h.outcome = 'too cool';
+      this.measureEffect(st, ls, d);
+      d.floor = { slope: cur.slope, shift: cur.shift, until };
+      this.platform.log.info(`🌡️ Heating curve: ${cur.slope} / ${cur.shift} is too low (room ${d.stats.medianRoomError} °C) — not tried again before ${until.slice(0, 10)}`);
+      return;
+    }
+    if (ls && ls.dir < 0 && h && !h.outcome) h.outcome = 'kept';
+    this.measureEffect(st, ls, d);
+    st.lastStep = undefined;
+  }
+
+  /** Learns how much one step moves the room (exponential average, used to avoid overshooting). */
+  private measureEffect(st: TunerState, ls: LastStep | undefined, d: CurveDecision) {
+    if (!ls || typeof ls.before !== 'number' || !d.stats) return;
+    const knob: 'slope' | 'shift' = ls.from.slope !== ls.to.slope ? 'slope' : 'shift';
+    const moved = (d.stats.medianRoomError - ls.before) * ls.dir;   // expected positive
+    if (!(moved > 0.02 && moved < 2)) return;                        // weather noise: ignore
+    const e = st.stepEffect || { shift: null, slope: null };
+    e[knob] = r2(e[knob] === null ? moved : 0.5 * e[knob]! + 0.5 * moved);
+    st.stepEffect = e;
+  }
+
   private async apply(t: Target, from: Curve, to: Curve, why: string, auto: boolean, st: TunerState, d?: CurveDecision) {
     const ok = await this.platform.viessmannAPI.executeCommand(t.installationId, t.gatewaySerial, t.deviceId,
       `heating.circuits.${t.circuit}.heating.curve`, 'setCurve', { slope: to.slope, shift: to.shift });
     if (!ok) throw new Error('setCurve refused by the Viessmann API');
     st.lastChange = new Date().toISOString();
     st.lastResult = `changed: ${why}`;
-    st.history.push({ ts: st.lastChange, from, to, reason: why, auto, confidence: d?.confidence, decision: d?.decision });
+    st.history.push({ ts: st.lastChange, from, to, reason: why, auto, confidence: d?.confidence, decision: d?.decision, probe: !!d?.probe });
+    st.lastStep = { from, to, dir: flowAt0(to) > flowAt0(from) ? 1 : -1, ts: st.lastChange, probe: !!d?.probe, before: d?.stats?.medianRoomError };
     this.writeState(t, st);
     this.platform.log.info(`🌡️ Heating curve HC${t.circuit}: slope ${from.slope} → ${to.slope}, shift ${from.shift} → ${to.shift} — ${why}`);
   }

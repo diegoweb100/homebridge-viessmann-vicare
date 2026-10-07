@@ -1292,6 +1292,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.83 (2026-10-07)
+- feat: heating-curve optimisation aimed at saving (default): the lowest curve that keeps the program temperature (±0.2 °C), continuous all season, with saving tests, learned step effect and no back-and-forth; `curveAutoTuneGoal: "comfort"` keeps the 2.0.82 behaviour
+
 ### v2.0.82 (2026-10-07)
 - fix (security): dashboard *Log in again* / *Disconnect* protected like every other change (CSRF token + same origin); escaped login error page
 - feat (security): optional dashboard PIN (`dashboardPin`), security headers, configurable listen address (`dashboardBind`), atomic token file

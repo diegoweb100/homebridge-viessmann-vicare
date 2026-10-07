@@ -250,13 +250,15 @@ All Viessmann heating systems compatible with ViCare API:
 - **Temperatures**: Reduced, Normal and Comfort are the three temperature levels the time schedule uses. Each is its own thermostat tile ("Temp Reduced", "Temp Normal", "Temp Comfort"): its dial changes that level on the boiler, and it follows the time schedule: only the level the boiler is using right now is on (all off when the circuit is off; Holiday → Reduced, Holiday at home → Normal, Extended heating → Comfort). To change a level that is not in use, switch its tile to Heat, set the temperature, and it returns to Off two minutes later, also from automations (`exposeProgramTemperatures`, on by default). The main heating dial changes the level currently in force.
 - There is no Reduced switch: the boiler has no command to select the reduced temperature, the time schedule decides it. The reduced temperature is still shown by the dial while Holiday is on.
 
-**Automatic heating-curve optimisation (v2.0.81+, v2 since 2.0.82, `features.curveAutoTune`, off by default)**: once a day, on heating days only, the plugin compares the room temperature with the program temperature (Normal/Comfort periods, up to 7 days, never earlier than 12 h after the last change) and fits the error against the outdoor temperature:
-- error that clearly grows with the cold (wide outdoor range, good fit) → **slope** ±0.1; same error at any outdoor temperature → **shift** ±1; within ±0.5 °C → nothing
-- a **confidence** (0–100 %) from the number of samples, the hours covered, how many samples agree, the size of the error and, for the slope, fit and outdoor range; the automatic mode applies only from 75 %
-- **never raises the curve when the flow is already high** (median flow with the burner on ≥ `curveAutoTuneMaxFlow`, default 55 °C, or near the circuit maximum): a cold house with a hot flow is a radiator, valve, air, pump or sensor problem, and the dashboard says so
-- `curveAutoTuneMode`: `"auto"` (default) applies the change; `"proposal"` only proposes it, and you press *Apply* in the dashboard (the data are checked again before writing)
-- limits: never further than ±0.3 slope / ±3 shift from the curve found when switched on (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`), 48 h between changes (24 h if the house is too cold); nothing without heating (summer, holiday, standby, outdoor above 15 °C): outside the heating season it only reads the local history, with no API call and nothing written
-- the dashboard shows the last decision (current and proposed curve, reason, confidence, samples, outdoor range, median error, flow, safety result), *Check now*, the history of changes and *Restore the starting curve*. It needs a room temperature (room sensor or ViCare Smart Climate).
+**Automatic heating-curve optimisation (v2.0.81+, saving goal since 2.0.83, `features.curveAutoTune`, off by default)**: every day of the heating season the plugin looks for the **lowest curve that keeps the room at the program temperature** — comfort is the constraint, saving the objective (`curveAutoTuneGoal: "economy"`, default):
+- room more than 0.2 °C **below** the program → curve **up** one step (comfort first, never blocked)
+- room more than 0.2 °C **above** → one step **down** (wasted heat)
+- in between, when even the coolest moments are at the program temperature → **saving test**: one step down. If the room stays comfortable the lower curve is kept and the next test follows later; if it gets too cool, the first rule raises it again
+- **no back-and-forth**: a curve found too cool is not used again for `curveAutoTuneRetryDays` (default 14), doubled after every new failure (14 → 28 → 56 days), forgotten after 120 days. The plugin also learns how much one step moves your room and does not take a step that would overshoot
+- the knob: **slope** ±0.1 when the error clearly depends on the outdoor temperature (regression on up to 7 days: wide outdoor range, good fit), otherwise **shift** ±1 — the steps the boiler accepts
+- **safety**: confidence 0–100 % (applied automatically from 75 %); never raises the curve when the flow is already high (`curveAutoTuneMaxFlow`, default 55 °C); 48 h between changes (24 h when too cool); never further than ±0.3 slope / ±3 shift from the starting curve (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`); nothing outside the heating season (no API call, nothing written)
+- `curveAutoTuneMode: "proposal"` only proposes and you press *Apply*; `curveAutoTuneGoal: "comfort"` only corrects outside ±0.5 °C
+- the dashboard shows the last decision with reason and confidence, saving tests and their outcome, the learned effect of one step, the curves found too cool, *Check now* and *Restore the starting curve*. It needs a room temperature (room sensor or ViCare Smart Climate).
 
 Hot water: Comfort, Eco and Off are mutually exclusive too; switching the active mode off returns to `dhwDefaultMode` (default Eco).
 
@@ -1203,6 +1205,16 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.83] - 2026-10-07
+- feat: **heating-curve optimisation aimed at saving** (`curveAutoTuneGoal: "economy"`, the new default): the plugin keeps looking, all season, for the **lowest curve that keeps the room at the program temperature** (±0.2 °C). Comfort is the constraint, saving the objective:
+  - room below the program by more than 0.2 °C → the curve goes up one step (comfort first, never blocked)
+  - room above by more than 0.2 °C → one step down (wasted heat)
+  - in between, when even the coolest moments are at the program temperature → **saving test**: one step down; if the room stays comfortable the lower curve is kept and the next test can follow, otherwise the curve goes back up by itself
+  - no "rollback that stops" and no back-and-forth: a curve found too cool is not used again for `curveAutoTuneRetryDays` (default 14), doubled after every new failure at it (14 → 28 → 56 days) and forgotten after 120 days; the plugin also **learns how much one step moves your room** and does not take a step that would overshoot the comfort band
+  - simulated over a whole winter on houses that need less or more heat than the starting curve: it converges in about 10 days and makes at most one failed saving test per house
+  - `curveAutoTuneGoal: "comfort"` keeps the 2.0.82 behaviour (corrects only outside ±0.5 °C)
+- feat (dashboard): the curve card shows the goal, the saving tests with their outcome (*kept* / *too cool, back up*), the learned effect of one step and the curves found too cool with the date they will be retried
 
 ### [2.0.82] - 2026-10-07
 - fix (security): **Log in again** and **Disconnect** in the dashboard (`/reauth`, `/clear`) were plain form posts without the protection of the other dashboard actions: a web page opened on any computer of the home network could disconnect the plugin from Viessmann. Every change now needs a **CSRF token** that only pages served by the dashboard can read, plus a same-origin check. (The 2.0.81 notes said all write actions were protected: these two were not.)

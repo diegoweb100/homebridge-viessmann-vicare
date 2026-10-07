@@ -299,7 +299,9 @@
     .replace(/room ([+-][\d.]+) °C vs the program/, 'stanza $1 °C rispetto al programma').replace(/(\d+) samples, (\d+) h/, '$1 campioni, $2 ore')
     .replace(/([+-][\d.]+) °C at ([\d.-]+) °C vs ([+-][\d.]+) °C at ([\d.-]+) °C/, '$1 °C con $2 °C fuori, $3 °C con $4 °C')
     .replace(/within ±0.5 °C, no change/, 'entro ±0,5 °C, nessuna modifica').replace(/confidence (\d+) % \(below (\d+) %\)/, 'affidabilità $1 % (sotto $2 %)')
-    .replace('(applied from the dashboard)', '(applicata dalla dashboard)').replace(/room cold although the flow is already high/, 'casa fresca con mandata già alta')
+    .replace('(applied from the dashboard)', '(applicata dalla dashboard)')
+    .replace(/comfortable with margin \(coolest moments ([+-][\d.]+) °C\) — trying one step lower to save/, 'comoda con margine (momenti più freschi $1 °C): provo uno scalino più in basso per risparmiare')
+    .replace(/: too cool after the step down to ([\d.]+) \/ (-?\d+)/, ': troppo fresca dopo lo scalino in giù a $1 / $2').replace(/room cold although the flow is already high/, 'casa fresca con mandata già alta')
     .replace('outdoor', 'esterno').replace(', cold', ', freddo').replace(', mild', ', mite')
     .replace(/: limit reached/, ': limite raggiunto').replace('restored from the dashboard', 'ripristinata dalla dashboard')
     .replace('heating curve not available on this device', 'curva non disponibile su questo dispositivo');
@@ -320,19 +322,26 @@
       case 'HOLIDAY': return tr('Programma vacanza attivo: niente modifiche.', 'Holiday program active: no changes.');
       case 'WAITING_EFFECT': return tr(`Attendo l’effetto dell’ultima modifica (${n(/\((\d+) h\)/)} ore): la casa reagisce lentamente.`, `Waiting for the effect of the last change (${n(/\((\d+) h\)/)} h): the house reacts slowly.`);
       case 'NOT_ENOUGH_DATA': return tr(`Dati ancora insufficienti (${n(/\((\d+) samples/)} campioni in ${n(/samples, ([\d.]+) h/)} ore con Normale/Comfort in corso): servono almeno 24 campioni su 12 ore.`, `Not enough data yet (${n(/\((\d+) samples/)} samples over ${n(/samples, ([\d.]+) h/)} h with Normal/Comfort running): at least 24 samples over 12 h are needed.`);
-      case 'WITHIN_TOLERANCE': return room + ' ' + tr('Entro ±0,5 °C: la curva va bene così.', 'Within ±0.5 °C: the curve is fine.');
-      case 'ROOM_COLD': return room + ' ' + tr('Troppo fresco a qualsiasi temperatura esterna: va alzato lo spostamento.', 'Too cool at any outdoor temperature: the shift should go up.');
+      case 'WITHIN_TOLERANCE': return room + ' ' + tr('Entro ±0,5 °C: la curva va bene così (obiettivo comfort).', 'Within ±0.5 °C: the curve is fine (comfort goal).');
+      case 'ROOM_COLD': return room + ' ' + (d.recovery ? tr('Dopo l’ultimo scalino in giù la casa è troppo fresca: torno alla curva di prima e non riprovo quella più bassa per un po’.', 'After the last step down the house is too cool: going back to the previous curve and not retrying the lower one for a while.') : tr('Troppo fresco a qualsiasi temperatura esterna: va alzato lo spostamento.', 'Too cool at any outdoor temperature: the shift should go up.'));
       case 'ROOM_WARM': return room + ' ' + tr('Troppo caldo a qualsiasi temperatura esterna: va abbassato lo spostamento.', 'Too warm at any outdoor temperature: the shift should go down.');
       case 'ROOM_COLD_WHEN_COLD_OUTSIDE': case 'ROOM_WARM_WHEN_COLD_OUTSIDE': return room + ' ' + byOut;
       case 'HIGH_FLOW_FOR_CURRENT_OUTDOOR': return room + ' ' + tr(`La casa è fresca anche se la mandata è già alta (mediana ${num1(d.flow && d.flow.median)} °C, limite ${num1(d.flow && d.flow.limit)} °C): alzare la curva non risolverebbe. Controlla valvole termostatiche, aria nei radiatori, pompa e posizione della sonda ambiente.`,
         `The house is cool although the flow is already high (median ${num1(d.flow && d.flow.median)} °C, limit ${num1(d.flow && d.flow.limit)} °C): raising the curve would not fix it. Check thermostatic valves, air in the radiators, pump and room sensor position.`);
       case 'LIMIT_REACHED': return room + ' ' + tr('Ma la curva è già al limite consentito rispetto alla curva di partenza.', 'But the curve is already at the allowed limit from the starting curve.');
+      case 'ECONOMY_PROBE': return room + ' ' + tr(`Anche nei momenti più freschi la stanza è a ${st.errorP10 >= 0 ? '+' : ''}${num1(st.errorP10)} °C: c’è margine, provo uno scalino più in basso per risparmiare. Se poi la stanza diventa fresca, la curva torna su da sola.`,
+        `Even at the coolest moments the room is ${st.errorP10 >= 0 ? '+' : ''}${num1(st.errorP10)} °C: there is margin, trying one step lower to save. If the room then gets too cool, the curve goes back up by itself.`);
+      case 'IN_BAND_NO_MARGIN': return room + ' ' + tr('Temperatura giusta e nessun margine sicuro per scendere ancora: la curva resta così.', 'Right temperature and no safe margin to go lower: the curve stays as it is.');
+      case 'FLOOR_ACTIVE': return room + ' ' + tr(`La curva più bassa (${num1(d.floor && d.floor.slope)} / ${nf(d.floor && d.floor.shift, 0)}) ha già reso la casa troppo fresca: la riproverò dopo il ${fmtDate(d.floor && d.floor.until)}.`,
+        `The lower curve (${num1(d.floor && d.floor.slope)} / ${nf(d.floor && d.floor.shift, 0)}) already made the house too cool: I will retry it after ${fmtDate(d.floor && d.floor.until)}.`);
+      case 'STEP_TOO_BIG': return room + ' ' + tr('Uno scalino in meno sposterebbe la stanza più del margine e la renderebbe troppo fresca: resta leggermente calda, ma comoda.', 'One step lower would move the room more than the margin and make it too cool: it stays slightly warm, but comfortable.');
       default: return why(d.reason);
     }
   }
   const DEC = {
     INCREASE_SLOPE: ['Aumentare la pendenza', 'Increase the slope'], DECREASE_SLOPE: ['Ridurre la pendenza', 'Decrease the slope'],
     INCREASE_SHIFT: ['Alzare lo spostamento', 'Raise the shift'], DECREASE_SHIFT: ['Abbassare lo spostamento', 'Lower the shift'],
+    PROBE: ['Prova a risparmiare: uno scalino in giù', 'Saving test: one step down'],
     NO_CHANGE: ['Nessuna modifica', 'No change'], WAIT: ['In attesa', 'Waiting'], IDLE: ['Fuori stagione', 'Off season'],
   };
   function renderCurve() {
@@ -342,10 +351,13 @@
     const c = C.circuits[0] || {};
     const base = c.baseline, hist = (c.history || []).slice().reverse(), d = c.lastDecision;
     const modeTxt = !C.enabled ? tr('spenta', 'off') : C.mode === 'proposal' ? tr('solo proposte', 'proposals only') : tr('automatica', 'automatic');
+    const goalTxt = C.goal === 'comfort' ? tr('solo comfort (±0,5 °C)', 'comfort only (±0.5 °C)') : tr('risparmio: curva più bassa che tiene la temperatura (±0,2 °C)', 'saving: lowest curve that keeps the temperature (±0.2 °C)');
+    const floors = (c.floors || []).filter((f) => new Date(f.until) > new Date());
+    const eff = c.stepEffect;
     const canApply = C.enabled && d && d.proposed && d.safety === 'PASS' && !d.applied;
     const confLvl = d ? (d.confidence >= C.autoConfidence ? 'good' : d.confidence >= 50 ? 'warn' : 'bad') : '';
     const decBox = !d ? '' : `<div class="decision ${d.safety === 'VETO' ? 'veto' : canApply ? 'prop' : ''}">
-        <div class="dh"><b>${esc(tr(...(DEC[d.decision] || [d.decision, d.decision])))}</b>
+        <div class="dh"><b>${esc(tr(...(DEC[d.probe ? 'PROBE' : d.decision] || [d.decision, d.decision])))}</b>
           ${d.proposed ? `<span class="badge info">${tr('Proposta', 'Proposal')}: ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}</span>` : ''}
           ${d.safety === 'VETO' ? `<span class="badge bad">${d.vetoCode === 'LIMIT_REACHED' ? tr('Limite raggiunto', 'Limit reached') : tr('Bloccato per sicurezza', 'Blocked for safety')}</span>` : d.proposed ? `<span class="badge good">${tr('Controlli superati', 'Safety checks passed')}</span>` : ''}
           ${d.applied ? `<span class="badge good">✓ ${tr('applicata', 'applied')}</span>` : ''}</div>
@@ -358,13 +370,15 @@
           <div class="row"><span class="k">${tr('Errore col freddo / col mite', 'Error when cold / mild')}</span><span class="v">${nf(d.stats.errorAtLow, 2)} / ${nf(d.stats.errorAtHigh, 2)} °C · R² ${nf(d.stats.r2, 2)}</span></div>
           ${d.flow ? `<div class="row"><span class="k">${tr('Mandata col bruciatore acceso', 'Flow with the burner on')}</span><span class="v ${d.flow.median >= d.flow.limit ? 'bad' : ''}">${tr('mediana', 'median')} ${num1(d.flow.median)} °C · max ${num1(d.flow.max)} °C · ${tr('limite', 'limit')} ${num1(d.flow.limit)} °C${d.flow.expected !== null ? ` · ${tr('curva', 'curve')} ≈ ${num1(d.flow.expected)} °C` : ''}</span></div>` : ''}
         </div>` : ''}
+        ${eff && (eff.shift !== null || eff.slope !== null) ? `<div class="rows"><div class="row"><span class="k">${tr('Effetto di uno scalino (imparato)', 'Effect of one step (learned)')}</span><span class="v">${eff.shift !== null ? tr(`spostamento 1 ≈ ${num1(eff.shift)} °C`, `shift 1 ≈ ${num1(eff.shift)} °C`) : ''}${eff.shift !== null && eff.slope !== null ? ' · ' : ''}${eff.slope !== null ? tr(`pendenza 0,1 ≈ ${num1(eff.slope)} °C`, `slope 0.1 ≈ ${num1(eff.slope)} °C`) : ''}</span></div></div>` : ''}
+        ${floors.length ? `<div class="rows"><div class="row"><span class="k">${tr('Curve risultate troppo fresche', 'Curves found too cool')}</span><span class="v">${floors.map((f) => `${num1(f.slope)} / ${nf(f.shift, 0)} ${tr('fino al', 'until')} ${fmtDate(f.until)}`).join(' · ')}</span></div></div>` : ''}
         <div class="muted small">${tr('Valutata il', 'Evaluated on')} ${fmtDT(d.ts)}</div>
       </div>`;
     el.innerHTML = `<h2>${icon('curve')} ${tr('Curva climatica', 'Heating curve')}</h2>
-      <p class="intro">${tr('La curva decide quanto scalda la caldaia in base al freddo esterno. Ogni giorno di riscaldamento il plugin confronta la stanza con il programma (fino a 7 giorni di dati) e capisce se va cambiata la pendenza (errore che cresce col freddo) o lo spostamento (errore uguale sempre), a passi di 0,1 o 1. Non alza mai la curva se la mandata è già alta.', 'The curve decides how hard the boiler heats based on the outdoor cold. On every heating day the plugin compares the room with the program (up to 7 days of data) and works out whether the slope (error growing with the cold) or the shift (same error always) needs changing, in steps of 0.1 or 1. It never raises the curve when the flow is already high.')}</p>
+      <p class="intro">${tr('La curva decide quanto scalda la caldaia in base al freddo esterno. Ogni giorno di riscaldamento il plugin confronta la stanza con il programma e sposta la curva di uno scalino (0,1 di pendenza o 1 di spostamento) verso la curva più bassa che mantiene la temperatura impostata: scende finché c’è margine, risale appena la casa diventa fresca. Impara quanto sposta la stanza ogni scalino e non riprova subito una curva che è risultata fresca, così non va avanti e indietro. Non alza mai la curva se la mandata è già alta.', 'The curve decides how hard the boiler heats based on the outdoor cold. On every heating day the plugin compares the room with the program and moves the curve one step (0.1 slope or 1 shift) towards the lowest curve that keeps the set temperature: down while there is margin, back up as soon as the house gets too cool. It learns how much each step moves the room and does not retry a curve that turned out too cool right away, so it never goes back and forth. It never raises the curve when the flow is already high.')}</p>
       <div class="kpis">
         <div class="kpi"><div class="l">${tr('Curva attuale', 'Current curve')}</div><div class="n">${cur ? `${num1(cur.slope)} / ${nf(cur.shift, 0)}` : (d && d.current ? `${num1(d.current.slope)} / ${nf(d.current.shift, 0)}` : '—')}</div><div class="s muted">${tr('pendenza / spostamento', 'slope / shift')}</div></div>
-        <div class="kpi"><div class="l">${tr('Ottimizzazione', 'Optimisation')}</div><div class="n ${C.enabled ? 'good' : 'muted'}">${modeTxt}</div><div class="s muted">${C.enabled ? tr(`ogni ${C.intervalHours} ore, nei giorni di riscaldamento`, `every ${C.intervalHours} h, on heating days`) : tr('attivala nelle impostazioni del plugin', 'turn it on in the plugin settings')}</div></div>
+        <div class="kpi"><div class="l">${tr('Ottimizzazione', 'Optimisation')}</div><div class="n ${C.enabled ? 'good' : 'muted'}">${modeTxt}</div><div class="s muted">${C.enabled ? goalTxt + ' · ' + tr(`ogni ${C.intervalHours} ore, nei giorni di riscaldamento`, `every ${C.intervalHours} h, on heating days`) : tr('attivala nelle impostazioni del plugin', 'turn it on in the plugin settings')}</div></div>
         ${base ? `<div class="kpi"><div class="l">${tr('Curva di partenza', 'Starting curve')}</div><div class="n">${num1(base.slope)} / ${nf(base.shift, 0)}</div><div class="s muted">${tr('limiti', 'limits')} ${num1(base.slope - C.maxSlope)}–${num1(base.slope + C.maxSlope)} / ${nf(base.shift - C.maxShift, 0)}–${nf(base.shift + C.maxShift, 0)}</div></div>` : ''}
       </div>
       ${decBox}
@@ -373,7 +387,7 @@
         ${canApply ? `<button class="btn primary" id="cv-apply">${tr(`Applica ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}`, `Apply ${num1(d.proposed.slope)} / ${nf(d.proposed.shift, 0)}`)}</button>` : ''}
         ${base && cur && (base.slope !== cur.slope || base.shift !== cur.shift) ? `<button class="btn" id="cv-restore">${tr(`Ripristina la curva di partenza (${num1(base.slope)} / ${nf(base.shift, 0)})`, `Restore the starting curve (${num1(base.slope)} / ${nf(base.shift, 0)})`)}</button>` : ''}
       </div>
-      ${hist.length ? `<div class="tw"><table><tr><th>${tr('Quando', 'When')}</th><th>${tr('Da', 'From')}</th><th>${tr('A', 'To')}</th><th>${tr('Affid.', 'Conf.')}</th><th style="text-align:left">${tr('Motivo', 'Reason')}</th></tr>${hist.map((h) => `<tr><td>${fmtDT(h.ts)}</td><td>${num1(h.from.slope)} / ${nf(h.from.shift, 0)}</td><td><b>${num1(h.to.slope)} / ${nf(h.to.shift, 0)}</b></td><td>${h.confidence !== undefined && h.confidence !== null ? h.confidence + '%' : '—'}</td><td style="text-align:left;white-space:normal">${esc(why(h.reason))}${h.auto ? '' : ` <small class="muted">(${tr('manuale', 'manual')})</small>`}</td></tr>`).join('')}</table></div>` : ''}`;
+      ${hist.length ? `<div class="tw"><table><tr><th>${tr('Quando', 'When')}</th><th>${tr('Da', 'From')}</th><th>${tr('A', 'To')}</th><th>${tr('Affid.', 'Conf.')}</th><th style="text-align:left">${tr('Motivo', 'Reason')}</th></tr>${hist.map((h) => `<tr><td>${fmtDT(h.ts)}</td><td>${num1(h.from.slope)} / ${nf(h.from.shift, 0)}</td><td><b>${num1(h.to.slope)} / ${nf(h.to.shift, 0)}</b></td><td>${h.confidence !== undefined && h.confidence !== null ? h.confidence + '%' : '—'}</td><td style="text-align:left;white-space:normal">${h.probe ? `<b>${tr('Prova risparmio', 'Saving test')}</b> · ` : ''}${esc(why(h.reason))}${h.auto ? '' : ` <small class="muted">(${tr('manuale', 'manual')})</small>`}${h.outcome ? ` <span class="badge ${h.outcome === 'kept' ? 'good' : 'warn'}">${h.outcome === 'kept' ? tr('tenuta', 'kept') : tr('troppo fresca, tornata su', 'too cool, back up')}</span>` : ''}</td></tr>`).join('')}</table></div>` : ''}`;
     const run = (id, fn) => { const b = $(id); if (b) b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { toast(tr('Errore: ', 'Error: ') + e.message); } finally { b.disabled = false; } }; };
     run('#cv-check', async () => { S.curve = await api('POST', '/api/curve/check', { installationId: c.installationId, circuit: c.circuit }); renderCurve(); toast(tr('Valutazione aggiornata', 'Evaluation updated')); });
     run('#cv-apply', async () => {
