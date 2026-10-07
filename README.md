@@ -255,6 +255,10 @@ All Viessmann heating systems compatible with ViCare API:
 - room more than 0.2 °C **above** → one step **down** (wasted heat)
 - in between, when even the coolest moments are at the program temperature → **saving test**: one step down. If the room stays comfortable the lower curve is kept and the next test follows later; if it gets too cool, the first rule raises it again
 - **no back-and-forth**: a curve found too cool is not used again for `curveAutoTuneRetryDays` (default 14), doubled after every new failure (14 → 28 → 56 days), forgotten after 120 days. The plugin also learns how much one step moves your room and does not take a step that would overshoot
+- **morning warm-up**: a step down that makes the warm-up after Reduced more than 30 minutes slower (compared at similar outdoor temperatures) counts as too cool; each step down is verified for 5 days, mornings included
+- **every part of the day**: morning, afternoon and evening must all be comfortable for a saving test, and all warm for "too warm" (a sunny afternoon is free heat)
+- the plugin learns how much your room reacts (°C of room per °C of flow) and how much a step slows the mornings, and does not take a step that would overshoot or slow the mornings too much
+- **one room sensor**: the curve is optimised on the room temperature it has (usually the main room controller); colder rooms (bathrooms, rooms facing north) can end up below the set temperature
 - the knob: **slope** ±0.1 when the error clearly depends on the outdoor temperature (regression on up to 7 days: wide outdoor range, good fit), otherwise **shift** ±1 — the steps the boiler accepts
 - **safety**: confidence 0–100 % (applied automatically from 75 %); never raises the curve when the flow is already high (`curveAutoTuneMaxFlow`, default 55 °C); 48 h between changes (24 h when too cool); never further than ±0.3 slope / ±3 shift from the starting curve (`curveAutoTuneMaxSlopeDelta`, `curveAutoTuneMaxShiftDelta`); nothing outside the heating season (no API call, nothing written)
 - `curveAutoTuneMode: "proposal"` only proposes and you press *Apply*; `curveAutoTuneGoal: "comfort"` only corrects outside ±0.5 °C
@@ -1205,6 +1209,15 @@ For issues and questions:
    - Custom names configuration (if applicable)
 
 ## 📈 Changelog
+
+### [2.0.84] - 2026-10-07
+- feat: the saving optimisation of the heating curve checks comfort as a whole, not only on average:
+  - **the room response is learned in °C of room per °C of flow**: the effect of a step is computed at the outdoor temperature of the moment with the curve formula, so a slope step is judged correctly in cold weather too (it moves the flow a lot at 0 °C and little at 15 °C)
+  - **morning warm-up after Reduced is checked**: every warm-up is recorded (minutes back into the comfort band, outdoor temperature, curve). A step down that slows it by more than 30 minutes compared with the previous curve at similar cold (< 3 °C, 3–8 °C, > 8 °C; at least 3 mornings with the old curve and 2 with the new one) counts as too cool and the curve goes back up; the plugin also learns how much a step slows the mornings and does not take one that would slow them too much
+  - each step down is **verified for 5 days**, mornings included, before the next saving test
+  - **comfort in every part of the day**: morning, afternoon and evening are checked separately; a saving test needs comfort in all of them, and "too warm" means warm in all of them (a sunny afternoon or cooking is free heat, not a curve problem). A change of program or target (e.g. Normal → Comfort) restarts the 2 h settling time
+  - simulated over a whole winter with sunny afternoons and slow morning warm-ups: a failed saving test is repeated at most 2–3 times per season (14 → 28 → 56 days)
+- feat (dashboard): saving tests are labelled *saving confirmed* / *curve too low: raised one step*; new rows for the estimated effect of one step, comfort by part of the day and the morning warm-up; the failed saving tests are listed with their conditions (outdoor, room, reason) and retry date; gas per degree-day before and after the last change (indicative only); a note that the curve is optimised on one room sensor, so colder rooms can end up below the set temperature
 
 ### [2.0.83] - 2026-10-07
 - feat: **heating-curve optimisation aimed at saving** (`curveAutoTuneGoal: "economy"`, the new default): the plugin keeps looking, all season, for the **lowest curve that keeps the room at the program temperature** (±0.2 °C). Comfort is the constraint, saving the objective:

@@ -1292,6 +1292,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.84 (2026-10-07)
+- feat: heating-curve saving checks comfort as a whole: morning warm-up after Reduced, every part of the day, room response learned per °C of flow, 5-day verification of each step down; dashboard shows failed tests with conditions and gas per degree-day
+
 ### v2.0.83 (2026-10-07)
 - feat: heating-curve optimisation aimed at saving (default): the lowest curve that keeps the program temperature (±0.2 °C), continuous all season, with saving tests, learned step effect and no back-and-forth; `curveAutoTuneGoal: "comfort"` keeps the 2.0.82 behaviour
 

@@ -1,6 +1,6 @@
 /**
  * Automatic heating-curve optimisation (features.curveAutoTune, off by default)
- * v2 since 2.0.82, economy optimiser since 2.0.83.
+ * v2 since 2.0.82, economy optimiser since 2.0.83, whole-day comfort checks since 2.0.84.
  *
  * Goal (curveAutoTuneGoal, default "economy"): the LOWEST curve that keeps the room at the
  * temperature of the program. Comfort is the constraint, saving the objective. Continuous
@@ -25,6 +25,15 @@
  * the steps the boiler accepts. Data: up to 7 days of Normal/Comfort periods (first 2 h of each
  * period skipped), never earlier than 12 h after the last change.
  *
+ * Comfort is checked as a whole, not only on average:
+ *   - morning, afternoon and evening separately: a saving test needs comfort in all of them and
+ *     "too warm" means warm in all of them (a sunny afternoon is free heat, not a curve problem)
+ *   - warm-up after Reduced: a step down that makes it > 30 min slower than with the previous
+ *     curve at similar outdoor temperature counts as too cool; each step down is verified 5 days
+ *   - learned room response (°C of room per °C of flow) and morning sensitivity (minutes per °C of
+ *     flow): no step that would overshoot the band or slow the mornings too much
+ *   - one room sensor: other rooms are not seen (documented in the dashboard)
+ *
  * Safety:
  *   - confidence 0–100 %; automatic changes only from 75 % (50 % to raise the curve again after
  *     a probe that made the room too cool)
@@ -45,11 +54,19 @@ type Limits = { sMin: number; sMax: number; hMin: number; hMax: number; flowMax:
 
 export type DecisionCode = 'NO_CHANGE' | 'INCREASE_SLOPE' | 'DECREASE_SLOPE' | 'INCREASE_SHIFT' | 'DECREASE_SHIFT' | 'WAIT' | 'IDLE';
 export type Goal = 'economy' | 'comfort';
-interface Floor { slope: number; shift: number; ts: string; fails: number; until: string }
-interface LastStep { from: Curve; to: Curve; dir: 1 | -1; ts: string; probe: boolean; before?: number }
-/** Learned effect of one step on the room (°C): how much one shift / slope step moves the room. */
+interface Floor { slope: number; shift: number; ts: string; fails: number; until: string; outLow?: number; outHigh?: number; median?: number; p10?: number; why?: string }
+interface LastStep { from: Curve; to: Curve; dir: 1 | -1; ts: string; probe: boolean; before?: number; measured?: boolean; morningMeasured?: boolean }
+/** Effect of one step on the room (°C) at the outdoor temperature of the decision (for display). */
 interface StepEffect { shift: number | null; slope: number | null }
-const PRIOR_EFFECT = { shift: 0.15, slope: 0.3 };
+/**
+ * Room response learned as °C of room per °C of flow: independent of which knob moved. The effect
+ * of any step at any outdoor temperature = gain × the flow change the curve formula gives
+ * (a slope step changes the flow a lot in cold weather and little in mild weather).
+ */
+const PRIOR_GAIN = 0.15;
+const VERIFY_DAYS = 5;          // a step down stays "under verification" (mornings, comfort) this long
+const SLOW_MORNING_MIN = 30;    // morning recovery slower than with the previous curve by more than this → too cool
+export interface MorningRec { t: number; minutes: number; out: number; startErr: number; curve: string }
 
 export interface CurveStats {
   samples: number; hours: number; outdoorMean: number; outdoorRange: number; outdoorLow: number; outdoorHigh: number;
@@ -77,8 +94,15 @@ export interface CurveDecision {
   goal?: Goal;
   probe?: boolean;          // economy probe (one step lower while comfortable)
   recovery?: boolean;       // raising again after a step down made the room too cool
-  floor?: { slope: number; shift: number; until: string } | null;
+  floor?: { slope: number; shift: number; until: string; why?: string } | null;
   stepEffect?: StepEffect;
+  gain?: number | null;
+  morning?: { bin: string; before: number; after: number; nBefore: number; nAfter: number } | null;
+  periods?: Array<{ name: string; p10: number; median: number; n: number; days: number }>;
+}
+export interface GasCompare {
+  ts: string; from: Curve; to: Curve;
+  beforePerDD: number; afterPerDD: number; changePct: number; daysBefore: number; daysAfter: number;
 }
 
 interface TunerState {
@@ -89,7 +113,11 @@ interface TunerState {
   lastDecision?: CurveDecision;
   lastStep?: LastStep;
   floors?: Floor[];
-  stepEffect?: StepEffect;
+  stepEffect?: StepEffect;   // pre-2.0.83 builds (ignored)
+  gain?: number | null;
+  gainSamples?: number;
+  morningGain?: number | null;   // minutes of morning warm-up per °C less flow
+  gasCompare?: GasCompare | null;
   history: Array<{ ts: string; from: Curve; to: Curve; reason: string; auto: boolean; confidence?: number; decision?: DecisionCode; probe?: boolean; outcome?: 'kept' | 'too cool' }>;
 }
 
@@ -111,7 +139,10 @@ const RECOVERY_CONFIDENCE = 50;
 /** Comfort band around the program temperature: [target − lower, target + upper]. */
 const BAND: Record<Goal, { lower: number; upper: number }> = { economy: { lower: 0.2, upper: 0.2 }, comfort: { lower: 0.5, upper: 0.5 } };
 const FLOOR_MAX_AGE_DAYS = 120;
-const flowAt0 = (c: Curve) => curveFlow(c, 20, 0);   // one number to compare curves: flow at 0 °C outdoor
+const flowAt0 = (c: Curve) => curveFlow(c, 20, 0);
+const localDay = (t: number) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const outBin = (o: number) => o < 3 ? 0 : o < 8 ? 1 : 2;   // morning recoveries compared at similar cold
+const PERIODS: Array<[string, number, number]> = [['morning', 6, 12], ['afternoon', 12, 18], ['evening', 18, 24]];   // one number to compare curves: flow at 0 °C outdoor
 
 export class CurveTuner {
   private targets: Target[] = [];
@@ -219,11 +250,12 @@ export class CurveTuner {
     const ix = (n: string) => head.indexOf(n);
     const I = { ts: ix('timestamp'), acc: ix('accessory'), ev: ix('event_type'), burn: ix('burner_active'), room: ix('room_temp'), tgt: ix('target_temp'),
       out: ix('outside_temp'), prog: ix('program'), mode: ix('mode'), flow: ix('flow_temp'), gasH: ix('gas_heating_day_m3') };
-    const from = Math.min(since, now - 48 * 3600 * 1000);
+    const from = Math.min(since, now - 28 * 86400000);   // 28 days: morning recoveries and gas comparison
     const hc = `hc${t.circuit}`;
     const boiler: Array<{ t: number; out: number | null; burn: boolean }> = [];
     const hcRows: Array<{ t: number; room: number; tgt: number; prog: string; mode: string; flow: number | null }> = [];
     const gasDays = new Set<string>(); const out48: number[] = [];
+    const gasDay = new Map<string, { gas: number; outs: number[] }>();   // local day → heating gas (m³) and outdoor readings
     for (let i = lines.length - 1; i > 0; i--) {
       const c = lines[i].replace(/\r$/, '').split(',');
       if (c.length < head.length) continue;
@@ -235,6 +267,12 @@ export class CurveTuner {
       if (c[I.acc] === 'boiler') {
         const o = parseFloat(c[I.out]);
         boiler.push({ t: tm, out: isFinite(o) ? o : null, burn: c[I.burn] === 'true' });
+        const g0 = parseFloat(c[I.gasH]);
+        const dk = localDay(tm);
+        const gd = gasDay.get(dk) || { gas: 0, outs: [] };
+        if (isFinite(g0)) gd.gas = Math.max(gd.gas, g0);
+        if (isFinite(o)) gd.outs.push(o);
+        gasDay.set(dk, gd);
         if (tm >= now - 48 * 3600 * 1000) {
           if (isFinite(o)) out48.push(o);
           const g = parseFloat(c[I.gasH]); if (isFinite(g) && g >= 0.3) gasDays.add(c[I.ts].slice(0, 10));
@@ -250,21 +288,43 @@ export class CurveTuner {
       while (lo <= hi) { const m = (lo + hi) >> 1; const dd = Math.abs(boiler[m].t - tm); if (dd < d) { d = dd; best = m; } if (boiler[m].t < tm) lo = m + 1; else hi = m - 1; }
       return best >= 0 && d <= maxMs ? boiler[best] : null;
     };
+    // morning recoveries: end of Reduced → minutes until the room is back in the comfort band
+    const lower = BAND[this.goal].lower;
+    const mornings: Array<{ t: number; minutes: number; out: number; startErr: number }> = [];
+    for (let i = 1; i < hcRows.length; i++) {
+      const a = hcRows[i - 1], r = hcRows[i];
+      if (!(/^reduced/i.test(a.prog) && /^(normal|comfort)/i.test(r.prog) && r.mode === 'heating')) continue;
+      if (r.t - a.t > 3600000) continue;   // data gap
+      const b = near(r.t, 3 * 3600 * 1000);
+      if (!b || b.out === null) continue;
+      let minutes = 0;
+      if (r.room < r.tgt - lower) {
+        minutes = 360;
+        for (let j = i; j < hcRows.length && hcRows[j].t - r.t <= 6 * 3600000; j++) {
+          if (!/^(normal|comfort)/i.test(hcRows[j].prog)) break;
+          if (hcRows[j].room >= hcRows[j].tgt - lower) { minutes = Math.round((hcRows[j].t - r.t) / 60000); break; }
+        }
+      }
+      mornings.push({ t: r.t, minutes, out: b.out, startErr: r2(r.room - r.tgt) });
+    }
     // samples: Normal/Comfort in force for at least 2 h, since `since`
     let start = 0, prev = '';
     const samples: Array<{ t: number; out: number; err: number; tgt: number }> = [];
     const flows: Array<{ out: number; flow: number; tgt: number }> = [];
     for (const r of hcRows) {
-      const p = /^(normal|comfort)/i.test(r.prog) && r.mode === 'heating' ? 'day' : 'other';
+      // a change of program or of target (e.g. Normal → Comfort in the evening) restarts the 2 h
+      // settling time: the room needs time to reach the new temperature
+      const day = /^(normal|comfort)/i.test(r.prog) && r.mode === 'heating';
+      const p = day ? `${r.prog.toLowerCase()}@${r.tgt}` : 'other';
       if (p !== prev) { start = r.t; prev = p; }
-      if (r.t < since || p !== 'day' || r.t - start < 2 * 3600 * 1000) continue;
+      if (r.t < since || !day || r.t - start < 2 * 3600 * 1000) continue;
       const b = near(r.t, 3 * 3600 * 1000);
       if (!b || b.out === null) continue;
       samples.push({ t: r.t, out: b.out, err: r.room - r.tgt, tgt: r.tgt });
       const bb = near(r.t, 10 * 60 * 1000);
       if (r.flow !== null && bb?.burn && r.flow >= 25) flows.push({ out: b.out, flow: r.flow, tgt: r.tgt });
     }
-    return { samples, flows, heatingDays: gasDays.size, outdoor48: out48.length ? out48.reduce((s, v) => s + v, 0) / out48.length : null };
+    return { samples, flows, mornings, gasDay, heatingDays: gasDays.size, outdoor48: out48.length ? out48.reduce((s, v) => s + v, 0) / out48.length : null };
   }
 
   /** Statistics of the samples: median error, regression error ~ outdoor, agreement. */
@@ -291,17 +351,21 @@ export class CurveTuner {
    * only executes it. `ctx` carries what the loop remembers: the last step and the floors.
    */
   decide(a: ReturnType<CurveTuner['analyse']>, cur: Curve, base: Curve, lim: Limits,
-    ctx: { lastStep?: LastStep; floors?: Floor[]; now?: number; stepEffect?: StepEffect } = {}):
-    Pick<CurveDecision, 'proposed' | 'decision' | 'reasonCode' | 'reason' | 'confidence' | 'stats' | 'flow' | 'safety' | 'vetoCode' | 'autoApply' | 'goal' | 'probe' | 'recovery' | 'floor' | 'stepEffect'> {
+    ctx: { lastStep?: LastStep; floors?: Floor[]; now?: number; gain?: number | null; morningGain?: number | null; mornings?: MorningRec[] } = {}):
+    Pick<CurveDecision, 'proposed' | 'decision' | 'reasonCode' | 'reason' | 'confidence' | 'stats' | 'flow' | 'safety' | 'vetoCode' | 'autoApply' | 'goal' | 'probe' | 'recovery' | 'floor' | 'stepEffect' | 'gain' | 'morning' | 'periods'> {
     const now = ctx.now ?? Date.now();
     const goal = this.goal, band = BAND[goal];
     const st = this.stats(a.samples);
     const out = { proposed: null as Curve | null, confidence: 0, stats: st, flow: null as CurveDecision['flow'], safety: 'PASS' as 'PASS' | 'VETO',
-      vetoCode: undefined as CurveDecision['vetoCode'], autoApply: false, goal, probe: false, recovery: false, floor: null as CurveDecision['floor'], stepEffect: ctx.stepEffect };
-    const effect = (c: Curve) => c.slope !== cur.slope ? (ctx.stepEffect?.slope ?? PRIOR_EFFECT.slope) : (ctx.stepEffect?.shift ?? PRIOR_EFFECT.shift);
+      vetoCode: undefined as CurveDecision['vetoCode'], autoApply: false, goal, probe: false, recovery: false, floor: null as CurveDecision['floor'], stepEffect: undefined as StepEffect | undefined,
+      gain: ctx.gain ?? null, morning: null as CurveDecision['morning'], periods: undefined as CurveDecision['periods'] };
+    const gain = ctx.gain ?? PRIOR_GAIN;
     if (!st || st.samples < 24 || st.hours < 12) {
       return { ...out, decision: 'WAIT', reasonCode: 'NOT_ENOUGH_DATA', reason: `not enough Normal/Comfort data (${st ? st.samples : 0} samples, ${st ? st.hours : 0} h)` };
     }
+    // effect of a step on the room, at the cooler outdoor temperatures of the period (conservative)
+    const effect = (c: Curve) => r2(gain * Math.abs(curveFlow(c, 20, st.outdoorLow) - curveFlow(cur, 20, st.outdoorLow)));
+    out.stepEffect = { shift: effect({ slope: cur.slope, shift: cur.shift - 1 }), slope: effect({ slope: r1(cur.slope - 0.1), shift: cur.shift }) };
     // flow with the burner on, for the outdoor temperatures of the samples
     if (a.flows.length >= 6) {
       const fm = median(a.flows.map(f => f.flow)), tgt = median(a.flows.map(f => f.tgt)), o = median(a.flows.map(f => f.out));
@@ -320,18 +384,48 @@ export class CurveTuner {
     const desc = `room ${sgn(st.medianRoomError)} °C vs the program (${st.samples} samples, ${Math.round(st.hours)} h, outdoor ${st.outdoorLow}…${st.outdoorHigh} °C` +
       `${dependsOnCold ? `, ${sgn(st.errorAtLow)} °C at ${st.outdoorLow} °C vs ${sgn(st.errorAtHigh)} °C at ${st.outdoorHigh} °C` : ''})`;
     const base01 = 0.25 * clamp01(st.samples / 96) + 0.2 * clamp01(st.hours / 48);
+    // parts of the day: comfort must hold in each of them (sun or cooking can warm only one)
+    out.periods = PERIODS.map(([name, h0, h1]) => {
+      const e = a.samples.filter(x => { const h = new Date(x.t).getHours(); return h >= h0 && h < h1; }).map(x => x.err);
+      const days = new Set(a.samples.filter(x => { const h = new Date(x.t).getHours(); return h >= h0 && h < h1; }).map(x => localDay(x.t))).size;
+      return { name, p10: e.length ? r2(quant(e, 0.1)) : NaN, median: e.length ? r2(median(e)) : NaN, n: e.length, days };
+    }).filter(x => x.n > 0);
+    const solid = out.periods.filter(x => x.n >= 24 && x.days >= 2);   // at least two days of that part of the day
+    const coolestPart = solid.length >= 2 ? Math.min(...solid.map(x => x.median)) : st.medianRoomError;
 
-    // 1. too cool → raise (comfort first; never blocked by a floor)
+    // after a step down: is the morning warm-up (end of Reduced → back in the band) slower than with
+    // the previous curve, at similar outdoor temperatures? (≥3 mornings with the old curve, ≥2 with the new)
+    const ls = ctx.lastStep;
+    const onStepDown = !!ls && ls.dir < 0 && ls.to.slope === cur.slope && ls.to.shift === cur.shift;
+    let slowMorning = false;
+    if (onStepDown && ctx.mornings) {
+      const lsT = Date.parse(ls!.ts), fromKey = `${ls!.from.slope}/${ls!.from.shift}`;
+      for (const bin of [0, 1, 2]) {
+        const bef = ctx.mornings.filter(m => m.t < lsT && m.curve === fromKey && outBin(m.out) === bin).map(m => m.minutes);
+        const aft = ctx.mornings.filter(m => m.t > lsT && outBin(m.out) === bin).map(m => m.minutes);
+        if (bef.length < 3 || aft.length < 2) continue;
+        const mb = median(bef), ma = median(aft);
+        if (!out.morning || ma - mb > out.morning.after - out.morning.before) {
+          out.morning = { bin: ['< 3 °C', '3–8 °C', '> 8 °C'][bin], before: Math.round(mb), after: Math.round(ma), nBefore: bef.length, nAfter: aft.length };
+        }
+        if (ma - mb > SLOW_MORNING_MIN) slowMorning = true;
+      }
+    }
+
+    // 1. too cool (or slow morning warm-up after a step down) → raise (comfort first; never blocked by a floor)
     const coldSlope = dependsOnCold && st.errorAtLow < -band.lower;
-    if (coldSlope || st.medianRoomError < -band.lower) {
+    const coldMedian = st.medianRoomError < -band.lower || coolestPart < -(band.lower + 0.1);
+    if (coldSlope || coldMedian || slowMorning) {
+      const onlyMorning = !coldSlope && !coldMedian;
       const e = coldSlope ? st.errorAtLow : st.medianRoomError;
-      const recovery = !!ctx.lastStep && ctx.lastStep.dir < 0 && ctx.lastStep.to.slope === cur.slope && ctx.lastStep.to.shift === cur.shift;
+      const recovery = onStepDown;
       let conf = base01 + 0.3 * clamp01((st.agreement - 0.5) / 0.4) + 0.25 * clamp01(0.5 + (Math.abs(e) - band.lower) / 0.5);
       if (coldSlope) conf *= 0.5 + 0.5 * Math.min(clamp01(st.r2 / 0.5), clamp01(st.outdoorRange / 10));
+      if (onlyMorning) conf = 0.8;
       out.confidence = Math.round(conf * 100); out.recovery = recovery;
-      const reasonCode = coldSlope ? 'ROOM_COLD_WHEN_COLD_OUTSIDE' : 'ROOM_COLD';
+      const reasonCode = onlyMorning ? 'SLOW_MORNING' : coldSlope ? 'ROOM_COLD_WHEN_COLD_OUTSIDE' : 'ROOM_COLD';
       const pre = coldSlope ? 'INCREASE_SLOPE' : 'INCREASE_SHIFT';
-      const why = `${desc}${recovery ? `: too cool after the step down to ${cur.slope} / ${cur.shift}` : ''}`;
+      const why = `${desc}${onlyMorning && out.morning ? `: morning warm-up ${out.morning.after} min vs ${out.morning.before} min with the previous curve (outdoor ${out.morning.bin})` : ''}${recovery ? `: too cool after the step down to ${cur.slope} / ${cur.shift}` : ''}`;
       if (out.flow && out.flow.median >= out.flow.limit) {
         return { ...out, decision: pre, reasonCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', safety: 'VETO', vetoCode: 'HIGH_FLOW_FOR_CURRENT_OUTDOOR',
           reason: `${why}: room cool although the flow is already high (median ${out.flow.median} °C ≥ ${out.flow.limit} °C) — not raising the curve: check radiator valves, air in the radiators, pump and room sensor position` };
@@ -355,8 +449,9 @@ export class CurveTuner {
     };
 
     // 2. too warm → lower (wasted heat)
-    const warmSlope = dependsOnCold && st.errorAtLow > band.upper && spread > 0;
-    if (warmSlope || st.medianRoomError > band.upper) {
+    // "too warm" only if warm in every part of the day (a sunny afternoon is free heat, not a curve problem)
+    const warmSlope = dependsOnCold && st.errorAtLow > band.upper && spread > 0 && coolestPart > band.upper;
+    if (warmSlope || (st.medianRoomError > band.upper && coolestPart > band.upper)) {
       const e = warmSlope ? st.errorAtLow : st.medianRoomError;
       let conf = base01 + 0.3 * clamp01((st.agreement - 0.5) / 0.4) + 0.25 * clamp01(0.5 + (Math.abs(e) - band.upper) / 0.5);
       if (warmSlope) conf *= 0.5 + 0.5 * Math.min(clamp01(st.r2 / 0.5), clamp01(st.outdoorRange / 10));
@@ -367,6 +462,11 @@ export class CurveTuner {
         if (floor) return { ...out, decision: 'NO_CHANGE', reasonCode: 'FLOOR_ACTIVE', floor: { slope: floor.slope, shift: floor.shift, until: floor.until },
           reason: `${desc}: a lower curve (${floor.slope} / ${floor.shift}) made the room too cool recently — retry after ${floor.until.slice(0, 10)}` };
         return { ...out, decision: warmSlope ? 'DECREASE_SLOPE' : 'DECREASE_SHIFT', reasonCode: 'LIMIT_REACHED', safety: 'VETO', vetoCode: 'LIMIT_REACHED', reason: `${desc}: limit reached (slope ${sLo}–${sHi}, shift ${hLo}–${hHi})` };
+      }
+      const mSlow = ctx.morningGain ? Math.round(ctx.morningGain * Math.abs(curveFlow(to, 20, st.outdoorLow) - curveFlow(cur, 20, st.outdoorLow))) : 0;
+      if (mSlow > SLOW_MORNING_MIN) {
+        return { ...out, decision: 'NO_CHANGE', reasonCode: 'MORNING_TOO_SLOW',
+          reason: `${desc}: a bit warm, but one step lower would slow the morning warm-up by about ${mSlow} min — keeping the curve` };
       }
       if (st.medianRoomError - effect(to) < -band.lower) {
         // one step down would overshoot below the band (big steps for this house): stay a bit warm
@@ -383,6 +483,17 @@ export class CurveTuner {
       return { ...out, decision: 'NO_CHANGE', reasonCode: 'WITHIN_TOLERANCE', reason: `${desc}: within ±${band.lower} °C, no change` };
     }
     // economy probe: even the coolest moments (10th percentile) are at the target → one step lower
+    // a step down is still being verified (comfort and morning warm-up over several days)
+    if (onStepDown && (ctx.now ?? Date.now()) - Date.parse(ls!.ts) < VERIFY_DAYS * 86400000) {
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'VERIFYING',
+        reason: `${desc}: checking the last step down (${ls!.from.slope} / ${ls!.from.shift} → ${cur.slope} / ${cur.shift}) for ${VERIFY_DAYS} days, mornings included` };
+    }
+    // comfort must hold in every part of the day, not only thanks to an afternoon of sun or cooking
+    const weak = solid.find(x => x.p10 < -band.lower);
+    if (weak) {
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'COMFORT_PART_OF_DAY',
+        reason: `${desc}: comfortable on average but not in the ${weak.name} (coolest moments ${sgn(weak.p10)} °C) — no saving test` };
+    }
     const margin = st.errorP10 >= -0.05 && st.medianRoomError >= 0.05 && st.comfortShare >= 0.9;
     if (!margin || st.samples < 48 || st.hours < 36) {
       return { ...out, decision: 'NO_CHANGE', reasonCode: 'IN_BAND_NO_MARGIN',
@@ -395,6 +506,11 @@ export class CurveTuner {
       if (floor) return { ...out, decision: 'NO_CHANGE', reasonCode: 'FLOOR_ACTIVE', floor: { slope: floor.slope, shift: floor.shift, until: floor.until },
         reason: `${desc}: comfortable; the next lower curve (${floor.slope} / ${floor.shift}) made the room too cool recently — retry after ${floor.until.slice(0, 10)}` };
       return { ...out, decision: 'NO_CHANGE', reasonCode: 'LIMIT_REACHED', reason: `${desc}: comfortable, already at the lowest allowed curve (slope ${sLo}, shift ${hLo})` };
+    }
+    if (ctx.morningGain && ctx.morningGain * Math.abs(curveFlow(to, 20, st.outdoorLow) - curveFlow(cur, 20, st.outdoorLow)) > SLOW_MORNING_MIN) {
+      const m = Math.round(ctx.morningGain * Math.abs(curveFlow(to, 20, st.outdoorLow) - curveFlow(cur, 20, st.outdoorLow)));
+      return { ...out, decision: 'NO_CHANGE', reasonCode: 'MORNING_TOO_SLOW',
+        reason: `${desc}: comfortable, but one step lower would slow the morning warm-up by about ${m} min — keeping the curve` };
     }
     if (st.medianRoomError - effect(to) < -0.1) {
       return { ...out, decision: 'NO_CHANGE', reasonCode: 'IN_BAND_NO_MARGIN',
@@ -450,8 +566,10 @@ export class CurveTuner {
     if (st.lastChange && now - Date.parse(st.lastChange) < minGap * 3600 * 1000) {
       return save({ ...cur, decision: 'WAIT', reasonCode: 'WAITING_EFFECT', reason: `waiting for the effect of the last change (${minGap} h)` });
     }
-    const d: CurveDecision = { ...cur, ...this.decide(a, info.curve, st.baseline, info.limits, { lastStep: st.lastStep, floors: st.floors, now, stepEffect: st.stepEffect }) };
+    const d: CurveDecision = { ...cur, ...this.decide(a, info.curve, st.baseline, info.limits, { lastStep: st.lastStep, floors: st.floors, now, gain: st.gain, morningGain: st.morningGain, mornings: this.morningsWithCurve(a.mornings, st, info.curve) }) };
     this.learn(st, d, info.curve, now);
+    st.gasCompare = this.gasCompare(a.gasDay, st, now);
+    d.gain = st.gain ?? null;
     const change = !!d.proposed && d.safety === 'PASS';
     if (change && mode === 'auto' && d.autoApply) {
       await this.apply(t, info.curve, d.proposed!, d.reason, true, st, d);
@@ -473,40 +591,92 @@ export class CurveTuner {
    *                              decision raises the curve one step
    *   step down + room in the band → the lower curve is kept, the next probe can follow
    */
+  /** Curve in use at each morning (from the history of changes). */
+  private morningsWithCurve(m: Array<{ t: number; minutes: number; out: number; startErr: number }>, st: TunerState, cur: Curve): MorningRec[] {
+    const changes = st.history.map(h => ({ t: Date.parse(h.ts), from: h.from, to: h.to })).sort((x, y) => x.t - y.t);
+    return m.map(x => {
+      const after = changes.filter(c => c.t <= x.t);
+      const next = changes.find(c => c.t > x.t);
+      const c = after.length ? after[after.length - 1].to : next ? next.from : cur;
+      return { ...x, curve: `${c.slope}/${c.shift}` };
+    });
+  }
+
+  /**
+   * Gas for heating per degree-day (base 16 °C) before and after the last change, full days only
+   * (up to 7 before, at least 2 after). Indicative: weather, sun and habits also change it.
+   */
+  private gasCompare(gasDay: Map<string, { gas: number; outs: number[] }>, st: TunerState, now: number): GasCompare | null {
+    const last = st.history[st.history.length - 1];
+    if (!last) return null;
+    const tc = Date.parse(last.ts), cDay = localDay(tc), today = localDay(now);
+    const rows = [...gasDay.entries()].filter(([k, v]) => k !== cDay && k !== today && v.outs.length >= 12)
+      .map(([k, v]) => ({ k, gas: v.gas, dd: Math.max(0, 16 - v.outs.reduce((a, b) => a + b, 0) / v.outs.length) }));
+    const before = rows.filter(r => r.k < cDay).sort((x, y) => (x.k < y.k ? 1 : -1)).slice(0, 7).filter(r => r.dd >= 1);
+    const after = rows.filter(r => r.k > cDay).filter(r => r.dd >= 1);
+    if (before.length < 3 || after.length < 2) return null;
+    const per = (a: typeof rows) => a.reduce((s, r) => s + r.gas, 0) / a.reduce((s, r) => s + r.dd, 0);
+    const b = per(before), aa = per(after);
+    if (!(b > 0)) return null;
+    return { ts: last.ts, from: last.from, to: last.to, beforePerDD: Math.round(b * 1000) / 1000, afterPerDD: Math.round(aa * 1000) / 1000,
+      changePct: Math.round((aa / b - 1) * 1000) / 10, daysBefore: before.length, daysAfter: after.length };
+  }
+
   private learn(st: TunerState, d: CurveDecision, cur: Curve, now: number) {
     if (!d.stats || d.decision === 'WAIT') return;
     const ls = st.lastStep;
     const h = ls ? st.history.slice().reverse().find(x => x.ts === ls.ts) : undefined;
-    const tooCool = d.decision.startsWith('INCREASE') && ['ROOM_COLD', 'ROOM_COLD_WHEN_COLD_OUTSIDE', 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', 'LIMIT_REACHED'].includes(d.reasonCode);
+    this.measureGain(st, ls, d);
+    if (ls && !ls.morningMeasured && d.morning && d.morning.nAfter >= 2) {
+      ls.morningMeasured = true;
+      const mid = d.morning.bin.startsWith('<') ? 0 : d.morning.bin.startsWith('>') ? 10 : 5.5;
+      const dFlow = Math.abs(curveFlow(ls.to, 20, mid) - curveFlow(ls.from, 20, mid));
+      const dMin = (d.morning.after - d.morning.before) * -ls.dir;   // step down → slower (positive)
+      if (dFlow > 0.3 && dMin > 0) {
+        const g = Math.min(dMin / dFlow, 60);
+        st.morningGain = Math.round((st.morningGain ? 0.5 * st.morningGain + 0.5 * g : g) * 10) / 10;
+      }
+    }
+    const tooCool = d.decision.startsWith('INCREASE') &&
+      ['ROOM_COLD', 'ROOM_COLD_WHEN_COLD_OUTSIDE', 'SLOW_MORNING', 'HIGH_FLOW_FOR_CURRENT_OUTDOOR', 'LIMIT_REACHED'].includes(d.reasonCode);
     if (tooCool) {
-      // this curve is too low: remember it so that "too warm" or an economy probe does not
-      // come straight back to it (no ping-pong); raising for comfort is never blocked
+      // this curve is too low: remember it (with the conditions, for the dashboard) so that "too
+      // warm" or a saving test does not come straight back to it; raising is never blocked
       const prev = (st.floors || []).find(f => f.slope === cur.slope && f.shift === cur.shift);
       const since = st.lastChange ? Date.parse(st.lastChange) : 0;
       if (prev && Date.parse(prev.ts) >= since) return;   // already recorded while at this curve
       const fails = (prev?.fails || 0) + 1;
       const until = new Date(now + this.retryDays * Math.pow(2, fails - 1) * 86400000).toISOString();
-      st.floors = [...(st.floors || []).filter(f => f !== prev), { slope: cur.slope, shift: cur.shift, ts: new Date(now).toISOString(), fails, until }];
+      const why = d.reasonCode === 'SLOW_MORNING' ? 'slow morning warm-up' : 'room too cool';
+      st.floors = [...(st.floors || []).filter(f => f !== prev), { slope: cur.slope, shift: cur.shift, ts: new Date(now).toISOString(), fails, until,
+        outLow: d.stats.outdoorLow, outHigh: d.stats.outdoorHigh, median: d.stats.medianRoomError, p10: d.stats.errorP10, why }];
       if (ls && ls.dir < 0 && h) h.outcome = 'too cool';
-      this.measureEffect(st, ls, d);
-      d.floor = { slope: cur.slope, shift: cur.shift, until };
-      this.platform.log.info(`🌡️ Heating curve: ${cur.slope} / ${cur.shift} is too low (room ${d.stats.medianRoomError} °C) — not tried again before ${until.slice(0, 10)}`);
+      d.floor = { slope: cur.slope, shift: cur.shift, until, why };
+      this.platform.log.info(`🌡️ Heating curve: ${cur.slope} / ${cur.shift} is too low (${why}, room ${d.stats.medianRoomError} °C) — raising it; not tried again before ${until.slice(0, 10)}`);
       return;
     }
-    if (ls && ls.dir < 0 && h && !h.outcome) h.outcome = 'kept';
-    this.measureEffect(st, ls, d);
+    if (!ls) return;
+    // a step down is confirmed only after VERIFY_DAYS (comfort and mornings checked meanwhile)
+    if (ls.dir < 0 && now - Date.parse(ls.ts) < VERIFY_DAYS * 86400000) return;
+    if (ls.dir < 0 && h && !h.outcome) h.outcome = 'kept';
     st.lastStep = undefined;
   }
 
-  /** Learns how much one step moves the room (exponential average, used to avoid overshooting). */
-  private measureEffect(st: TunerState, ls: LastStep | undefined, d: CurveDecision) {
-    if (!ls || typeof ls.before !== 'number' || !d.stats) return;
-    const knob: 'slope' | 'shift' = ls.from.slope !== ls.to.slope ? 'slope' : 'shift';
+  /**
+   * Learns the room response in °C of room per °C of flow, once per step (first evaluation with
+   * enough data after it): the measured room change divided by the flow change the curve formula
+   * gives at the outdoor temperature of that period. Exponential average; noise is ignored.
+   */
+  private measureGain(st: TunerState, ls: LastStep | undefined, d: CurveDecision) {
+    if (!ls || ls.measured || typeof ls.before !== 'number' || !d.stats) return;
+    ls.measured = true;
     const moved = (d.stats.medianRoomError - ls.before) * ls.dir;   // expected positive
-    if (!(moved > 0.02 && moved < 2)) return;                        // weather noise: ignore
-    const e = st.stepEffect || { shift: null, slope: null };
-    e[knob] = r2(e[knob] === null ? moved : 0.5 * e[knob]! + 0.5 * moved);
-    st.stepEffect = e;
+    const dFlow = Math.abs(curveFlow(ls.to, 20, d.stats.outdoorMean) - curveFlow(ls.from, 20, d.stats.outdoorMean));
+    if (!(dFlow > 0.3) || !(moved > 0.02 && moved < 2)) return;      // weather noise: ignore
+    const g = Math.min(Math.max(moved / dFlow, 0.02), 0.6);
+    const n = st.gainSamples || 0;
+    st.gain = r2(st.gain === undefined || st.gain === null ? g : (n >= 3 ? 0.7 : 0.5) * st.gain + (n >= 3 ? 0.3 : 0.5) * g);
+    st.gainSamples = n + 1;
   }
 
   private async apply(t: Target, from: Curve, to: Curve, why: string, auto: boolean, st: TunerState, d?: CurveDecision) {
@@ -515,6 +685,11 @@ export class CurveTuner {
     if (!ok) throw new Error('setCurve refused by the Viessmann API');
     st.lastChange = new Date().toISOString();
     st.lastResult = `changed: ${why}`;
+    const prevStep = st.lastStep;
+    if (prevStep && prevStep.dir < 0) {   // a step down replaced by another step before its verification ended
+      const ph = st.history.slice().reverse().find(x => x.ts === prevStep.ts);
+      if (ph && !ph.outcome && flowAt0(to) < flowAt0(from)) ph.outcome = 'kept';
+    }
     st.history.push({ ts: st.lastChange, from, to, reason: why, auto, confidence: d?.confidence, decision: d?.decision, probe: !!d?.probe });
     st.lastStep = { from, to, dir: flowAt0(to) > flowAt0(from) ? 1 : -1, ts: st.lastChange, probe: !!d?.probe, before: d?.stats?.medianRoomError };
     this.writeState(t, st);
