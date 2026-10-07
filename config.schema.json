@@ -293,6 +293,24 @@
               "title": "Room name"
             },
             "description": "Names for the ViCare rooms in order (room 1, room 2, …). Leave empty to use \"Room 1\", \"Room 2\", …"
+          },
+          "boilerAlarm": {
+            "title": "Boiler alarm sensor",
+            "type": "string",
+            "placeholder": "Alarm",
+            "description": "Name of the boiler alarm contact sensor."
+          },
+          "waterPressure": {
+            "title": "Water pressure (Eve app)",
+            "type": "string",
+            "placeholder": "Pressione impianto",
+            "description": "Name of the heating-system water pressure shown in the Eve app."
+          },
+          "dhw_oneTimeCharge": {
+            "title": "Hot water one-time charge",
+            "type": "string",
+            "placeholder": "Once",
+            "description": "Name of the one-time hot water charge switch (boilers that support it)."
           }
         }
       },
@@ -570,6 +588,12 @@
             "default": true,
             "description": "Each temperature level of the heating circuit appears as a thermostat: turning its dial changes that level on the boiler (the same as ViCare → heating circuit → Reduced / Normal / Comfort)."
           },
+          "exposeComfortProgram": {
+            "title": "Separate heating Comfort switch",
+            "type": "boolean",
+            "default": false,
+            "description": "Adds a Comfort switch next to Extended heating, only on boilers that have both commands. ViCare shows no such switch, so it is off by default: extended heating already uses the Comfort temperature."
+          },
           "curveAutoTune": {
             "title": "Automatic heating-curve optimisation",
             "type": "boolean",
@@ -581,8 +605,18 @@
             "type": "string",
             "default": "economy",
             "oneOf": [
-              { "title": "Save: the lowest curve that keeps the program temperature (±0.2 °C)", "enum": ["economy"] },
-              { "title": "Comfort only: correct when the room is more than 0.5 °C off", "enum": ["comfort"] }
+              {
+                "title": "Save: the lowest curve that keeps the program temperature (±0.2 °C)",
+                "enum": [
+                  "economy"
+                ]
+              },
+              {
+                "title": "Comfort only: correct when the room is more than 0.5 °C off",
+                "enum": [
+                  "comfort"
+                ]
+              }
             ],
             "description": "Economy keeps adjusting all season: it lowers the curve while the room stays at the program temperature and raises it again as soon as the room gets too cool. A curve that turned out too cool is not tried again for a while, so it never goes back and forth.",
             "condition": {
@@ -605,8 +639,18 @@
             "type": "string",
             "default": "auto",
             "oneOf": [
-              { "title": "Apply it automatically (confidence 75 % or more)", "enum": ["auto"] },
-              { "title": "Only propose it: I apply it from the dashboard", "enum": ["proposal"] }
+              {
+                "title": "Apply it automatically (confidence 75 % or more)",
+                "enum": [
+                  "auto"
+                ]
+              },
+              {
+                "title": "Only propose it: I apply it from the dashboard",
+                "enum": [
+                  "proposal"
+                ]
+              }
             ],
             "condition": {
               "functionBody": "return model.features && model.features.curveAutoTune === true;"
@@ -745,6 +789,14 @@
         "minimum": 1,
         "maximum": 3650,
         "description": "Reports created from the dashboard are deleted automatically after this many days."
+      },
+      "maxCompressorRps": {
+        "title": "Heat pump: maximum compressor speed (rps)",
+        "type": "integer",
+        "default": 50,
+        "minimum": 10,
+        "maximum": 200,
+        "description": "Used to show the compressor speed as 0–100 %. 50 rps fits the Vitocal 250-A; change it if the modulation shows values above 100 %."
       },
       "logging": {
         "title": "📊 History Logging",
@@ -924,7 +976,10 @@
         "customNames.holidayAtHome",
         "customNames.extendedHeating",
         "customNames.roomNames",
-        "forceServiceRecreation"
+        "forceServiceRecreation",
+        "customNames.boilerAlarm",
+        "customNames.waterPressure",
+        "customNames.dhw_oneTimeCharge"
       ]
     },
     {
@@ -986,6 +1041,7 @@
         "features.holidayDays",
         "features.holidayAtHomeDays",
         "features.exposeProgramTemperatures",
+        "features.exposeComfortProgram",
         "features.curveAutoTune",
         "features.curveAutoTuneGoal",
         "features.curveAutoTuneMode",
@@ -1008,7 +1064,8 @@
         "advanced.maxDelay",
         "advanced.maxConsecutiveErrors",
         "advanced.deviceUpdateDelay",
-        "advanced.userAgent"
+        "advanced.userAgent",
+        "maxCompressorRps"
       ]
     },
     {
@@ -1034,7 +1091,68 @@
         "enableImmediateBurnerUpdates",
         "burnerUpdateDelay",
         "burnerUpdateDebounce",
-        "postCommandRetry.guardDuration"
+        "postCommandRetry.guardDuration",
+        {
+          "key": "postCommandRetry.delays",
+          "type": "array",
+          "items": [
+            "postCommandRetry.delays[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "📊 History logging (CSV / MySQL)",
+      "expandable": true,
+      "expanded": false,
+      "description": "History used by the report, the heating-curve optimisation and Grafana.",
+      "items": [
+        "logging.csv.enabled",
+        "logging.mysql.enabled",
+        {
+          "key": "logging.mysql.host",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.port",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.database",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.user",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.password",
+          "type": "password",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.table",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        },
+        {
+          "key": "logging.mysql.autoCreateTable",
+          "condition": {
+            "functionBody": "return model.logging && model.logging.mysql && model.logging.mysql.enabled === true;"
+          }
+        }
       ]
     },
     {

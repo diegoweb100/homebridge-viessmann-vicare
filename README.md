@@ -1210,6 +1210,15 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.85] - 2026-10-07
+- fix (settings): every option the plugin uses can now be set in the Homebridge UI:
+  - new **📊 History logging (CSV / MySQL)** section: CSV on/off and the MySQL/MariaDB connection (host, port, database, user, password, table, automatic table creation). They worked but were missing from the settings page
+  - *Burner & Command Settings*: the delays between command confirmations (`postCommandRetry.delays`)
+  - *Custom names*: boiler alarm, water pressure (Eve app), one-time hot water charge
+  - *Feature control*: separate heating Comfort switch (`exposeComfortProgram`, off by default)
+  - *Advanced*: heat pump maximum compressor speed (`maxCompressorRps`, default 50 rps)
+- chore: `npm run check:schema` checks that every setting read by the code is declared in config.schema.json and visible in the settings page; it runs automatically before every publish
+
 ### [2.0.84] - 2026-10-07
 - feat: the saving optimisation of the heating curve checks comfort as a whole, not only on average:
   - **the room response is learned in °C of room per °C of flow**: the effect of a step is computed at the outdoor temperature of the moment with the curve formula, so a slope step is judged correctly in cold weather too (it moves the flow a lot at 0 °C and little at 15 °C)

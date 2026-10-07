@@ -1292,6 +1292,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.85 (2026-10-07)
+- fix (settings): all options are now in the Homebridge UI — new History logging (CSV / MySQL) section, command confirmation delays, custom names for alarm / water pressure / one-time hot water, separate Comfort switch, heat pump compressor speed
+
 ### v2.0.84 (2026-10-07)
 - feat: heating-curve saving checks comfort as a whole: morning warm-up after Reduced, every part of the day, room response learned per °C of flow, 5-day verification of each step down; dashboard shows failed tests with conditions and gas per degree-day
 
