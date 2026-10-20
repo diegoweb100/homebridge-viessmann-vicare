@@ -868,9 +868,11 @@ export class ViessmannEnergyAccessory {
       this.heatpumpService
         .getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
         .updateValue(
-          this.states.hpActive
-            ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING
-            : this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE,
+          !this.states.hpActive
+            ? this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE
+            : this.states.hpHeatingState === 2
+              ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING
+              : this.platform.Characteristic.CurrentHeaterCoolerState.IDLE,   // on but compressor not running
         );
       this.heatpumpService
         .getCharacteristic(this.platform.Characteristic.CurrentTemperature)

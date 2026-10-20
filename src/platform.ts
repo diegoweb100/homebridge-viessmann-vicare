@@ -390,15 +390,8 @@ export class ViessmannPlatform implements DynamicPlatformPlugin {
           this.Characteristic.Active.INACTIVE
       );
       
-      // Update CurrentHeaterCoolerState - only show heating if DHW is active AND burner is running
-      const isDHWActiveAndBurnerRunning = burnerStatus.dhwActive && burnerStatus.burnerActive;
-      
-      heaterCoolerService.updateCharacteristic(
-        this.Characteristic.CurrentHeaterCoolerState,
-        isDHWActiveAndBurnerRunning ? 
-          this.Characteristic.CurrentHeaterCoolerState.HEATING : 
-          this.Characteristic.CurrentHeaterCoolerState.INACTIVE
-      );
+      // CurrentHeaterCoolerState is owned by the DHW accessory (heating.dhw.status: producing or not);
+      // the burner alone cannot tell whether it is heating water or the radiators.
     }
 
     // Update DHW mode switches based on dhwActive status

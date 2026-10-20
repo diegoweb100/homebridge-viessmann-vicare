@@ -20,6 +20,11 @@ export class ViessmannDHWAccessory {
   private supportsTemperatureControl = false;
   private temperatureConstraints = { min: 30, max: 60 }; // Default DHW temperature range
   private currentMode = 'off';
+  // heating.dhw.status: is hot water being produced right now? ("off" in Eco on a combi boiler until
+  // a tap is opened, or outside the time program). The mode (Comfort/Eco/Off) is the setting.
+  private dhwStatusOn?: boolean;
+  private burnerOn = false;
+  private lastHeaterState?: number;
 
   // 🛡️ Guard: prevents HomeKit HAP feedback loop.
   // When updateAllCharacteristics() pushes new values to HomeKit, HAP calls back
@@ -212,6 +217,35 @@ private setupCharacteristics() {
     }
   }
 
+  /**
+   * Tile state in Apple Home, as in ViCare: Off when hot water is off; "Heating" only while the
+   * boiler is really producing hot water (heating.dhw.status = on); otherwise Idle — e.g. Eco on a
+   * combi boiler, which heats only when a tap is opened, or outside the hot water time program.
+   * Boilers without heating.dhw.status: heating while the burner is on.
+   */
+  private heaterState(): number {
+    const S = this.platform.Characteristic.CurrentHeaterCoolerState;
+    if (this.currentMode === 'off') return S.INACTIVE;
+    const producing = this.dhwStatusOn !== undefined ? this.dhwStatusOn : this.burnerOn;
+    return producing ? S.HEATING : S.IDLE;
+  }
+
+  /** Reads whether hot water is being produced right now (heating.dhw.status) and the burner. */
+  private updateDhwActivity(features: any[]) {
+    const dhw = features.find((f: any) => f.feature === 'heating.dhw');
+    const st = dhw?.properties?.status?.value;
+    if (st === 'on' || st === 'off') this.dhwStatusOn = st === 'on';
+    const b = features.find((f: any) => f.feature === 'heating.burners.0')?.properties?.active?.value;
+    if (typeof b === 'boolean') this.burnerOn = b;
+    const now = this.heaterState();
+    if (this.lastHeaterState !== undefined && now !== this.lastHeaterState) {
+      const S = this.platform.Characteristic.CurrentHeaterCoolerState;
+      this.platform.log.info(`🚿 ACS: ${now === S.HEATING ? 'producing hot water' : now === S.IDLE ? `${this.currentMode.toUpperCase()}, not producing hot water now` : 'off'}`);
+    }
+    this.lastHeaterState = now;
+    this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState, now);
+  }
+
   private setupHeaterCoolerService() {
     // Active characteristic (On/Off)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.Active)
@@ -222,13 +256,7 @@ private setupCharacteristics() {
 
     // Current Heater Cooler State (read-only)
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
-      .onGet(() => {
-        if (this.currentMode === 'off') {
-          return this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE;
-        }
-        // For DHW, we're always in heating mode when active
-        return this.platform.Characteristic.CurrentHeaterCoolerState.HEATING;
-      });
+      .onGet(() => this.heaterState());
 
     // Target Heater Cooler State
     this.heaterCoolerService.getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
@@ -581,9 +609,7 @@ async setActive(value: CharacteristicValue) {
       this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.Active, 
         isActive ? this.platform.Characteristic.Active.ACTIVE : this.platform.Characteristic.Active.INACTIVE);
       
-      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState,
-        isActive ? this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
-                   this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE);
+      this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState, this.heaterState());
 
       // Update switch states (ensure mutual exclusion)
       const isComfort = this.currentMode === 'comfort';
@@ -912,8 +938,10 @@ async setActive(value: CharacteristicValue) {
       this.platform.log.warn(`🚿 ACS mode: feature 'heating.dhw.operating.modes.active' not found in ${features.length} features — state NOT updated`);
     }
 
+    this.updateDhwActivity(features);
+
     // Summary log — always visible at debug, visible at info only when something changed
-    const summary = `mode=${this.currentMode.toUpperCase()} | temp=${this.states.CurrentTemperature}°C | target=${this.states.HeatingThresholdTemperature}°C`;
+    const summary = `mode=${this.currentMode.toUpperCase()}${this.dhwStatusOn === undefined ? '' : this.dhwStatusOn ? ' (producing)' : ' (not producing now)'} | temp=${this.states.CurrentTemperature}°C | target=${this.states.HeatingThresholdTemperature}°C`;
     if (changed) {
       this.platform.log.info(`🚿 ACS state updated: ${summary}`);
     } else {
@@ -947,44 +975,16 @@ async setActive(value: CharacteristicValue) {
 // 🆕 NEW: Handle immediate burner status updates from platform
   public handleImmediateBurnerUpdate(burnerStatus: any): void {
     try {
-      // Update DHW characteristics based on burner status
-      if (burnerStatus.dhwActive !== undefined) {
-        const wasDHWActive = this.currentMode !== 'off';
-        const isDHWActive = burnerStatus.dhwActive;
-        
-        if (wasDHWActive !== isDHWActive) {
-          // DHW mode changed, update our state accordingly
-          if (!isDHWActive && this.currentMode !== 'off') {
-            // DHW turned off
-            this.currentMode = 'off';
-            this.updateAllCharacteristics();
-            this.platform.log.debug(`🔥 DHW immediate update: DHW turned OFF`);
-          } else if (isDHWActive && this.currentMode === 'off') {
-            // DHW turned on - we don't know which mode, but we can set to a default
-            const defaultMode = this.availableModes.includes('eco') ? 'eco' : 
-                               this.availableModes.includes('comfort') ? 'comfort' : 
-                               this.availableModes[0];
-            if (defaultMode && defaultMode !== 'off') {
-              this.currentMode = defaultMode;
-              this.updateAllCharacteristics();
-              this.platform.log.debug(`🔥 DHW immediate update: DHW turned ON (mode: ${defaultMode})`);
-            }
-          }
-        }
-      }
-      
+      // The mode (Comfort/Eco/Off) is taken only from heating.dhw.operating.modes.active in
+      // updateFromFeatures: guessing it here from the burner summary overwrote the real mode
+      // (e.g. Comfort shown as Eco) and fought the pending-command guard.
       // Update HeaterCooler state based on combined DHW and burner activity
-      if (burnerStatus.burnerActive !== undefined && burnerStatus.dhwActive !== undefined) {
-        const isHeating = burnerStatus.dhwActive && burnerStatus.burnerActive;
+      if (burnerStatus.burnerActive !== undefined) {
+        this.burnerOn = !!burnerStatus.burnerActive;
+        const isHeating = this.heaterState() === this.platform.Characteristic.CurrentHeaterCoolerState.HEATING;
+        this.heaterCoolerService.updateCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState, this.heaterState());
         
-        this.heaterCoolerService.updateCharacteristic(
-          this.platform.Characteristic.CurrentHeaterCoolerState,
-          isHeating ? 
-            this.platform.Characteristic.CurrentHeaterCoolerState.HEATING : 
-            this.platform.Characteristic.CurrentHeaterCoolerState.INACTIVE
-        );
-        
-        this.platform.log.debug(`🔥 DHW immediate update: Heating state = ${isHeating ? 'HEATING' : 'INACTIVE'} (DHW: ${burnerStatus.dhwActive}, Burner: ${burnerStatus.burnerActive})`);
+        this.platform.log.debug(`🔥 DHW immediate update: Heating state = ${isHeating ? 'HEATING' : this.currentMode === 'off' ? 'OFF' : 'IDLE'} (mode: ${this.currentMode}, producing: ${this.dhwStatusOn ?? 'n/a'}, burner: ${burnerStatus.burnerActive})`);
       }
       
       // Update temperature if available

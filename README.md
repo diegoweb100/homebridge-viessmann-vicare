@@ -1210,6 +1210,15 @@ For issues and questions:
 
 ## 📈 Changelog
 
+### [2.0.86] - 2026-10-20
+- fix (hot water): the hot water tile now shows what the boiler is really doing, like the ViCare app. Before, it showed **Heating** whenever hot water was set to Comfort or Eco, even when the boiler was not producing any (ViCare: *off*). Now:
+  - **Heating** only while hot water is being produced (`heating.dhw.status` = on);
+  - **Idle** when hot water is on (Comfort/Eco) but not being produced right now — e.g. Eco on a combi boiler, which heats only when a tap is opened, or outside the hot water time program;
+  - **Off** when hot water is off. The Comfort/Eco/Off switches still show the setting.
+  Boilers without `heating.dhw.status`: Heating while the burner is on.
+- fix (hot water): the mode shown (Comfort/Eco/Off) is no longer guessed from the burner summary, which could show Eco instead of Comfort right after a change
+- fix (heat pump): after a refresh the heat pump tile showed Heating while the compressor was stopped; now Idle, as on first display
+
 ### [2.0.85] - 2026-10-07
 - fix (settings): every option the plugin uses can now be set in the Homebridge UI:
   - new **📊 History logging (CSV / MySQL)** section: CSV on/off and the MySQL/MariaDB connection (host, port, database, user, password, table, automatic table creation). They worked but were missing from the settings page

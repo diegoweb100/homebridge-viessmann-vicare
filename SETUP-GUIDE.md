@@ -1292,6 +1292,9 @@ sudo systemctl restart homebridge
 
 ## Changelog
 
+### v2.0.86 (2026-10-20)
+- fix (hot water): the hot water tile shows Heating only while hot water is really being produced (as in ViCare), Idle when it is on but not producing (e.g. Eco on a combi boiler), Off when off; heat pump tile shows Idle when the compressor is stopped
+
 ### v2.0.85 (2026-10-07)
 - fix (settings): all options are now in the Homebridge UI — new History logging (CSV / MySQL) section, command confirmation delays, custom names for alarm / water pressure / one-time hot water, separate Comfort switch, heat pump compressor speed
 
